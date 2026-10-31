@@ -141,22 +141,107 @@ kbd { font: 10px var(--font-mono); border: 1px solid var(--line); border-radius:
 .ward-room-number { position: absolute; right: 7%; top: 33%; font: 12px var(--font-mono); letter-spacing: .1em; color: #bfc2a7; transform: skewY(-18deg); }
 .art-register { position: absolute; bottom: 0; inset-inline: 0; min-height: 30px; padding: 8px 10px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px; color: #c9cbbb; background: #202b25; border-top: 1px solid #566056; font: 8px/1.5 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
 
-/* A quiet title screen; instructions and scores are opt-in. */
-#menu.screen, #name.screen { background: radial-gradient(ellipse at 50% 30%, #1b2521, #0d1411 75%); }
-#menu .entry-menu, #name .arrival-panel { max-width: 380px; display: flex; flex-direction: column; gap: 28px; border: 0; padding: 0; }
-#menu .menu-primary { width: 100%; padding: 0; gap: 22px; }
-#menu .hero-title { margin: 0; font-size: clamp(4.5rem, 14vw, 7rem); }
-#menu .hero-title > span { margin-left: 2px; margin-bottom: 12px; font-size: 12px; }
-#menu .hero-title > .ward-title { margin: 18px 0 0 3px; font-size: 11px; letter-spacing: .2em; }
-#menu .tagline { margin: 0 0 6px; font: 14px/1.5 var(--font-ui); color: var(--ash); }
-#menu .start-actions { order: 1; max-width: none; grid-template-columns: 1fr 1fr; gap: 8px; }
-#menu .start-actions #startDarkBtn { min-height: 52px; font-size: 14px; }
-#menu .start-actions #startBtn, #menu .start-actions #coopBtn { min-height: 46px; flex-direction: row; align-items: center; justify-content: center; font-size: 12px; }
-#menu .who { order: 2; margin: -10px 0; width: 100%; justify-content: space-between; align-items: center; font-size: 10px; }
-#menu .who b { color: var(--ash); }
-#menu .who .link { font-size: 10px; color: var(--ash); }
-#menu .menu-note { order: 3; font-size: 9px; color: var(--ash); }
-#menu .menu-aside { border: 0; padding: 0; gap: 0; }
+/* Menu-only colors leave the in-game condition and equipment indicators intact. */
+.screen { --bone: #f0ece9; --ash: #aaa3a5; --ember: #f17880; --blood: #c82f40; --rust: #71313a; --line: rgba(210, 190, 195, .18); --surface: #111013; background: radial-gradient(ellipse at 80% 20%, #271014, transparent 65%), #09090b; scrollbar-color: #593039 #09090b; }
+.screen .btns button.primary { background: #be2638; color: #fff4f3; border-color: #df3e50; box-shadow: none; }
+.screen .btns button.primary:hover { background: #d53245; border-color: #fa6575; }
+.screen .setting select { background: #161114; }
+.screen .setting input { accent-color: #db4052; }
+#menu.screen { padding: max(28px, env(safe-area-inset-top, 0px)) max(40px, env(safe-area-inset-right, 0px)) max(24px, env(safe-area-inset-bottom, 0px)) max(40px, env(safe-area-inset-left, 0px)); background: #09090b; }
+#menu .entry-menu { max-width: 1440px; min-height: calc(100svh - 52px); margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) 330px; grid-template-rows: auto 1fr auto; gap: 32px 64px; border: 0; padding: 0; position: relative; }
+#menu .menu-topbar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+.ward-brand { display: flex; align-items: center; gap: 13px; font: 11px/1.5 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; }
+.ward-brand small { display: block; color: var(--ash); font-size: 9px; letter-spacing: .04em; margin-top: 4px; }
+.ward-symbol { display: grid; place-items: center; width: 38px; height: 42px; border: 1px solid #71313a; color: #ed5b6b; font: 30px var(--font-display); }
+#menu .who { flex-wrap: nowrap; gap: 12px; margin: 0; align-items: center; min-width: 0; }
+.player-symbol { color: #ef6876; display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid #48222a; background: #211015; font-size: 24px; flex-shrink: 0; }
+.player-identity { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.player-label { color: var(--ash); text-transform: uppercase; letter-spacing: .12em; font-size: 8px; }
+#menu .who b { color: var(--bone); font-size: 12px; overflow-wrap: anywhere; }
+#menu .who .link { margin-left: 12px; font: 10px var(--font-mono); color: var(--ash); text-decoration: none; white-space: nowrap; }
+#menu .who .link:hover { color: var(--bone); }
+#menu .menu-primary { width: 100%; max-width: 580px; align-self: start; padding: 12px 0 0; gap: 22px; }
+.menu-chapter { display: flex; align-items: center; gap: 10px; font: 9px/1.5 var(--font-mono); letter-spacing: .16em; color: #ec7782; text-transform: uppercase; }
+.menu-chapter > span { width: 20px; height: 1px; background: #da3346; }
+#menu .hero-title { margin: 0 0 2px; font-size: clamp(6rem, 12vw, 11rem); line-height: .85; text-shadow: 0 4px 40px #09090b; }
+#menu .hero-title > span { margin: 0 0 14px 5px; font-size: 12px; letter-spacing: .65em; }
+#menu .hero-title > .ward-title { margin: 26px 0 0 5px; color: #ef6574; font-size: 11px; letter-spacing: .36em; }
+#menu .tagline { margin: 0; font: 14px/1.8 var(--font-ui); color: var(--ash); }
+#menu .tagline > span { color: var(--bone); }
+#menu .start-actions { width: 100%; max-width: 380px; grid-template-columns: 1fr; gap: 10px; }
+#menu .start-actions button { background: #141114; }
+#menu .start-actions button:hover { background: #26171c; border-color: #97505c; }
+#menu .start-actions #startDarkBtn { min-height: 60px; padding-inline: 22px; font-size: 14px; background: #be2638; border-color: #df3e50; box-shadow: 0 8px 36px #a1142624; }
+#menu .start-actions #startDarkBtn:hover { background: #d53245; border-color: #fa6575; }
+#menu .start-actions #startDarkBtn > span { font-size: 20px; }
+#menu .start-actions #coopBtn { min-height: 48px; flex-direction: row; align-items: center; justify-content: center; font-size: 12px; }
+#menu .menu-note { font-size: 9px; gap: 9px; color: var(--ash); margin-top: -8px; }
+.menu-note svg { width: 15px; height: 15px; }
+#menu .controls-details { width: 100%; max-width: 380px; margin-top: 0; }
+#menu .menu-aside { align-self: start; border: 1px solid var(--line); border-top: 2px solid #c82f40; padding: 22px; gap: 20px; background: linear-gradient(145deg, #1d1418eb, #100f12f5); box-shadow: 0 16px 60px #0003; }
+.board-eyebrow { display: flex; align-items: center; gap: 8px; color: #ed7380; font: 9px var(--font-mono); text-transform: uppercase; letter-spacing: .1em; }
+.record-mark { font-size: 17px; }
+.solo-label { margin-left: auto; color: var(--ash); font-size: 8px; }
+#menu .board { gap: 16px; }
+#menu .boardHead { align-items: center; }
+#menu .boardHead h2 { font: 22px/1.2 var(--font-display); letter-spacing: -.025em; }
+#menu .boardHead .boardScope { font-size: 8px; }
+#menu .boardMine { order: 1; padding-top: 14px; border-top: 1px solid var(--line); color: var(--ash); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+#menu .boardFoot { order: 2; font-size: 9px; }
+#menu .boardList { max-height: 320px; overflow-y: auto; scrollbar-width: thin; }
+#menu .board li { padding-block: 12px; gap: 8px; grid-template-columns: 18px minmax(0, 1fr) auto auto; }
+#menu .board li.me { background: #c82f4010; }
+#menu .board .empty { padding: 28px 18px; border: 1px dashed #523039; text-align: center; background: #0a080b66; line-height: 1.8; }
+#menu .menu-footer { padding-top: 18px; font-size: 9px; letter-spacing: .06em; gap: 14px; }
+#menu .menu-footer > span:first-child { display: flex; align-items: center; gap: 9px; }
+#menu .menu-footer i { width: 5px; height: 5px; background: #db4052; }
+/* Static doorway silhouette adds depth without assets or continuous animation. */
+.menu-atmosphere { position: absolute; inset: 0; overflow: hidden; pointer-events: none; background: radial-gradient(ellipse at 58% 46%, #50121b40, transparent 52%); }
+.menu-atmosphere::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, #09090b99, transparent 55%), linear-gradient(0deg, #09090b, transparent 35%); }
+.exit-door { position: absolute; left: 49%; top: 19%; width: 19%; height: 67%; border: 1px solid #5b202940; border-right: 3px solid #8e293655; background: linear-gradient(90deg, #0a090bee 85%, #65152233); transform: perspective(700px) rotateY(-22deg); box-shadow: 18px 0 70px #b91e3020, inset -6px 0 20px #a4192515; }
+.exit-door::before { content: ""; position: absolute; right: 12%; top: 53%; width: 4px; height: 32px; background: #7e39444d; }
+.exit-door::after { content: ""; position: absolute; inset: 12% 17% 60%; border: 1px solid #48202955; background: repeating-linear-gradient(90deg, #160c1055 0 18px, #58212b33 19px 20px); }
+#name .arrival-panel { max-width: 380px; display: flex; flex-direction: column; gap: 28px; border: 0; padding: 0; }
+@media (max-width: 760px) {
+  #menu.screen { padding: max(20px, env(safe-area-inset-top, 0px)) var(--safe-right) var(--safe-bottom) var(--safe-left); }
+  #menu .entry-menu { min-height: calc(100svh - 40px); grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; gap: 30px; }
+  #menu .menu-topbar { padding-bottom: 16px; gap: 14px; }
+  #menu .ward-brand > span:last-child { display: none; }
+  #menu .who { gap: 9px; }
+  #menu .player-symbol { display: none; }
+  #menu .who .link { margin-left: 4px; }
+  #menu .menu-primary { padding: 4px 0 0; gap: 22px; max-width: none; }
+  #menu .hero-title { font-size: clamp(5rem, 21vw, 8rem); }
+  #menu .hero-title > .ward-title { font-size: 9px; margin-top: 22px; }
+  #menu .menu-chapter { font-size: 8px; letter-spacing: .1em; }
+  #menu .start-actions, #menu .controls-details { max-width: none; }
+  #menu .menu-aside { padding: 20px; }
+  #menu .menu-footer { flex-direction: column; }
+  #menu .exit-door { left: 58%; width: 35%; height: 50%; top: 15%; }
+}
+@media (max-height: 700px) and (min-width: 761px) {
+  #menu .entry-menu { gap: 26px 40px; }
+  #menu .menu-primary { gap: 18px; padding: 0; }
+  #menu .hero-title { font-size: clamp(5rem, 10vw, 8rem); }
+  #menu .hero-title > .ward-title { margin-top: 18px; }
+}
+@media (max-height: 600px) and (max-width: 760px) {
+  #menu .entry-menu { gap: 22px; }
+  #menu .menu-primary { gap: 16px; }
+  #menu .hero-title { font-size: 4.8rem; }
+  #menu .hero-title > .ward-title { margin-top: 18px; }
+}
+@media (max-height: 450px) and (min-width: 761px) {
+  #menu.screen { padding-top: 16px; }
+  #menu .entry-menu { gap: 20px 32px; }
+  #menu .menu-topbar { padding-bottom: 12px; }
+  #menu .menu-primary { gap: 12px; }
+  #menu .menu-chapter, #menu .tagline { display: none; }
+  #menu .hero-title { font-size: 4.8rem; }
+  #menu .hero-title > span { margin-bottom: 8px; font-size: 9px; }
+  #menu .hero-title > .ward-title { margin-top: 12px; font-size: 9px; }
+  #menu .start-actions #startDarkBtn { min-height: 48px; }
+}
 .entry-detail { border: 0; border-top: 1px solid var(--line); font-size: 12px; }
 .entry-detail > summary { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 14px 0; cursor: pointer; list-style: none; color: var(--ash); }
 .entry-detail > summary::-webkit-details-marker { display: none; }

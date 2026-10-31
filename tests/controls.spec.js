@@ -201,7 +201,7 @@ test('menus retain unique required IDs, remain horizontally contained and fit co
   await page.setContent(markup);await page.addStyleTag({path:stylesPath});
   const ids=await page.locator('[id]').evaluateAll(nodes=>nodes.map(n=>n.id));
   expect(new Set(ids).size).toBe(ids.length);
-  for(const id of ['healthBar','healthText','stanceText','noiseBar','objectiveText','interactionPrompt','controlsHint','weaponName','weaponSlots','reticleHit','fpsText','settingsQuality','settingsSensitivity','settingsVolume','settingsMotion','startDarkBtn','startBtn','resumeBtn','pauseMenuBtn'])expect(ids).toContain(id);
+  for(const id of ['healthBar','healthText','stanceText','noiseBar','objectiveText','interactionPrompt','controlsHint','weaponName','weaponSlots','reticleHit','fpsText','settingsQuality','settingsSensitivity','settingsVolume','settingsMotion','startDarkBtn','coopBtn','resumeBtn','pauseMenuBtn'])expect(ids).toContain(id);
   for(const [width,height] of [[320,568],[390,340],[568,320],[844,390],[1280,800]]){
     await page.setViewportSize({width,height});
     for(const id of ['name','menu','coop','coopEnd','pause','dead','win']){

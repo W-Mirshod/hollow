@@ -13,7 +13,7 @@ npm start
 
 Open <http://127.0.0.1:3077>. To try a phone on the same Wi-Fi, run `HOST=0.0.0.0 npm start` and open `http://YOUR_COMPUTER_LAN_IP:3077` on the phone. Allow that port through your local firewall. Use HTTPS for a public deployment.
 
-Choose **Enter** to play immediately, or **Story** for the outdoor approach and story opening. Enter or Space skips the cinematic; phones show a **Skip scene** button. A modern WebGL-capable browser is required.
+Choose **Play** to enter the ward immediately, or **Multiplay** to play with a friend. The result-screen **Return to the meadow** action replays the outdoor approach and story opening. Enter or Space skips the cinematic; phones show a **Skip scene** button. A modern WebGL-capable browser is required.
 
 ## Ward navigation and escape
 
@@ -73,7 +73,7 @@ Adaptive quality adjusts rendering resolution to frame time; actual FPS depends 
 
 ## Play together
 
-Choose **Co-op**, create a game, and share the four-character room code. The other player joins from the same game server. The host starts the round when both players are ready.
+Choose **Multiplay**, create a game, and share the four-character room code. The other player joins from the same game server. The host starts the round when both players are ready.
 
 Both players explore the same seeded ward. Pickups are claimed by whoever reaches them first; ammunition belongs to the player carrying it. Fuses are shared, and the host synchronizes exit power, the release countdown, and the gate's open state. A guest can request activation but cannot independently finish the release. A fallen player can spectate their partner. Pausing does **not** pause a co-op round or its shutter countdown. Co-op results do not enter the solo scoreboard.
 

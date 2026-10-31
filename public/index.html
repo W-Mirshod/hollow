@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#18201e">
+  <meta name="theme-color" content="#09090b">
   <meta name="description" content="The Hollow: Blackwater Ward. Beneath the manor, an abandoned treatment wing has lost power. Scavenge supplies, evade the monsters, and restore the exit to escape.">
   <title>The Hollow: Blackwater Ward</title>
   <link rel="stylesheet" href="styles.css">
@@ -78,19 +78,21 @@
 </div>
 
 <div class="screen form" id="menu" aria-labelledby="menuTitle">
+  <div class="menu-atmosphere" aria-hidden="true"><div class="exit-door"></div></div>
   <div class="panel wide menu-panel entry-menu">
+    <header class="menu-topbar">
+      <div class="ward-brand"><span class="ward-symbol" aria-hidden="true">H</span><span>Blackwater Ward<small>Survival horror / Solo + co-op</small></span></div>
+      <div class="who"><span class="player-symbol" aria-hidden="true">◈</span><div class="player-identity"><span class="player-label">Playing as</span><b id="whoName">Guest</b></div><button type="button" class="link" id="changeName" aria-label="Change player name">Edit <span aria-hidden="true">↗</span></button></div>
+    </header>
     <div class="menu-primary">
+      <div class="menu-chapter"><span aria-hidden="true"></span> Chapter 01 / The lower wing</div>
       <h1 class="title hero-title" id="menuTitle"><span>The</span> Hollow<span class="ward-title">Blackwater Ward</span></h1>
-      <p class="tagline">Find a way out.</p>
-      <div class="who"><b id="whoName">Guest</b><button type="button" class="link" id="changeName" aria-label="Change player name">Change</button></div>
+      <p class="tagline">Something down here is still awake.<br><span>Find a way out.</span></p>
       <div class="btns start-actions">
-        <button type="button" class="primary" id="startDarkBtn">Enter <span aria-hidden="true">↗</span></button>
-        <button type="button" id="startBtn">Story</button>
-        <button type="button" class="quiet" id="coopBtn">Co-op</button>
+        <button type="button" class="primary" id="startDarkBtn">Play <span aria-hidden="true">↗</span></button>
+        <button type="button" class="quiet" id="coopBtn">Multiplay</button>
       </div>
-      <div class="note menu-note">Headphones recommended</div>
-    </div>
-    <aside class="menu-aside">
+      <div class="note menu-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 14v-3a8 8 0 0 1 16 0v3M4 13H2v7h5v-7H4Zm16 0h2v7h-5v-7h3Z"/></svg> Headphones recommended</div>
       <details class="controls-details entry-detail">
         <summary>How to play <span aria-hidden="true">+</span></summary>
         <p class="rules">Find three fuses. Power the east exit. Stay quiet, or lock a shelter and switch your torch off.</p>
@@ -110,8 +112,9 @@
         </dl>
         <p class="touch-instructions">Touch: left stick to move, drag right to look. Use the labeled buttons.</p>
       </details>
-      <details class="entry-detail scores-detail">
-        <summary>Fastest escapes <span aria-hidden="true">+</span></summary>
+    </div>
+    <aside class="menu-aside scores-detail" aria-labelledby="boardTitle1">
+        <div class="board-eyebrow"><span class="record-mark" aria-hidden="true">↗</span> Escape records <span class="solo-label">Solo runs</span></div>
         <section class="board" aria-labelledby="boardTitle1">
           <div class="boardHead"><h2 id="boardTitle1">Fastest escapes</h2><span class="boardScope">Loading</span></div>
           <p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p>
@@ -125,8 +128,8 @@
           <div class="codeRow"><input id="importCode" placeholder="HOLLOW-…" autocomplete="off" spellcheck="false" aria-label="Player result code"><button type="submit">Add to board</button></div>
           <p id="importMsg" aria-live="polite"></p>
         </form>
-      </details>
     </aside>
+    <footer class="menu-footer"><span><i aria-hidden="true"></i> No one is coming to save you.</span><span>Find three fuses. Restore power. Escape.</span></footer>
   </div>
 </div>
 

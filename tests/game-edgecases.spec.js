@@ -135,7 +135,9 @@ test.describe('mobile story transition',()=>{
 
   test('Skip scene enters interactive play and portrait gestures clear on rotation',async({page,context,browserName})=>{
     test.skip(browserName!=='chromium','Real multi-touch injection uses Chromium CDP.');
-    await ready(page);await page.locator('#startBtn').tap();
+    await ready(page);
+        // The outdoor opening remains available through the result-screen replay action.
+        await page.evaluate(()=>document.getElementById('retryFull').click());
     await expect.poll(async()=>(await snapshot(page)).state).toBe('outside');
     await expect(page.locator('#touchMove')).toBeVisible();
     await pose(page,{x:-3.55,z:7.5,yaw:-Math.PI/2,pitch:0});

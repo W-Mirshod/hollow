@@ -1100,7 +1100,7 @@ const controls=window.HollowControls?HollowControls.create({canvas,onAction:inpu
 function lock(){if(controls?controls.touch:IS_TOUCH)return;try{const r=canvas.requestPointerLock();if(r&&r.catch)r.catch(()=>showMsg('Click the game to capture the mouse.',2));}catch(e){}}
 function showScreen(id){renderRequested=true;['name','menu','pause','dead','win','coop','coopEnd'].forEach(s=>$(s).hidden=s!==id);$('hud').hidden=!(id===null&&state==='play');}
 function resume(){initAudio();state=prevState;showScreen(null);lock();}
-$('startBtn').addEventListener('click',()=>{initAudio();newGame(true);showScreen(null);lock();});
+
 $('startDarkBtn')?.addEventListener('click',()=>{initAudio();newGame(false);showScreen(null);lock();});
 $('changeName').addEventListener('click',()=>openNameScreen());
 $('winCopy').addEventListener('click',()=>copyCode($('winCode'),$('winCopy')));
