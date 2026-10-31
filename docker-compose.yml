@@ -1,0 +1,26 @@
+services:
+  hollow:
+    build: .
+    container_name: hollow
+    restart: unless-stopped
+    stop_grace_period: 15s
+    environment:
+      TRUST_PROXY: "1"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3077/health',{signal:AbortSignal.timeout(3000)}).then(async r=>process.exit(r.ok&&(await r.text())==='ok'?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    volumes:
+      - hollow_data:/data
+    networks:
+      - web
+
+volumes:
+  hollow_data:
+
+networks:
+  web:
+    external: true
+    name: web

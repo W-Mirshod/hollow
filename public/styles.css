@@ -1,0 +1,596 @@
+/* Blackwater Ward — emergency records, oxidized enamel, unlit treatment rooms. */
+:root {
+  --void: #141b19;
+  --bone: #e8e2d3;
+  --ash: #aeb5aa;
+  --blood: #9a5147;
+  --rust: #865f4b;
+  --ember: #d7bd94;
+  --mint: #afc2ac;
+  --line: rgba(219, 219, 198, .23);
+  --surface: rgba(20, 28, 25, .94);
+  --font-display: Georgia, "Times New Roman", serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  --safe-left: max(24px, env(safe-area-inset-left, 0px));
+  --safe-right: max(24px, env(safe-area-inset-right, 0px));
+  --safe-top: max(24px, env(safe-area-inset-top, 0px));
+  --safe-bottom: max(20px, env(safe-area-inset-bottom, 0px));
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { width: 100%; height: 100%; margin: 0; background: var(--void); color: var(--bone); overflow: hidden; overscroll-behavior: none; }
+body { font-family: var(--font-ui); -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+button, input, select, summary { font: inherit; }
+button, input, select { touch-action: manipulation; }
+button { cursor: pointer; }
+button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--ember); outline-offset: 4px; }
+input, code { -webkit-user-select: text; user-select: text; }
+#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: none; transition: filter 1s; touch-action: none; }
+#grain { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .025; mix-blend-mode: screen; transition: opacity 4s; }
+#vignette { position: fixed; inset: 0; pointer-events: none; opacity: .28; transition: opacity 4s; background: radial-gradient(ellipse at center, transparent 42%, rgba(0, 0, 0, .38) 80%, rgba(0, 0, 0, .7) 100%); }
+#danger { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 36%, rgba(132, 28, 21, .45) 85%, rgba(73, 7, 3, .76) 100%); }
+/* Keep damage peripheral rather than washing the screen in a bright flash. */
+#flash { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse, transparent 60%, rgba(119, 54, 43, .28)); opacity: 0; }
+.bar-lb { position: fixed; left: 0; right: 0; height: 0; background: #000; z-index: 4; transition: height 1.2s ease; pointer-events: none; overflow: hidden; display: flex; align-items: center; justify-content: flex-end; padding-right: var(--safe-right); }
+#barTop { top: 0; }
+#barBot { bottom: 0; }
+.bars-on .bar-lb { height: 10vh; }
+#skip { font: 10px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ash); }
+
+/* Menus can scroll in short viewports and with the software keyboard open. */
+.screen { position: fixed; inset: 0; z-index: 8; display: flex; align-items: safe center; justify-content: center; overflow-y: auto; overflow-x: hidden; padding: max(42px, env(safe-area-inset-top, 0px)) var(--safe-right) max(32px, env(safe-area-inset-bottom, 0px)) var(--safe-left); background: radial-gradient(ellipse at 90% 0%, rgba(103, 118, 94, .16), transparent 65%), #18201e; touch-action: pan-y; scrollbar-color: #657166 #18201e; scrollbar-gutter: stable; isolation: isolate; }
+.panel { width: 100%; min-width: 0; max-width: 35rem; display: flex; flex-direction: column; gap: 24px; margin-block: auto; flex-shrink: 0; }
+.panel > * { min-width: 0; }
+.screen:not(#menu) .panel { border-top: 3px double var(--line); padding-top: 24px; }
+.screen:not(#menu) .panel > .overline { color: var(--ash); }
+.panel.wide { max-width: 42rem; }
+.overline { font: 10px/1.5 var(--font-mono); letter-spacing: .18em; text-transform: uppercase; color: var(--ember); display: flex; align-items: center; gap: 10px; }
+.signal-dot { display: inline-block; width: 5px; height: 5px; border-radius: 0; background: var(--mint); flex: 0 0 auto; }
+.title { font: 400 clamp(3.2rem, 7.5vw, 5.5rem)/.96 var(--font-display); letter-spacing: -.055em; margin: 0; color: var(--bone); text-wrap: balance; }
+.title > span { display: block; font: 400 .27em/1.5 var(--font-ui); text-transform: uppercase; letter-spacing: .5em; margin: 0 0 6px 4px; }
+.title.red, .danger-label { color: #db9481; }
+.lede { font-size: 15px; font-weight: 400; line-height: 1.8; color: var(--ash); max-width: 48ch; margin: 0; text-wrap: pretty; }
+.rules { font-size: 13px; line-height: 1.8; color: var(--ash); margin: 0; border-left: 1px solid var(--rust); padding-left: 15px; }
+.note { font: 10px/1.7 var(--font-mono); color: var(--ash); }
+.btns { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; }
+.btns button, .codeRow button { display: flex; align-items: center; justify-content: center; gap: 20px; min-height: 46px; font-size: 12px; font-weight: 500; letter-spacing: .025em; color: var(--bone); border: 1px solid var(--line); background: rgba(213, 227, 212, .035); padding: 13px 19px; text-align: left; transition: background .16s, border-color .16s, color .16s; }
+.btns button.primary { background: #d8cfb8; color: #1b2520; border-color: #d8cfb8; font-weight: 650; box-shadow: inset 3px 0 #8b5144; }
+.btns button.primary:hover { background: #efe5cf; border-color: #efe5cf; }
+.btns button:hover, .codeRow button:hover { background: rgba(224, 232, 211, .095); border-color: rgba(218, 224, 212, .4); }
+.btns button.quiet { background: transparent; }
+.btns button:disabled { opacity: .35; cursor: default; }
+.button-subtitle { font: 10px var(--font-mono); color: var(--ash); }
+.link { background: none; border: none; padding: 12px 4px; min-height: 44px; color: var(--ember); font-size: 11px; text-decoration: underline; text-underline-offset: 4px; }
+.field { display: flex; flex-direction: column; gap: 10px; }
+.field label { font: 10px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ash); }
+.field input { width: 100%; max-width: 25rem; padding: 12px 0; font-size: 24px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--bone); border-radius: 0; }
+.field input:focus { outline: 0; border-color: var(--ember); }
+.field input::placeholder { color: #728078; }
+.err { font-size: 12px; color: #e29b84; min-height: 1em; margin: 0; line-height: 1.6; }
+.err:empty { display: none; }
+.muted { color: var(--ash); }
+.result-rank { color: var(--ember); }
+#nameForm { display: flex; flex-direction: column; gap: 25px; }
+.arrival-panel .board { margin-top: 8px; }
+.who { font: 11px var(--font-mono); color: var(--ash); display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.who b { color: var(--bone); font-weight: 500; }
+
+/* The menu is a two-column evacuation record, not a floating card. */
+#menu { background: radial-gradient(ellipse at 76% 18%, rgba(100, 116, 93, .14), transparent 55%), linear-gradient(110deg, #1d2622, #151d1b); }
+.panel.menu-panel { max-width: 1170px; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(290px, 1fr); gap: 32px 72px; border-top: 1px solid var(--line); padding-top: 24px; }
+.menu-primary { display: flex; flex-direction: column; align-items: flex-start; gap: 22px; padding-top: 8px; }
+.document-mark { font: 24px/1 var(--font-ui); color: #cb8e79; margin-right: 4px; }
+.evacuation-strip { width: 100%; max-width: 375px; border-block: 1px solid var(--line); padding: 12px 0; display: grid; gap: 6px; font: 10px/1.5 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
+.evacuation-strip > span { color: var(--ash); font-size: 9px; }
+.evacuation-strip b { color: var(--ember); font-weight: 400; }
+.hero-title { margin-block: 8px 0; font-size: clamp(5.2rem, 10.2vw, 8.8rem); line-height: .87; }
+.hero-title > span { font: 400 .14em/1.5 var(--font-mono); margin-bottom: 16px; letter-spacing: .52em; }
+.hero-title > .ward-title { margin: 24px 0 0 3px; font: 400 clamp(13px, 1.6vw, 19px)/1.5 var(--font-mono); letter-spacing: .21em; color: var(--ember); }
+.tagline { font: 400 24px/1.35 var(--font-display); letter-spacing: -.01em; color: var(--bone); margin: 4px 0 0; }
+.menu-primary .lede { font-size: 13px; max-width: 42ch; }
+.menu-primary .who { margin-block: -8px -12px; }
+.start-actions { width: 100%; max-width: 375px; display: grid; grid-template-columns: 1fr 1fr; }
+.start-actions button { justify-content: space-between; }
+.start-actions #startDarkBtn { grid-column: 1 / -1; min-height: 54px; font-size: 13px; }
+.start-actions #startBtn, .start-actions #coopBtn { flex-direction: column; gap: 6px; align-items: flex-start; }
+.menu-note { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 9px; }
+.headphone-icon { color: var(--ember); font-size: 13px; letter-spacing: -4px; padding-right: 5px; }
+.note-dot { color: var(--rust); }
+.menu-aside { display: flex; flex-direction: column; justify-content: flex-start; gap: 23px; padding-left: 26px; border-left: 1px solid var(--line); }
+.survival-brief { display: flex; flex-direction: column; gap: 16px; }
+.survival-brief > .overline { padding-bottom: 1px; }
+.brief-item { display: flex; gap: 16px; }
+.brief-number { font: 10px/1.5 var(--font-mono); color: var(--ember); padding-top: 3px; }
+.brief-item h2 { font-size: 14px; font-weight: 500; margin: 0 0 5px; letter-spacing: .01em; }
+.brief-item p { margin: 0; font-size: 12px; line-height: 1.7; color: var(--ash); }
+.controls-details { border-block: 1px solid var(--line); font-size: 12px; }
+.controls-details summary { cursor: pointer; display: flex; justify-content: space-between; padding: 15px 0; color: var(--bone); list-style: none; }
+.controls-details summary::-webkit-details-marker { display: none; }
+.controls-details summary span { color: var(--ember); }
+.controls-details[open] summary span { transform: rotate(45deg); }
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 10px 15px; font-size: 11px; margin: 4px 0 18px; align-items: center; }
+.keys dt { min-width: 0; color: var(--ash); }
+kbd { font: 10px var(--font-mono); border: 1px solid var(--line); border-radius: 3px; padding: 3px 5px; color: var(--bone); display: inline-block; line-height: 1.1; }
+.keys dd { margin: 0; color: var(--ash); line-height: 1.5; }
+.touch-instructions { font-size: 11px; line-height: 1.7; color: var(--ash); margin: 0 0 16px; }
+.menu-footer { grid-column: 1 / -1; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; font: 9px/1.7 var(--font-mono); letter-spacing: .07em; color: var(--ash); border-top: 1px solid var(--line); padding-top: 22px; }
+.footer-mark { letter-spacing: .14em; color: var(--ember); }
+.menu-share { grid-column: 1 / -1; }
+
+/* Static CSS scenery: flat gradients and clipped planes, no assets, filters or animation. */
+.ward-art { position: relative; height: 260px; flex: 0 0 auto; overflow: hidden; border: 1px solid #566056; background: #25302b; }
+.ward-scene { position: absolute; inset: 0 0 30px; overflow: hidden; background: radial-gradient(ellipse at 57% 42%, #52604c, #283630 42%, #1b2421 78%); }
+.ward-scene::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(16, 22, 19, .4), transparent 38%, rgba(12, 20, 17, .13)), linear-gradient(0deg, rgba(15, 24, 21, .6), transparent 44%); }
+.ward-wall { position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent 0 34px, rgba(177, 188, 161, .13) 35px, rgba(13, 24, 20, .5) 37px), repeating-linear-gradient(90deg, transparent 0 71px, rgba(17, 28, 23, .48) 72px 74px), linear-gradient(0deg, #34463d 0 48%, #68715d 49% 50%, #434e42 51%); }
+.wall-left { clip-path: polygon(0 0, 44% 27%, 44% 69%, 0 100%); }
+.wall-right { clip-path: polygon(72% 27%, 100% 0, 100% 100%, 72% 69%); background-color: #192e24; }
+.wall-left::after { content: ""; position: absolute; inset: 7% 72% 8% 9%; background: linear-gradient(90deg, #121c18 68%, #556153 70% 75%, #1e2a23 77%); border: 3px solid #4b5749; transform: skewY(13deg); }
+.wall-right::after { content: ""; position: absolute; inset: 14% 6% 10% 84%; background: #19251f; border: 4px solid #566152; transform: skewY(-18deg); }
+.ward-ceiling { position: absolute; inset: 0; clip-path: polygon(0 0, 100% 0, 72% 27%, 44% 27%); background: repeating-linear-gradient(0deg, transparent 0 19px, #536050 20px 21px), linear-gradient(110deg, #222e26, #434d3d); }
+.ward-floor { position: absolute; inset: 0; clip-path: polygon(44% 69%, 72% 69%, 100% 100%, 0 100%); background: repeating-conic-gradient(from 42deg at 58% 62%, rgba(147, 157, 129, .14) 0deg 1deg, transparent 1deg 22deg), repeating-linear-gradient(0deg, transparent 0 23px, rgba(126, 146, 122, .2) 24px 25px), linear-gradient(0deg, #202c25, #69745b); }
+.ward-door { position: absolute; left: 49%; top: 30%; width: 18%; height: 41%; background: linear-gradient(90deg, #24352b 49%, #71806a 50%, #27392d 52%); border: 4px solid #758069; box-shadow: 0 0 0 3px #1f2c23; }
+.ward-door::before { content: ""; position: absolute; inset: 13% 16% 48%; background: repeating-linear-gradient(90deg, #101e17 0 4px, #465842 5px 6px); border: 2px solid #617057; }
+.ward-door::after { content: ""; position: absolute; right: 13%; top: 60%; width: 9px; height: 2px; background: #b5b599; }
+.ward-door > span { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); color: #e0bea4; background: #71473b; padding: 2px 8px; font: 8px/1.3 var(--font-mono); letter-spacing: .16em; }
+.ward-light { position: absolute; left: 48%; top: 7%; width: 22%; height: 3px; background: #ced2b3; box-shadow: 0 0 16px 5px rgba(196, 208, 162, .18); }
+.ward-bed { position: absolute; bottom: 12%; left: 12%; width: 39%; height: 16%; background: linear-gradient(0deg, transparent 0 48%, #5a6859 49% 61%, #999d80 62% 76%, #707d66 77%); transform: skewY(9deg); border-inline: 3px solid #8e9980; }
+.ward-bed::before { content: ""; position: absolute; left: -3px; top: -22px; width: 27%; height: 30px; border: 3px solid #87947c; border-radius: 5px 5px 0 0; background: repeating-linear-gradient(90deg, transparent 0 8px, #73816c 9px 11px); }
+.ward-bed::after { content: ""; position: absolute; width: 9px; height: 9px; bottom: -7px; left: -6px; border-radius: 50%; background: #15221b; box-shadow: 132px 0 #15221b; }
+.ward-room-number { position: absolute; right: 7%; top: 33%; font: 12px var(--font-mono); letter-spacing: .1em; color: #bfc2a7; transform: skewY(-18deg); }
+.art-register { position: absolute; bottom: 0; inset-inline: 0; min-height: 30px; padding: 8px 10px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px; color: #c9cbbb; background: #202b25; border-top: 1px solid #566056; font: 8px/1.5 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
+
+/* A quiet title screen; instructions and scores are opt-in. */
+#menu.screen, #name.screen { background: radial-gradient(ellipse at 50% 30%, #1b2521, #0d1411 75%); }
+#menu .entry-menu, #name .arrival-panel { max-width: 380px; display: flex; flex-direction: column; gap: 28px; border: 0; padding: 0; }
+#menu .menu-primary { width: 100%; padding: 0; gap: 22px; }
+#menu .hero-title { margin: 0; font-size: clamp(4.5rem, 14vw, 7rem); }
+#menu .hero-title > span { margin-left: 2px; margin-bottom: 12px; font-size: 12px; }
+#menu .hero-title > .ward-title { margin: 18px 0 0 3px; font-size: 11px; letter-spacing: .2em; }
+#menu .tagline { margin: 0 0 6px; font: 14px/1.5 var(--font-ui); color: var(--ash); }
+#menu .start-actions { order: 1; max-width: none; grid-template-columns: 1fr 1fr; gap: 8px; }
+#menu .start-actions #startDarkBtn { min-height: 52px; font-size: 14px; }
+#menu .start-actions #startBtn, #menu .start-actions #coopBtn { min-height: 46px; flex-direction: row; align-items: center; justify-content: center; font-size: 12px; }
+#menu .who { order: 2; margin: -10px 0; width: 100%; justify-content: space-between; align-items: center; font-size: 10px; }
+#menu .who b { color: var(--ash); }
+#menu .who .link { font-size: 10px; color: var(--ash); }
+#menu .menu-note { order: 3; font-size: 9px; color: var(--ash); }
+#menu .menu-aside { border: 0; padding: 0; gap: 0; }
+.entry-detail { border: 0; border-top: 1px solid var(--line); font-size: 12px; }
+.entry-detail > summary { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 14px 0; cursor: pointer; list-style: none; color: var(--ash); }
+.entry-detail > summary::-webkit-details-marker { display: none; }
+.entry-detail > summary span { font: 15px var(--font-mono); color: var(--ash); }
+.entry-detail[open] > summary span { transform: rotate(45deg); }
+.entry-detail .rules { font-size: 12px; margin: 0 0 20px; }
+.entry-detail .board { border: 0; padding: 4px 0 20px; }
+.entry-detail .menu-share { margin-bottom: 20px; }
+#name .title { font-size: clamp(4rem, 13vw, 5rem); }
+#name .lede { font-size: 14px; }
+#nameForm { gap: 22px; }
+#name .field input { font-size: 20px; }
+#name .entry-detail { margin-top: 0; }
+
+/* Boards and collaboration. */
+.board { display: flex; flex-direction: column; gap: 9px; border-top: 1px solid var(--line); padding-top: 20px; }
+.menu-aside .board { border: none; padding-top: 0; }
+.boardHead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.boardHead h2 { font-size: 12px; font-weight: 500; margin: 0; }
+.boardHead span { font: 9px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ash); }
+.board ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.board li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto; gap: 10px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid rgba(216, 208, 194, .06); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; }
+.board li .rk { color: var(--ash); }
+.board li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bone); }
+.board li .tm { color: var(--bone); font-weight: 500; }
+.board li .kl { color: var(--ash); font-size: 9px; min-width: 46px; text-align: right; }
+.board li.me .nm, .board li.me .tm, .board li:first-child .rk { color: var(--ember); }
+.boardMine { margin: 0; font-size: 12px; color: var(--bone); }
+.boardMine:empty { display: none; }
+.boardMine b { color: var(--ember); font-weight: 500; }
+.board li.gap { display: block; border: 0; padding: 2px 0; color: var(--ash); text-align: center; font-size: 10px; }
+.board .empty { font-size: 11px; color: var(--ash); margin: 0; line-height: 1.6; }
+.board .foot { font-size: 10px; color: var(--ash); margin: 0; line-height: 1.6; }
+.coop-choose { display: flex; flex-direction: column; gap: 20px; }
+.plist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.plist li { display: flex; gap: 10px; align-items: baseline; font-size: 14px; color: var(--bone); }
+.plist li span { font: 9px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ash); }
+.bigcode { font: 30px var(--font-mono); letter-spacing: .15em; color: var(--ember); }
+#coopJoinForm input { text-transform: lowercase; letter-spacing: .1em; font-size: 16px; }
+.share { display: flex; flex-direction: column; gap: 12px; border-left: 1px solid var(--rust); padding-left: 16px; }
+.share p { margin: 0; font-size: 12px; line-height: 1.7; color: var(--ash); }
+.codeRow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.codeRow code, .codeRow input { font: 12px var(--font-mono); background: rgba(216, 208, 194, .045); color: var(--bone); border: 1px solid var(--line); border-radius: 0; padding: 14px; word-break: break-all; min-width: 0; flex: 1 1 180px; }
+.codeRow button { color: var(--ember); }
+.settings-grid { border-block: 1px solid var(--line); padding-block: 8px; }
+.setting { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 14px 0; font-size: 13px; color: var(--bone); }
+.setting > span { display: flex; flex-direction: column; gap: 5px; }
+.setting small { font-size: 11px; line-height: 1.5; color: var(--ash); }
+.setting select { background: #17211b; color: var(--bone); border: 1px solid var(--line); border-radius: 3px; padding: 9px 26px 9px 10px; max-width: 45%; }
+.setting input[type="range"] { accent-color: #d4b393; width: 155px; min-width: 90px; max-width: 40%; height: 44px; }
+.setting { min-height: 48px; cursor: pointer; }
+.setting select { min-height: 44px; }
+.setting:focus-within { background: rgba(219, 219, 198, .04); }
+.effects-setting { border-top: 1px dashed var(--line); }
+.setting input[type="checkbox"] { width: 21px; height: 21px; accent-color: #d4b393; flex: 0 0 auto; }
+.no-script { position: fixed; inset: 0; z-index: 30; background: var(--void); display: grid; place-content: center; padding: 30px; text-align: center; }
+
+/* Gameplay HUD is pointer-transparent except explicit touch controls. */
+#hud { position: fixed; inset: 0; z-index: 3; pointer-events: none; font-family: var(--font-mono); }
+.hud-brief { display: contents; }
+#locationText { font: 10px/1.5 var(--font-mono); color: var(--ember); }
+#locationText:not(:empty) { margin-top: 5px; }
+#escapeStatus { font: 11px/1.5 var(--font-ui); color: #f0b298; }
+#escapeStatus:not(:empty) { border-top: 1px solid rgba(209, 136, 110, .4); margin-top: 6px; padding-top: 5px; }
+#horrorCaption { pointer-events: none; font: italic 13px/1.5 var(--font-display); color: #d2d8ca; text-shadow: 0 1px 4px #000; }
+#horrorCaption:not(:empty) { padding: 6px 12px; background: var(--surface); border-left: 1px solid var(--line); }
+#horrorCaption:empty { height: 0; }
+.field-guidance:has(#horrorCaption:empty) { row-gap: 8px; }
+.mission-panel { position: absolute; top: var(--safe-top); left: var(--safe-left); max-width: min(385px, 55vw); padding: 9px 12px; border-left: 2px solid rgba(212, 179, 147, .75); background: linear-gradient(90deg, rgba(7, 14, 11, .82), rgba(7, 14, 11, .4)); }
+.mission-panel .overline { color: var(--ash); font-size: 8px; letter-spacing: .14em; }
+#objectiveText { margin-top: 6px; font: 12px/1.6 var(--font-ui); color: var(--bone); text-shadow: 0 1px 3px #000; }
+.field-telemetry { position: absolute; right: var(--safe-right); top: var(--safe-top); display: flex; align-items: center; gap: 10px; color: #bfccb9; font-size: 8px; letter-spacing: .16em; text-shadow: 0 1px 3px #000; }
+.telemetry-rule { width: 17px; height: 1px; background: var(--ember); }
+#fpsText { font-variant-numeric: tabular-nums; min-width: 40px; color: var(--ash); letter-spacing: .02em; }
+.vitals-panel { position: absolute; left: var(--safe-left); bottom: calc(var(--safe-bottom) + 23px); display: flex; flex-direction: column; gap: 8px; min-width: 203px; padding: 10px 14px; background: linear-gradient(90deg, rgba(7, 14, 11, .8), rgba(7, 14, 11, .35)); border-left: 1px solid rgba(229, 230, 210, .23); }
+.vitals-heading { display: flex; justify-content: space-between; align-items: center; gap: 15px; margin-bottom: 2px; }
+.vitals-heading .overline { font-size: 8px; letter-spacing: .12em; }
+#stanceText { color: var(--ash); font-size: 8px; }
+.meter { display: flex; align-items: center; gap: 10px; font-size: 8px; letter-spacing: .04em; color: var(--ash); }
+.meter > span { width: 40px; }
+.bar { width: 106px; height: 3px; background: rgba(216, 208, 194, .15); position: relative; overflow: hidden; border-radius: 1px; }
+.bar i { position: absolute; inset: 0 auto 0 0; background: var(--bone); width: 100%; max-width: 100%; transition: width .1s linear; }
+.health-meter .bar { height: 5px; }
+#healthBar { background: var(--mint); }
+#healthText { font-size: 8px; color: var(--mint); position: absolute; right: 16px; transform: translateY(-2px); font-weight: 400; }
+.health-meter .bar { width: 81px; margin-right: 25px; }
+#batBar { background: var(--ember); }
+#stamBar { background: #9cbcc9; }
+#noiseBar { background: #d5b987; width: 0%; }
+#stamRow { transition: opacity .3s; }
+.field-guidance { position: absolute; bottom: var(--safe-bottom); left: 50%; transform: translateX(-50%); width: min(720px, calc(100vw - 500px)); display: flex; align-items: center; flex-direction: column; gap: 16px; text-align: center; }
+#controlsHint { font: 10px/1.6 var(--font-mono); color: rgba(232, 231, 212, .84); text-shadow: 0 1px 3px #000, 0 1px 9px #000; letter-spacing: .015em; }
+#interactionPrompt { color: #eee4d0; font: 12px/1.5 var(--font-ui); background: rgba(7, 14, 11, .85); border: 1px solid rgba(212, 179, 147, .42); border-radius: 0; padding: 8px 12px; }
+#interactionPrompt:empty { display: none; }
+#msg { position: fixed; left: 50%; transform: translateX(-50%); width: min(610px, calc(100% - 48px)); bottom: 24%; text-align: center; font: 15px/1.6 var(--font-ui); color: var(--bone); opacity: 0; transition: opacity .4s; pointer-events: none; z-index: 7; padding: 12px 22px; background: linear-gradient(90deg, transparent, rgba(7, 14, 11, .8) 15%, rgba(7, 14, 11, .8) 85%, transparent); text-shadow: 0 1px 6px #000; }
+#ammo { position: fixed; right: var(--safe-right); bottom: calc(var(--safe-bottom) + 23px); z-index: 3; pointer-events: none; display: flex; flex-direction: column; align-items: flex-end; gap: 16px; }
+.map-frame { position: relative; padding: 7px; background: rgba(7, 14, 11, .6); border: 1px solid var(--line); }
+.map-caption { position: absolute; left: 7px; top: -22px; color: #bec8b6; text-transform: uppercase; font: 8px var(--font-mono); letter-spacing: .14em; text-shadow: 0 1px 5px #000; }
+.map-caption kbd { font-size: 8px; padding: 1px 3px; }
+#map { width: 112px; height: 112px; display: block; background: rgba(4, 7, 5, .55); }
+#map.expanded, #map.large { width: min(72vw, 72vh, 540px); height: min(72vw, 72vh, 540px); }
+.map-frame:has(#map.expanded), .map-frame:has(#map.large) { position: fixed; left: 50%; top: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); background: rgba(5, 10, 8, .92); border-color: rgba(212, 179, 147, .5); box-shadow: 0 8px 40px rgba(0, 0, 0, .45); }
+.weapon-panel { min-width: 150px; padding: 9px 12px; border-right: 1px solid rgba(229, 230, 210, .23); background: linear-gradient(270deg, rgba(7, 14, 11, .83), rgba(7, 14, 11, .4)); text-align: right; }
+#weaponSlots { display: flex; justify-content: flex-end; gap: 5px; margin-bottom: 7px; color: var(--ash); font: 8px var(--font-mono); }
+#weaponSlots > span, #weaponSlots > button { border: 1px solid rgba(215, 220, 204, .16); background: transparent; padding: 3px 6px; border-radius: 2px; color: var(--ash); font: inherit; }
+#weaponSlots .selected, #weaponSlots .active { border-color: rgba(219, 185, 145, .7); color: var(--ember); background: rgba(219, 185, 145, .09); }
+#weaponName { font-size: 11px; letter-spacing: .055em; color: #e8e9dc; }
+.weapon-readout { display: flex; align-items: baseline; justify-content: flex-end; gap: 12px; margin-top: 7px; }
+#ammoLbl { font: 8px var(--font-mono); text-transform: uppercase; color: var(--ash); }
+.ammoRow { display: flex; align-items: baseline; gap: 6px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--bone); }
+.ammoRow b { font-size: 29px; font-weight: 400; line-height: 1; letter-spacing: -.055em; }
+.ammoRow span { font-size: 11px; color: var(--ash); }
+#cross { position: fixed; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; border-radius: 50%; background: rgba(237, 239, 220, .82); pointer-events: none; z-index: 3; box-shadow: 0 0 3px #000; }
+.reticle-arm { position: absolute; background: rgba(237, 239, 220, .5); box-shadow: 0 0 2px #000; }
+.arm-left, .arm-right { width: 5px; height: 1px; top: 1px; }
+.arm-left { right: 8px; }
+.arm-right { left: 8px; }
+.arm-top, .arm-bottom { height: 5px; width: 1px; left: 1px; }
+.arm-top { bottom: 8px; }
+.arm-bottom { top: 8px; }
+#reticleHit { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; opacity: 0; transform: translate(-50%, -50%) rotate(45deg); transition: opacity .08s; border: 1px solid rgba(241, 192, 137, .9); border-radius: 2px; }
+#reticleHit.active, #reticleHit.hit { opacity: 1; }
+#cross.aiming .arm-left { right: 5px; }
+#cross.aiming .arm-right { left: 5px; }
+#cross.aiming .arm-top { bottom: 5px; }
+#cross.aiming .arm-bottom { top: 5px; }
+#cross.aiming .reticle-arm { opacity: .55; }
+
+/* Multi-touch controls. No full-screen hit target covers the menus. */
+#touchControls { position: fixed; inset: 0; z-index: 5; pointer-events: none; touch-action: none; contain: layout style; }
+#touchLook { position: absolute; top: 0; right: 0; width: 64%; height: 100%; pointer-events: auto; touch-action: none; }
+.touch-look-caption { position: absolute; top: 45%; left: 55%; font: 9px var(--font-mono); text-transform: uppercase; letter-spacing: .16em; color: rgba(234, 236, 215, .34); transform: translateX(-50%); pointer-events: none; transition: opacity .5s; }
+.has-looked .touch-look-caption { opacity: 0; }
+#touchMove { position: absolute; width: 152px; height: 152px; left: calc(var(--safe-left) - 12px); bottom: calc(var(--safe-bottom) + 12px); pointer-events: auto; touch-action: none; display: grid; place-items: center; border-radius: 50%; }
+.joystick-ring { position: relative; width: 100px; height: 100px; border-radius: 50%; border: 1px solid rgba(232, 230, 208, .24); background: radial-gradient(circle, rgba(18, 28, 21, .32) 38%, rgba(15, 25, 18, .45) 40%, rgba(15, 25, 18, .2) 64%); }
+.joystick-ring::before, .joystick-ring::after { content: ""; position: absolute; background: rgba(232, 230, 208, .12); }
+.joystick-ring::before { top: 49px; left: 9px; right: 9px; height: 1px; }
+.joystick-ring::after { top: 9px; bottom: 9px; left: 49px; width: 1px; }
+.joystick-thumb { position: absolute; top: 50%; left: 50%; width: 43px; height: 43px; margin: -21.5px 0 0 -21.5px; border-radius: 50%; border: 1px solid rgba(229, 230, 210, .5); background: rgba(166, 182, 159, .22); box-shadow: 0 2px 14px rgba(0, 0, 0, .2); will-change: transform; }
+.joystick-label { position: absolute; left: 0; right: 0; bottom: 1px; text-align: center; font: 8px var(--font-mono); letter-spacing: .12em; color: rgba(230, 233, 216, .6); }
+.touch-button { position: absolute; pointer-events: auto; touch-action: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 52px; height: 52px; min-width: 44px; min-height: 44px; border: 1px solid rgba(232, 230, 208, .35); border-radius: 50%; background: rgba(10, 19, 14, .58); color: #e4e5d6; padding: 0; box-shadow: 0 2px 12px rgba(0, 0, 0, .12); }
+.touch-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.touch-button > span { font: 7px var(--font-mono); text-transform: uppercase; letter-spacing: .035em; line-height: 1; pointer-events: none; }
+.touch-button.pressed, .touch-button.is-on { color: #f2d4ad; border-color: #d4b393; background: rgba(133, 103, 67, .58); }
+.touch-button:focus { outline: none; }
+.touch-button:focus-visible { outline: 2px solid var(--ember); outline-offset: 3px; }
+.touch-fire { right: calc(var(--safe-right) + 13px); bottom: calc(var(--safe-bottom) + 100px); width: 80px; height: 80px; background: rgba(77, 55, 34, .57); border-color: rgba(222, 183, 135, .58); }
+.touch-fire svg { width: 26px; height: 26px; }
+.touch-fire > span { font-size: 9px; letter-spacing: .08em; }
+.touch-jump { right: calc(var(--safe-right) + 106px); bottom: calc(var(--safe-bottom) + 93px); }
+.touch-crouch { right: calc(var(--safe-right) + 87px); bottom: calc(var(--safe-bottom) + 21px); }
+.touch-aim { right: calc(var(--safe-right) + 162px); bottom: calc(var(--safe-bottom) + 42px); }
+.touch-interact { right: calc(var(--safe-right) + 173px); bottom: calc(var(--safe-bottom) + 113px); }
+.touch-reload { right: calc(var(--safe-right) + 4px); bottom: calc(var(--safe-bottom) + 22px); }
+.touch-sprint { left: calc(var(--safe-left) + 146px); bottom: calc(var(--safe-bottom) + 151px); }
+.touch-torch { right: calc(var(--safe-right) + 64px); top: calc(var(--safe-top) + 36px); width: 43px; height: 43px; }
+.touch-weapon { right: calc(var(--safe-right) + 119px); top: calc(var(--safe-top) + 36px); width: 43px; height: 43px; }
+.touch-decoy { left: calc(var(--safe-left) + 213px); bottom: calc(var(--safe-bottom) + 196px); width: 43px; height: 43px; }
+.touch-map { right: calc(var(--safe-right) + 174px); top: calc(var(--safe-top) + 36px); width: 43px; height: 43px; }
+.touch-pause { right: var(--safe-right); top: var(--safe-top); width: 42px; height: 42px; border-radius: 9px; }
+.touch-pause > span { display: none; }
+body.touch-mode #skip { display: none; }
+#touchControls[data-state="cutscene"] .touch-jump { width: 124px; height: 42px; right: var(--safe-right); bottom: calc(var(--safe-bottom) + 14px); border-radius: 4px; flex-direction: row; gap: 10px; }
+#touchControls[data-state="cutscene"] .touch-jump svg { display: none; }
+#touchControls[data-state="cutscene"] .touch-jump span { font-size: 10px; }
+body.touch-mode .field-telemetry { right: calc(var(--safe-right) + 60px); }
+body.touch-mode .vitals-panel { bottom: auto; top: calc(var(--safe-top) + 86px); gap: 7px; min-width: 177px; padding: 10px 12px; }
+body.touch-mode .vitals-heading { margin-bottom: 1px; }
+body.touch-mode .vitals-heading .overline { font-size: 7px; }
+body.touch-mode .bar { width: 80px; }
+body.touch-mode .health-meter .bar { width: 56px; }
+body.touch-mode #healthText { right: 12px; }
+body.touch-mode .meter { font-size: 7px; gap: 8px; }
+body.touch-mode .meter > span { width: 38px; }
+body.touch-mode #ammo { right: calc(var(--safe-right) + 5px); top: calc(var(--safe-top) + 99px); bottom: auto; gap: 12px; }
+body.touch-mode .map-frame { position: fixed; top: var(--safe-top); left: 50%; transform: translateX(-50%); padding: 4px; }
+body.touch-mode .map-caption { display: none; }
+body.touch-mode #map { width: 92px; height: 92px; }
+body.touch-mode #map.expanded, body.touch-mode #map.large { width: min(55vw, 55vh); height: min(55vw, 55vh); }
+body.touch-mode .weapon-panel { min-width: 140px; padding: 9px 12px; }
+body.touch-mode #weaponName { font-size: 10px; }
+body.touch-mode #weaponSlots { margin-bottom: 5px; }
+body.touch-mode #ammoLbl { font-size: 7px; }
+body.touch-mode .ammoRow b { font-size: 23px; }
+body.touch-mode .field-guidance { bottom: calc(var(--safe-bottom) + 1px); width: min(330px, calc(100vw - 335px)); gap: 10px; }
+body.touch-mode #controlsHint { font-size: 8px; }
+body.touch-mode #interactionPrompt { position: fixed; width: max-content; max-width: min(430px, 76vw); bottom: calc(var(--safe-bottom) + 265px); font-size: 11px; padding: 8px 12px; }
+body.touch-mode #msg { bottom: 38%; font-size: 12px; max-width: 70%; }
+body.touch-mode .mission-panel { max-width: min(310px, 38vw); padding: 10px 12px; }
+body.touch-mode #objectiveText { font-size: 10px; }
+
+/* Flow mission and vitals together so wrapped objectives cannot collide with meters. */
+body.touch-mode .hud-brief { position: absolute; top: var(--safe-top); left: var(--safe-left); display: flex; flex-direction: column; gap: 8px; width: min(310px, 38vw); }
+body.touch-mode .hud-brief .mission-panel { position: static; max-width: none; padding: 7px 10px; }
+body.touch-mode .mission-panel:has(#locationText:not(:empty)) > .overline { display: none; }
+body.touch-mode #locationText { margin-top: 0; font-size: 9px; }
+body.touch-mode #objectiveText { line-height: 1.4; margin-top: 4px; }
+body.touch-mode #escapeStatus { font-size: 10px; line-height: 1.4; }
+body.touch-mode #escapeStatus:not(:empty) { margin-top: 4px; padding-top: 4px; }
+body.touch-mode .hud-brief .vitals-panel { position: static; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; width: 200px; min-width: 0; max-width: 100%; padding: 8px 10px; }
+body.touch-mode .vitals-heading { grid-column: 1 / -1; margin: 0; }
+body.touch-mode .meter { flex-wrap: wrap; gap: 5px; font-size: 9px; }
+body.touch-mode .meter > span { width: auto; }
+body.touch-mode .meter .bar { order: 2; width: 100%; height: 3px; margin: 0; }
+body.touch-mode #healthText { position: static; transform: none; margin-left: auto; font-size: 9px; }
+body.touch-mode #stanceText { font-size: 9px; }
+body.touch-mode #controlsHint { display: none; }
+body.touch-mode #horrorCaption { position: fixed; bottom: calc(var(--safe-bottom) + 325px); max-width: min(350px, 65vw); font-size: 12px; }
+body.touch-mode .field-telemetry { display: none; }
+
+@media (min-width: 1450px) {
+  .panel.menu-panel { max-width: 1240px; gap: 36px 100px; }
+  .hero-title { font-size: 154px; }
+  .menu-primary .lede { font-size: 14px; }
+  .menu-aside { gap: 29px; }
+  .brief-item p { font-size: 13px; }
+}
+@media (max-width: 960px) {
+  .panel.menu-panel { grid-template-columns: minmax(0, 1fr) minmax(250px, .9fr); gap: 35px 45px; }
+  .hero-title { font-size: clamp(5rem, 12vw, 8rem); }
+  .menu-primary > .overline { font-size: 9px; letter-spacing: .1em; }
+    .menu-aside { padding-left: 20px; }
+    .ward-art { height: 230px; }
+  .menu-primary { gap: 22px; }
+  .tagline { font-size: 17px; }
+  .start-actions { grid-template-columns: 1fr; }
+  .start-actions #startBtn, .start-actions #coopBtn { flex-direction: row; align-items: center; min-height: 46px; }
+  .field-guidance { width: calc(100vw - 420px); }
+  .field-guidance #controlsHint { font-size: 8px; }
+}
+@media (max-width: 680px) {
+  :root { --safe-left: max(18px, env(safe-area-inset-left, 0px)); --safe-right: max(18px, env(safe-area-inset-right, 0px)); --safe-top: max(16px, env(safe-area-inset-top, 0px)); --safe-bottom: max(16px, env(safe-area-inset-bottom, 0px)); }
+  .screen { padding-top: max(35px, env(safe-area-inset-top, 0px)); padding-bottom: max(26px, env(safe-area-inset-bottom, 0px)); }
+  .panel { gap: 22px; }
+  .panel.menu-panel { max-width: 440px; display: flex; gap: 34px; }
+  #menu { background: linear-gradient(160deg, #253029, #18201d 60%); }
+  .menu-primary { gap: 18px; }
+    .hero-title > .ward-title { margin-top: 20px; font-size: 14px; letter-spacing: .18em; }
+    .ward-art { height: 230px; }
+    .evacuation-strip { max-width: none; }
+    .codeRow input { font-size: 16px; }
+  .title { font-size: 58px; }
+  .hero-title { font-size: clamp(4.8rem, 20vw, 7rem); }
+  .hero-title > span { margin-bottom: 14px; }
+  .tagline { font-size: 18px; }
+  .menu-primary .lede { font-size: 13px; }
+  .start-actions { max-width: none; grid-template-columns: 1fr 1fr; }
+  .start-actions #startBtn, .start-actions #coopBtn { flex-direction: column; align-items: flex-start; }
+  .menu-note { font-size: 8px; }
+  .menu-aside { border: 0; border-top: 1px solid var(--line); padding: 22px 0 0; gap: 22px; }
+  .survival-brief { gap: 17px; }
+  .brief-item p { font-size: 12px; }
+  .menu-footer { font-size: 8px; }
+  .lede { font-size: 14px; }
+  .btns button { font-size: 11px; min-height: 46px; }
+  .settings-grid { padding: 0; }
+  .setting { gap: 12px; }
+  .setting small { font-size: 10px; max-width: 210px; }
+  .setting select { max-width: 43%; font-size: 11px; }
+  .setting input[type="range"] { width: 115px; }
+  .board li { gap: 7px; }
+  .mission-panel { max-width: calc(100vw - 42px); }
+  .field-telemetry { display: none; }
+  body:not(.touch-mode) .vitals-panel { min-width: 175px; padding: 10px; }
+  body:not(.touch-mode) .bar { width: 90px; }
+  body:not(.touch-mode) .health-meter .bar { width: 65px; }
+  body:not(.touch-mode) #map:not(.expanded):not(.large) { width: 100px; height: 100px; }
+  body:not(.touch-mode) .field-guidance { width: calc(100vw - 36px); }
+  body:not(.touch-mode) #controlsHint { font-size: 7px; }
+  body:not(.touch-mode) #interactionPrompt { margin-bottom: 150px; max-width: 85vw; }
+}
+@media (max-width: 680px) and (orientation: portrait) {
+  body.touch-mode .hud-brief { width: calc(100vw - var(--safe-left) - var(--safe-right) - 58px); }
+  body.touch-mode .hud-brief .vitals-panel { width: calc(100vw - var(--safe-left) - var(--safe-right) - 124px); }
+  body.touch-mode .mission-panel { max-width: calc(100vw - 94px); }
+  body.touch-mode #objectiveText { font-size: 10px; }
+  body.touch-mode .vitals-panel { top: calc(var(--safe-top) + 84px); }
+  body.touch-mode .map-frame { left: auto; right: var(--safe-right); top: calc(var(--safe-top) + 74px); transform: none; }
+  body.touch-mode #map { width: 64px; height: 64px; }
+  body.touch-mode #ammo { top: calc(var(--safe-top) + 148px); right: var(--safe-right); }
+  body.touch-mode .weapon-panel { width: 108px; min-width: 0; padding: 6px; }
+  body.touch-mode #weaponName { font-size: 9px; }
+  body.touch-mode #weaponSlots { display: none; }
+  body.touch-mode .weapon-readout { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; margin-top: 4px; }
+  body.touch-mode .ammoRow b { font-size: 23px; }
+  body.touch-mode .ammoRow span { font-size: 9px; }
+  body.touch-mode #ammoLbl { font-size: 8px; line-height: 1.3; }
+  .touch-torch { top: calc(var(--safe-top) + 164px); left: var(--safe-left); right: auto; }
+  .touch-weapon { top: calc(var(--safe-top) + 164px); left: calc(var(--safe-left) + 51px); right: auto; }
+  .touch-map { top: calc(var(--safe-top) + 164px); left: calc(var(--safe-left) + 102px); right: auto; }
+  #touchMove { width: 132px; height: 132px; left: calc(var(--safe-left) - 14px); bottom: calc(var(--safe-bottom) + 18px); }
+  .joystick-ring { width: 92px; height: 92px; }
+  .joystick-ring::before { top: 45px; }
+  .joystick-ring::after { left: 45px; }
+  .touch-button { width: 46px; height: 46px; }
+  .touch-button svg { width: 17px; height: 17px; }
+  .touch-fire { width: 69px; height: 69px; right: calc(var(--safe-right) + 2px); bottom: calc(var(--safe-bottom) + 109px); }
+  .touch-fire svg { width: 23px; height: 23px; }
+  .touch-aim { right: calc(var(--safe-right) + 128px); bottom: calc(var(--safe-bottom) + 77px); }
+  .touch-jump { right: calc(var(--safe-right) + 80px); bottom: calc(var(--safe-bottom) + 129px); }
+  .touch-crouch { right: calc(var(--safe-right) + 63px); bottom: calc(var(--safe-bottom) + 63px); }
+  .touch-interact { right: calc(var(--safe-right) + 111px); bottom: calc(var(--safe-bottom) + 198px); }
+  .touch-reload { right: calc(var(--safe-right) + 1px); bottom: calc(var(--safe-bottom) + 39px); }
+  .touch-sprint { left: calc(var(--safe-left) + 22px); bottom: calc(var(--safe-bottom) + 179px); }
+  .touch-decoy { left: calc(var(--safe-left) + 9px); bottom: calc(var(--safe-bottom) + 240px); }
+  .touch-pause { width: 42px; height: 42px; }
+  body.touch-mode .field-guidance { width: calc(100vw - 36px); bottom: max(6px, env(safe-area-inset-bottom, 0px)); }
+  body.touch-mode #controlsHint { font-size: 8px; max-width: 320px; line-height: 1.5; }
+  body.touch-mode #interactionPrompt { bottom: 263px; max-width: calc(100vw - 115px); transform: translateX(35px); font-size: 11px; }
+  body.touch-mode #msg { bottom: 47%; max-width: 87%; font-size: 12px; padding: 9px 13px; }
+  .touch-look-caption { top: 47%; left: 56%; font-size: 8px; }
+}
+@media (max-width: 350px) and (orientation: portrait) {
+  .touch-aim { bottom: calc(var(--safe-bottom) + 153px); }
+
+}
+@media (max-height: 520px) and (orientation: landscape) {
+  :root { --safe-top: max(12px, env(safe-area-inset-top, 0px)); --safe-bottom: max(10px, env(safe-area-inset-bottom, 0px)); --safe-left: max(18px, env(safe-area-inset-left, 0px)); --safe-right: max(18px, env(safe-area-inset-right, 0px)); }
+  .screen { padding-block: max(12px, env(safe-area-inset-top, 0px)); }
+  .screen:not(#menu) .panel.pause-panel { padding-top: 10px; }
+    .panel.pause-panel { max-width: 880px; display: grid; grid-template-columns: .8fr 1.2fr; gap: 6px 20px; }
+  .pause-panel > .overline { grid-column: 1; grid-row: 1; }
+  .pause-panel > .title { grid-column: 1; grid-row: 2; font-size: 48px; }
+  .pause-panel > .lede { grid-column: 1; grid-row: 3; font-size: 12px; line-height: 1.65; }
+  .pause-panel > .rules { display: none; }
+  .pause-panel > .btns { grid-column: 1; grid-row: 4; align-self: start; gap: 8px; }
+  .pause-panel > .btns button { padding: 10px 12px; min-height: 43px; font-size: 10px; gap: 10px; }
+  .pause-panel > .settings-grid { grid-column: 2; grid-row: 1 / 5; padding: 3px 0; }
+  .pause-panel > .note { grid-column: 1 / -1; grid-row: 5; font-size: 9px; }
+  .pause-panel .setting { padding: 3px 0; gap: 10px; font-size: 11px; min-height: 44px; }
+  .pause-panel .setting small { font-size: 9px; line-height: 1.35; }
+  .pause-panel .setting:not(.effects-setting) small { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .pause-panel .setting > span { gap: 3px; }
+  .pause-panel .setting select { min-width: 0; }
+  .pause-panel .setting input[type="checkbox"] { margin-right: 0; }
+  .pause-panel .setting input[type="range"] { margin-block: 0; }
+  .pause-panel .setting select { padding: 7px 8px; font-size: 10px; max-width: 45%; }
+  .pause-panel .setting input[type="range"] { width: 105px; min-width: 65px; }
+  .panel.menu-panel { max-width: 940px; grid-template-columns: 1fr .9fr; gap: 24px 38px; }
+  .menu-primary { gap: 17px; }
+  .hero-title { font-size: 88px; }
+  .menu-primary .lede { font-size: 11px; }
+  .menu-aside { justify-content: flex-start; }
+  .survival-brief { gap: 14px; }
+  .brief-item p { font-size: 11px; }
+  .menu-footer { padding-top: 16px; }
+  body.touch-mode .hud-brief { width: min(250px, 37vw); gap: 5px; }
+  body.touch-mode .hud-brief .vitals-panel { width: 180px; gap: 6px 12px; padding-block: 6px; }
+  body.touch-mode #horrorCaption { bottom: 201px; max-width: min(50vw, calc(100vw - 364px)); font-size: 11px; }
+  body.touch-mode .mission-panel { max-width: min(260px, 37vw); top: var(--safe-top); padding: 8px 10px; }
+  body.touch-mode .mission-panel .overline { font-size: 7px; }
+  body.touch-mode #objectiveText { font-size: 9px; line-height: 1.45; margin-top: 3px; }
+  body.touch-mode .vitals-panel { top: calc(var(--safe-top) + 63px); padding: 8px 10px; min-width: 160px; gap: 6px; }
+  body.touch-mode #healthText { right: 10px; }
+  body.touch-mode #ammo { top: calc(var(--safe-top) + 76px); }
+  body.touch-mode .map-frame { top: var(--safe-top); padding: 3px; }
+  body.touch-mode #map { width: 66px; height: 66px; }
+  body.touch-mode .weapon-panel { min-width: 122px; padding: 7px 10px; }
+  body.touch-mode #weaponName { font-size: 10px; }
+  body.touch-mode #weaponSlots { margin-bottom: 3px; }
+  body.touch-mode #weaponSlots > span { padding: 2px 5px; font-size: 7px; }
+  body.touch-mode .weapon-readout { margin-top: 4px; }
+  body.touch-mode .ammoRow b { font-size: 21px; }
+  #touchMove { width: 122px; height: 122px; left: calc(var(--safe-left) - 9px); bottom: calc(var(--safe-bottom) + 1px); }
+  .joystick-ring { width: 90px; height: 90px; }
+  .joystick-ring::before { top: 44px; }
+  .joystick-ring::after { left: 44px; }
+  .touch-button { width: 44px; height: 44px; }
+  .touch-button svg { width: 17px; height: 17px; }
+  .touch-button > span { font-size: 6px; }
+  .touch-fire { width: 63px; height: 63px; right: calc(var(--safe-right) + 5px); bottom: calc(var(--safe-bottom) + 72px); }
+  .touch-fire > span { font-size: 8px; }
+  .touch-fire svg { width: 23px; height: 23px; }
+  .touch-reload { right: calc(var(--safe-right) + 5px); bottom: calc(var(--safe-bottom) + 13px); }
+  .touch-jump { right: calc(var(--safe-right) + 84px); bottom: calc(var(--safe-bottom) + 85px); }
+  .touch-crouch { right: calc(var(--safe-right) + 66px); bottom: calc(var(--safe-bottom) + 23px); }
+  .touch-aim { right: calc(var(--safe-right) + 123px); bottom: calc(var(--safe-bottom) + 16px); }
+  .touch-interact { right: calc(var(--safe-right) + 138px); bottom: calc(var(--safe-bottom) + 76px); }
+  .touch-sprint { left: calc(var(--safe-left) + 113px); bottom: calc(var(--safe-bottom) + 74px); }
+  .touch-decoy { left: calc(var(--safe-left) + 170px); bottom: calc(var(--safe-bottom) + 22px); }
+  .touch-torch { right: calc(var(--safe-right) + 59px); top: calc(var(--safe-top) + 21px); width: 39px; height: 39px; }
+  .touch-weapon { right: calc(var(--safe-right) + 109px); top: calc(var(--safe-top) + 21px); width: 39px; height: 39px; }
+  .touch-map { right: calc(var(--safe-right) + 159px); top: calc(var(--safe-top) + 21px); width: 39px; height: 39px; }
+  .touch-pause { width: 44px; height: 44px; }
+  body.touch-mode .field-guidance { width: calc(100vw - 435px); bottom: calc(var(--safe-bottom) + 2px); }
+  body.touch-mode #controlsHint { font-size: 7px; }
+  body.touch-mode #interactionPrompt { bottom: 141px; max-width: min(50vw, calc(100vw - 364px)); font-size: 10px; }
+  body.touch-mode #msg { bottom: 43%; max-width: 55%; font-size: 11px; }
+  .touch-look-caption { top: 48%; font-size: 8px; }
+}
+body.touch-mode .map-frame:has(#map.expanded), body.touch-mode .map-frame:has(#map.large) { left: 50%; top: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); }
+/* One flow stack keeps simultaneous notices out of each other's way. The message
+   remains outside #hud because spectators and menu transitions also use it. */
+.feedback-stack { position: fixed; z-index: 7; left: 50%; bottom: 24%; transform: translateX(-50%); width: min(540px, calc(100vw - 48px)); display: flex; flex-direction: column; align-items: stretch; gap: 5px; pointer-events: none; text-align: center; }
+body .feedback-stack .field-guidance { position: static; transform: none; width: 100%; gap: 5px; }
+body .feedback-stack #msg { position: static; transform: none; width: 100%; max-width: none; margin: 0; padding: 7px 12px; }
+body .feedback-stack #msg:empty,
+body .feedback-stack #msg[style*="opacity: 0"] { height: 0; padding: 0; overflow: hidden; }
+body .feedback-stack #interactionPrompt,
+body .feedback-stack #horrorCaption { position: static; transform: none; width: fit-content; max-width: 100%; margin: 0; }
+body .feedback-stack #controlsHint { position: fixed; width: min(720px, calc(100vw - 460px)); bottom: calc(var(--safe-bottom) - 24vh); left: 50%; transform: translateX(-50%); }
+body:has(#hud[hidden]) .field-guidance { display: none; }
+body.touch-mode .feedback-stack { bottom: calc(var(--safe-bottom) + 260px); width: min(390px, calc(100vw - 200px)); }
+body.touch-mode .feedback-stack #msg { font-size: 11px; }
+body.touch-mode .feedback-stack #interactionPrompt { font-size: 11px; padding: 7px 10px; }
+/* Atmospheric text is secondary to an active action prompt or transient notice. */
+body.touch-mode:not(.reading-record) .feedback-stack:has(#interactionPrompt:not(:empty)) #horrorCaption,
+body.touch-mode:not(.reading-record) .feedback-stack:has(#msg[style*="opacity: 1"]) #horrorCaption { display: none; }
+body.reading-record .feedback-stack #horrorCaption { font: 12px/1.65 var(--font-mono); text-align: left; color: var(--bone); border-left: 2px solid var(--ember); padding: 12px 16px; background: rgba(13, 20, 17, .95); }
+body.touch-mode.reading-record .feedback-stack #horrorCaption { font-size: 10px; line-height: 1.5; padding: 9px 11px; }
+/* Reading never suppresses lock failures, enemy warnings, or interaction feedback. */
+@media (max-width: 680px) {
+  body:not(.touch-mode) .feedback-stack #controlsHint { width: calc(100vw - 36px); font-size: 8px; }
+}
+@media (max-width: 680px) and (orientation: portrait) {
+  body.touch-mode .feedback-stack { left: calc(50% + 35px); width: calc(100vw - 115px); bottom: calc(var(--safe-bottom) + 250px); }
+  body.touch-mode .feedback-stack #msg { font-size: 10px; line-height: 1.4; padding: 5px 8px; }
+  body.touch-mode .feedback-stack #interactionPrompt { font-size: 10px; line-height: 1.4; padding: 6px 8px; }
+}
+@media (max-height: 520px) and (orientation: landscape) {
+  body.touch-mode .feedback-stack { bottom: 141px; width: min(340px, calc(100vw - 384px)); }
+  body.touch-mode .feedback-stack #msg,
+  body.touch-mode .feedback-stack #interactionPrompt { font-size: 10px; line-height: 1.4; padding: 5px 8px; }
+}
+@media (max-width: 620px) and (max-height: 520px) and (orientation: landscape) {
+  body.touch-mode .hud-brief { width: 170px; }
+  body.touch-mode .hud-brief .vitals-panel { width: 170px; }
+}
+
+/* The checkbox also disables world power dips and sudden audio stingers in game.js. */
+body:has(#settingsEffects:not(:checked)) #grain,
+body:has(#settingsEffects:not(:checked)) #flash,
+body:has(#settingsEffects:not(:checked)) #danger { visibility: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  #grain, #flash, #danger { visibility: hidden; }
+}

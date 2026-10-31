@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#18201e">
+  <meta name="description" content="The Hollow: Blackwater Ward. Beneath the manor, an abandoned treatment wing has lost power. Scavenge supplies, evade the monsters, and restore the exit to escape.">
+  <title>The Hollow: Blackwater Ward</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<canvas id="game" aria-label="The Hollow: Blackwater Ward first-person survival game"></canvas>
+<canvas id="grain" width="256" height="144" aria-hidden="true"></canvas>
+<div id="vignette" aria-hidden="true"></div>
+<div id="danger" aria-hidden="true"></div>
+<div id="flash" aria-hidden="true"></div>
+<div id="lb" aria-hidden="true"><div class="bar-lb" id="barTop"></div><div class="bar-lb" id="barBot"><span id="skip">Enter · skip</span></div></div>
+
+<div id="hud" hidden>
+  <div class="hud-brief">
+  <div class="mission-panel">
+    <span class="overline"><i class="signal-dot" aria-hidden="true"></i> Evacuation objective</span>
+    <div id="locationText"></div>
+    <div id="objectiveText">Find the fuses. Restore exit power. Get out.</div>
+    <div id="escapeStatus" role="status" aria-live="polite" aria-atomic="true"></div>
+  </div>
+  <div class="vitals-panel">
+    <div class="vitals-heading"><span class="overline">Condition</span><span id="stanceText">Standing</span></div>
+    <div class="meter health-meter"><span>Health</span><div class="bar"><i id="healthBar"></i></div><b id="healthText">100</b></div>
+    <div class="meter"><span>Torch</span><div class="bar"><i id="batBar"></i></div></div>
+    <div class="meter" id="stamRow"><span>Breath</span><div class="bar"><i id="stamBar"></i></div></div>
+    <div class="meter noise-meter"><span>Noise</span><div class="bar"><i id="noiseBar"></i></div></div>
+  </div>
+  </div>
+  <div class="field-telemetry"><span id="fpsText"></span><span class="telemetry-rule"></span><span>BW / LOWER WING</span></div>
+</div>
+<div class="feedback-stack">
+  <div id="msg" role="status" aria-live="polite"></div>
+  <div class="field-guidance">
+    <div id="horrorCaption" aria-live="polite" aria-atomic="true"></div>
+    <div id="interactionPrompt" role="status" aria-live="polite"></div>
+    <div id="controlsHint">WASD move · Shift sprint · Space jump · C crouch · E interact · F torch · Q weapon</div>
+  </div>
+</div>
+<div id="ammo" hidden>
+  <div class="map-frame"><span class="map-caption">Floor plan / <kbd>M</kbd></span><canvas id="map" width="150" height="150" aria-label="Ward evacuation map"></canvas></div>
+  <div class="weapon-panel">
+    <div id="weaponSlots" aria-label="Available weapons"><span class="selected">1</span><span>2</span><span>3</span></div>
+    <div id="weaponName">Assault rifle</div>
+    <div class="weapon-readout"><div id="ammoLbl">Ready</div><div class="ammoRow"><b id="magTxt">30</b><span id="resTxt">/ 0</span></div></div>
+  </div>
+</div>
+<div id="cross" hidden aria-hidden="true"><i class="reticle-arm arm-left"></i><i class="reticle-arm arm-right"></i><i class="reticle-arm arm-top"></i><i class="reticle-arm arm-bottom"></i><span id="reticleHit"></span></div>
+
+<div class="screen form" id="name" hidden aria-labelledby="nameTitle">
+  <div class="panel wide arrival-panel">
+    <form id="nameForm" novalidate>
+      <div class="overline">Blackwater Ward</div>
+      <h1 class="title" id="nameTitle"><span>The</span> Hollow</h1>
+      <p class="lede">Leave a name.</p>
+      <div class="field">
+        <label for="playerName">Your name</label>
+        <input id="playerName" name="playerName" maxlength="18" autocomplete="nickname" spellcheck="false" placeholder="Your name" aria-describedby="nameErr">
+      </div>
+      <p class="err" id="nameErr" aria-live="polite"></p>
+      <div class="btns"><button type="submit" class="primary" id="nameSave">Continue <span aria-hidden="true">↗</span></button></div>
+      <div class="note">Saved on this device.</div>
+    </form>
+    <details class="entry-detail">
+      <summary>Fastest escapes <span aria-hidden="true">+</span></summary>
+      <section class="board" aria-labelledby="boardTitle0">
+        <div class="boardHead"><h2 id="boardTitle0">Fastest escapes</h2><span class="boardScope">Loading</span></div>
+        <p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p>
+      </section>
+    </details>
+  </div>
+</div>
+
+<div class="screen form" id="menu" aria-labelledby="menuTitle">
+  <div class="panel wide menu-panel entry-menu">
+    <div class="menu-primary">
+      <h1 class="title hero-title" id="menuTitle"><span>The</span> Hollow<span class="ward-title">Blackwater Ward</span></h1>
+      <p class="tagline">Find a way out.</p>
+      <div class="who"><b id="whoName">Guest</b><button type="button" class="link" id="changeName" aria-label="Change player name">Change</button></div>
+      <div class="btns start-actions">
+        <button type="button" class="primary" id="startDarkBtn">Enter <span aria-hidden="true">↗</span></button>
+        <button type="button" id="startBtn">Story</button>
+        <button type="button" class="quiet" id="coopBtn">Co-op</button>
+      </div>
+      <div class="note menu-note">Headphones recommended</div>
+    </div>
+    <aside class="menu-aside">
+      <details class="controls-details entry-detail">
+        <summary>How to play <span aria-hidden="true">+</span></summary>
+        <p class="rules">Find three fuses. Power the east exit. Stay quiet, or lock a shelter and switch your torch off.</p>
+        <dl class="keys">
+          <dt><kbd>W A S D</kbd></dt><dd>Move · mouse to look</dd>
+          <dt><kbd>Shift</kbd> / <kbd>Alt</kbd></dt><dd>Sprint</dd>
+          <dt><kbd>Space</kbd></dt><dd>Jump / vault low obstacles</dd>
+          <dt><kbd>C</kbd> / <kbd>Ctrl</kbd></dt><dd>Hold to crouch &amp; move quietly</dd>
+          <dt><kbd>E</kbd></dt><dd>Interact / close / lock shelter</dd>
+          <dt><kbd>Left click</kbd></dt><dd>Fire</dd>
+          <dt><kbd>Right click</kbd></dt><dd>Hold to aim</dd>
+          <dt><kbd>R</kbd></dt><dd>Reload</dd>
+          <dt><kbd>Q</kbd> / <kbd>1–3</kbd></dt><dd>Change weapon</dd>
+          <dt><kbd>F</kbd></dt><dd>Toggle torch</dd>
+          <dt><kbd>V</kbd> / <kbd>M</kbd></dt><dd>Throw decoy / expand map</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Pause &amp; settings</dd>
+        </dl>
+        <p class="touch-instructions">Touch: left stick to move, drag right to look. Use the labeled buttons.</p>
+      </details>
+      <details class="entry-detail scores-detail">
+        <summary>Fastest escapes <span aria-hidden="true">+</span></summary>
+        <section class="board" aria-labelledby="boardTitle1">
+          <div class="boardHead"><h2 id="boardTitle1">Fastest escapes</h2><span class="boardScope">Loading</span></div>
+          <p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p>
+        </section>
+        <div class="share menu-share" id="menuShare" hidden>
+          <p>Send this code to the owner to share your score.</p>
+          <div class="codeRow"><code id="menuCode"></code><button type="button" id="menuCopy">Copy code</button></div>
+        </div>
+        <form class="share menu-share" id="importForm" hidden novalidate>
+          <p>Add a player’s result code.</p>
+          <div class="codeRow"><input id="importCode" placeholder="HOLLOW-…" autocomplete="off" spellcheck="false" aria-label="Player result code"><button type="submit">Add to board</button></div>
+          <p id="importMsg" aria-live="polite"></p>
+        </form>
+      </details>
+    </aside>
+  </div>
+</div>
+
+<div class="screen form" id="coop" hidden aria-labelledby="coopTitle">
+  <div class="panel wide">
+    <div class="overline">Blackwater Ward / Two-person entry</div>
+    <h1 class="title" id="coopTitle">Together.</h1>
+    <p class="lede">Don’t leave anyone in the ward. Enter the treatment wing with a friend, recover the fuses and restore your way out together.</p>
+    <div id="coopChoose" class="coop-choose">
+      <div class="btns"><button type="button" class="primary" id="coopCreate">Create a game <span aria-hidden="true">↗</span></button></div>
+      <p class="rules">Or enter the code your partner shared:</p>
+      <form class="codeRow" id="coopJoinForm" novalidate><input id="coopCodeIn" maxlength="6" autocomplete="off" spellcheck="false" placeholder="Game code" aria-label="Game code"><button type="submit">Join game</button></form>
+    </div>
+    <div id="coopLobby" class="share" hidden>
+      <p>Your room code — share it with your partner:</p>
+      <div class="codeRow"><span class="bigcode" id="coopCode"></span><button type="button" id="coopCopy">Copy</button></div>
+      <ul class="plist" id="coopPlayers"></ul>
+      <div class="btns" id="coopStartRow"><button type="button" class="primary" id="coopStart" disabled>Enter together</button></div>
+    </div>
+    <p class="err" id="coopErr" aria-live="polite"></p>
+    <p class="rules">Watch each other’s backs. Supplies are shared by whoever picks them up first; each player carries their own ammunition. If you fall, you can watch through your partner’s eyes. Pausing does not stop a co-op game. Co-op escapes stay off the solo scoreboard.</p>
+    <div class="btns"><button type="button" class="quiet" id="coopBack">← Back to menu</button></div>
+  </div>
+</div>
+
+<div class="screen form" id="coopEnd" hidden aria-labelledby="ceTitle">
+  <div class="panel wide">
+    <div class="overline">Evacuation report / Co-op</div>
+    <h1 class="title" id="ceTitle">Outside.</h1>
+    <p class="lede" id="ceText"></p>
+    <p class="err muted" id="ceWait" aria-live="polite"></p>
+    <div class="btns"><button type="button" class="primary" id="ceAgain">Play again</button><button type="button" id="ceLeave">Leave the game</button></div>
+  </div>
+</div>
+
+<div class="screen form" id="pause" hidden aria-labelledby="pauseTitle">
+  <div class="panel wide pause-panel">
+    <div class="overline">Blackwater Ward / Temporary hold</div>
+    <h1 class="title" id="pauseTitle">Paused.</h1>
+    <p class="lede" id="pauseLede">Gather your thoughts. Listen before you open the next door.</p>
+    <div class="settings-grid" aria-label="Game settings">
+      <label class="setting" for="settingsQuality"><span>Graphics quality<small>Auto balances detail and frame rate</small></span><select id="settingsQuality"><option value="auto">Adaptive</option><option value="low">Performance</option><option value="medium">Balanced</option><option value="high">High</option></select></label>
+      <label class="setting" for="settingsSensitivity"><span>Look sensitivity<small>Mouse and touch</small></span><input type="range" id="settingsSensitivity" min="0.4" max="2.5" step="0.05" value="1" aria-label="Look sensitivity"></label>
+      <label class="setting" for="settingsVolume"><span>Master volume<small>Headphones help locate nearby threats</small></span><input type="range" id="settingsVolume" min="0" max="1" step="0.05" value="0.7" aria-label="Master volume"></label>
+      <label class="setting" for="settingsMotion"><span>Camera motion<small>Weapon sway, head bob and recoil movement</small></span><input type="checkbox" id="settingsMotion" checked></label>
+      <label class="setting effects-setting" for="settingsEffects"><span>Disturbing effects<small id="settingsEffectsHelp">Off: reduce flicker and stingers.<br>Keep steady lighting and disable sudden audio stingers.</small></span><input type="checkbox" id="settingsEffects" checked aria-label="Disturbing effects" aria-describedby="settingsEffectsHelp"></label>
+    </div>
+    <p class="rules">A slow step is a quiet step. Lock a shelter from inside, crouch, then turn your torch off to hide. Watch the noise meter. The Warden is slow, but a stand-up fight costs precious ammunition.</p>
+    <div class="btns"><button type="button" class="primary" id="resumeBtn">Return to the dark <span aria-hidden="true">↗</span></button><button type="button" class="quiet" id="pauseMenuBtn">Main menu</button></div>
+    <div class="note">Settings are saved on this device. Reduced motion is respected on first launch.</div>
+  </div>
+</div>
+
+<div class="screen form" id="dead" hidden aria-labelledby="deadTitle">
+  <div class="panel wide">
+    <div class="overline danger-label">Evacuation failed / Record closed</div>
+    <h1 class="title red" id="deadTitle">It found you.</h1>
+    <p class="lede" id="deadText">The corridors are quiet again.</p>
+    <p class="rules">Every attempt leaves you wiser. Use corners to break sight, keep an escape route, and save a shelter for when fighting is no longer an option.</p>
+    <div class="btns"><button type="button" class="primary" id="retryDark">Re-enter the ward</button><button type="button" id="retryFull">Return to the meadow</button></div>
+    <section class="board" aria-labelledby="boardTitle3"><div class="boardHead"><h2 id="boardTitle3">Fastest escapes</h2><span class="boardScope">Loading</span></div><p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p></section>
+  </div>
+</div>
+
+<div class="screen form" id="win" hidden aria-labelledby="winTitle">
+  <div class="panel wide">
+    <div class="overline">Evacuation complete / Record closed</div>
+    <h1 class="title" id="winTitle">Outside.</h1>
+    <p class="lede" id="winText">Cold air. You made it.</p>
+    <p class="err result-rank" id="winRank"></p>
+    <div class="share" id="winShare" hidden>
+      <p>Your escape is saved here. To add it to the shared board, send this code to the game’s owner.</p>
+      <div class="codeRow"><code id="winCode"></code><button type="button" id="winCopy">Copy code</button></div>
+    </div>
+    <div class="btns"><button type="button" class="primary" id="againBtn">Return to the meadow</button><button type="button" id="menuBtn">Main menu</button></div>
+    <section class="board" aria-labelledby="boardTitle2"><div class="boardHead"><h2 id="boardTitle2">Fastest escapes</h2><span class="boardScope">Loading</span></div><p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p></section>
+  </div>
+</div>
+
+<noscript><div class="no-script">The Hollow needs JavaScript to run. Enable it in your browser, then reload.</div></noscript>
+<script src="bridge.js"></script>
+<script src="vendor/three.min.js"></script>
+<script src="systems.js"></script>
+<script src="horror.js"></script>
+<script src="navigation.js"></script>
+<script src="visuals.js"></script>
+<script src="controls.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

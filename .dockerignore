@@ -1,0 +1,14 @@
+node_modules
+data
+test-results
+playwright-report
+.git
+artifacts
+backups
+tests
+scripts
+playwright.config.js
+.env
+.env.*
+*.log
+.DS_Store

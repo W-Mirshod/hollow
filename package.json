@@ -1,0 +1,17 @@
+{
+  "name": "the-hollow",
+  "version": "2.0.0",
+  "private": true,
+  "description": "The Hollow - 3D horror maze with co-op and a shared scoreboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/bridge.js && node --check public/systems.js && node --check public/horror.js && node --check public/navigation.js && node --check public/game.js && node --check public/controls.js && node --check public/visuals.js",
+    "test": "node --test tests/*.test.js",
+    "test:browser": "playwright test",
+    "test:all": "npm run check && npm test && npm run test:browser"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": { "three": "0.128.0", "ws": "8.22.0" },
+  "devDependencies": { "@playwright/test": "1.64.1" }
+}
