@@ -250,3 +250,36 @@ test('four monster archetypes include a slow Warden that survives more than twen
   }
   assert.ok(rules.MONSTERS.crawler.height < 1);
 });
+
+test('body contact blocks crossing without pushing and permits escape from overlaps', () => {
+  const body = { x: 0, z: 0, r: .58 }, radius = .32;
+  for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
+    const point = distance => ({ x: Math.cos(angle) * distance, z: Math.sin(angle) * distance });
+    const from = point(1.2), before = { ...from };
+    assert.equal(rules.blocksCircleMove(from, point(.7), radius, body), true);
+    assert.equal(rules.blocksCircleMove(from, point(-1.2), radius, body), true, 'swept test catches crossing even with clear endpoints');
+    assert.equal(rules.blocksCircleMove(from, point(.91), radius, body), false);
+    assert.equal(rules.blocksCircleMove(point(.9), point(.9), radius, body), false);
+    assert.equal(rules.blocksCircleMove(point(.7), point(.8), radius, body), false, 'an overlapping actor can retreat');
+    assert.equal(rules.blocksCircleMove(point(.7), point(.6), radius, body), true);
+    assert.equal(rules.blocksCircleMove(point(0), point(.1), radius, body), false, 'coincident actors can separate without a forced shove');
+    assert.deepEqual(from, before, 'collision queries never displace either body');
+  }
+  assert.equal(rules.blocksCircleMove({x:-1,z:.9}, {x:1,z:.9}, radius, body), false, 'tangent movement can slide past');
+  assert.equal(rules.blocksCircleMove({x:-1,z:.89}, {x:1,z:.89}, radius, body), true);
+});
+
+test('injury intensity increases monotonically with lost health and reverses with healing', () => {
+  assert.equal(rules.injuryLevel(100), 0);
+  assert.equal(rules.injuryLevel(0), 1);
+  let previous = -1;
+  for (let health = 100; health >= 0; health--) {
+    const intensity = rules.injuryLevel(health);
+    assert.ok(Number.isFinite(intensity) && intensity >= 0 && intensity <= 1);
+    assert.ok(intensity > previous, 'every lost health point deepens the corners');
+    previous = intensity;
+  }
+  assert.ok(rules.injuryLevel(32 + 45) < rules.injuryLevel(32));
+  assert.equal(rules.injuryLevel(-20), 1);
+  for (const health of [130, NaN, Infinity, undefined]) assert.equal(rules.injuryLevel(health), 0);
+});

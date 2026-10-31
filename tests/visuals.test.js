@@ -76,18 +76,20 @@ test('four articulated creatures preserve the game animation contract at bounded
     assert.equal(lights, 0, 'creatures must not each add a light pass');
     assert.ok(meshCount(g) <= max, `${kind} exceeded its draw-call budget`);
     assert.ok(triangleCount(g) <= 45000, `${kind} exceeded its triangle budget`);
-    const contract = {
-      warden: [2.70, 0.52, 2.42, 0.27], stalker: [2.92, 0.30, 2.53, 0.44],
-      crawler: [1.1, 0.50, 0.82, 0.2], shrieker: [2.98, 0.30, 2.53, 0.44]
-    }[kind];
-    assert.deepEqual([u.height, u.bodyRadius, u.headHeight, u.stride], contract);
-    assert.equal(u.knees.length, kind === 'crawler' ? 0 : 2);
-    assert.equal(u.elbows.length, kind === 'crawler' ? 0 : 2);
+    const rule = Systems.MONSTERS[kind];
+    assert.deepEqual([u.height, u.bodyRadius, u.headHeight], [rule.height, rule.radius, rule.head]);
+    assert.equal(u.stride, kind === 'crawler' ? .2 : kind === 'warden' ? .27 : .44);
+    assert.equal(u.knees.length, 2);
+    assert.equal(u.elbows.length, 2);
+    assert.equal(u.neck.position.y, rule.head, 'head pivot must agree with gameplay hit height');
     for (const limb of u.limbs) assert.equal(limb.parent, g);
     for (const joint of [...u.knees, ...u.elbows]) assert.ok(u.limbs.includes(joint.parent));
     const bounds = new THREE.Box3().setFromObject(g);
-    assert.ok(bounds.max.y <= u.height + 0.08, `${kind} visual mesh exceeds declared hitbox height`);
-    assert.ok(bounds.min.y > -0.12, `${kind} feet penetrate floor`);
+    assert.ok(bounds.max.y <= u.height + .035, `${kind} visual mesh exceeds declared hitbox height`);
+    assert.ok(bounds.max.y >= u.height - .12, `${kind} visual mesh does not fill its declared height`);
+    assert.ok(bounds.min.y >= -.035 && bounds.min.y < .09, `${kind} feet must rest near the floor`);
+    const headBounds = new THREE.Box3().setFromObject(u.head);
+    assert.ok(headBounds.min.y < rule.head && headBounds.max.y > rule.head, `${kind} head misses its hit height`);
     assertFiniteGeometry(g); V.disposeGroup(g);
   }
 });
@@ -153,7 +155,7 @@ test('disposing one asset cannot destroy another asset’s cached resources', ()
   assert.equal(sharedDisposals, 0);
 });
 
-test('Blackwater patients have non-emissive eyes, human-scale teeth, and dressed articulated limbs', () => {
+test('Blackwater patients have dry recessed eyes and dressed articulated limbs without emission', () => {
   for (const kind of ['warden', 'stalker', 'crawler', 'shrieker']) {
     const g = V.makeMonster(THREE, kind), u = g.userData;
     assert.equal(u.direction, 'Blackwater Ward');
@@ -161,7 +163,8 @@ test('Blackwater patients have non-emissive eyes, human-scale teeth, and dressed
     assert.equal(u.eyeMat.emissive.getHex(), 0);
     assert.equal(u.eyeMat.toneMapped, true);
     const hsl = u.eyeMat.color.getHSL({});
-    assert.ok(hsl.s < 0.18 && hsl.l < 0.25, `${kind} eyes should be muted, not arcade lights`);
+    assert.ok(hsl.s < .18 && hsl.l < .06, `${kind} eyes should be nearly lost in shadow, not arcade lights`);
+    assert.ok(u.eyeMat.roughness >= .8, 'no glossy doll-eye catchlights');
     let eyes = 0;
     g.traverse(o => {
       if (!o.isMesh) return;
@@ -172,12 +175,21 @@ test('Blackwater patients have non-emissive eyes, human-scale teeth, and dressed
         eyes++;
         assert.equal(o.parent, u.head, 'no glowing throat or other luminous anatomy');
         const bounds = new THREE.Box3().setFromObject(o), size = bounds.getSize(new THREE.Vector3());
-        assert.ok(size.y < 0.025 && size.z < 0.025, 'restrained inset eyes');
+        assert.ok(size.x < .03 && size.y < .025 && size.z < .025, 'restrained inset eye slit');
+        const face = new THREE.Box3();
+        for (const mesh of u.head.children) {
+          if (!mesh.isMesh || mesh.material === u.eyeMat) continue;
+          mesh.geometry.computeBoundingBox();
+          face.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrix));
+        }
+        o.geometry.computeBoundingBox();
+        const localEye = o.geometry.boundingBox.clone().applyMatrix4(o.matrix);
+        assert.ok(localEye.max.z < face.max.z - .035, 'eye must be behind the facial ridges');
       } else {
         assert.ok(o.geometry.attributes.color, 'skin, clothing, and wraps retain batched vertex tints');
       }
     });
-    assert.equal(eyes, 1, 'both eyes should share a single head draw');
+    assert.equal(eyes, 1, 'the obscured sockets share at most one tiny eye draw');
     for (const limb of u.limbs) {
       const before = new THREE.Box3().setFromObject(limb);
       limb.rotation.x = -0.6;
@@ -189,6 +201,122 @@ test('Blackwater patients have non-emissive eyes, human-scale teeth, and dressed
     assert.equal(u.eyeMat.color.getHex(), u.eyeColor, 'game death/respawn color contract');
     V.disposeGroup(g);
   }
+});
+
+test('creature rest poses are immutable additive baselines and upright jaws stay articulated', () => {
+  for (const kind of ['warden', 'stalker', 'crawler', 'shrieker']) {
+    const g = V.makeMonster(THREE, kind), u = g.userData;
+    assert.ok(Object.isFrozen(u.restPose));
+    const parts = [...u.limbs, ...u.knees, ...u.elbows, u.neck, u.head, ...(u.jaw ? [u.jaw] : [])];
+    for (const part of parts) {
+      const rest = u.restPose[part.name];
+      assert.ok(Object.isFrozen(rest), `${kind}.${part.name} needs a stable rest pose`);
+      for (const axis of ['x', 'y', 'z']) {
+        assert.equal(rest[axis], part.rotation[axis]);
+        assert.ok(Number.isFinite(rest[axis]));
+      }
+      part.rotation.x += .31;
+      assert.ok(Math.abs(part.rotation.x - rest.x - .31) < 1e-12, 'animation deltas must not mutate the baseline');
+      part.rotation.set(rest.x, rest.y, rest.z);
+    }
+    if (kind === 'crawler') assert.equal(u.jaw, null, 'crawler spends its draw budget on four distal joints');
+    else {
+      assert.ok(u.jaw.isGroup && u.jaw.parent === u.head);
+      const before = new THREE.Box3().setFromObject(u.jaw);
+      u.jaw.rotation.x += .28;
+      const after = new THREE.Box3().setFromObject(u.jaw);
+      assert.ok(!before.equals(after), `${kind} jaw must move independently`);
+      assert.equal(u.head.rotation.z, u.restPose.head.z);
+    }
+    // Legacy animation writes cannot straighten the child head or unbend the
+    // authored limb endpoints. New animation can add deltas to the saved Eulers.
+    const baseline = JSON.stringify(u.restPose);
+    for (const limb of u.limbs) limb.rotation.set(-.3, 0, .1);
+    for (const distal of [...u.knees, ...u.elbows]) distal.rotation.x = .2;
+    u.neck.rotation.set(.15, 0, 0);
+    assert.equal(u.head.rotation.z, u.restPose.head.z);
+    assert.ok(Math.abs(u.head.rotation.z) >= .12, `${kind} face should remain canted`);
+    assert.equal(JSON.stringify(u.restPose), baseline);
+    assertFiniteGeometry(g); V.disposeGroup(g);
+  }
+});
+
+test('creature silhouettes have distinct broken proportions and actual recessed mouths', () => {
+  const models = Object.fromEntries(['warden', 'stalker', 'crawler', 'shrieker'].map(kind => [kind, V.makeMonster(THREE, kind)]));
+  const size = group => new THREE.Box3().setFromObject(group).getSize(new THREE.Vector3());
+  const body = group => {
+    const bounds = new THREE.Box3();
+    for (const child of group.children) if (child.isMesh) bounds.union(new THREE.Box3().setFromObject(child));
+    return bounds;
+  };
+  try {
+    const w = models.warden.userData, s = models.stalker.userData, c = models.crawler.userData, sh = models.shrieker.userData;
+    assert.ok(body(models.warden).max.y > w.headHeight + .3, 'Warden hunch must loom above the face pivot');
+    assert.ok(body(models.warden).getSize(new THREE.Vector3()).x > body(models.stalker).getSize(new THREE.Vector3()).x * 1.6, 'Warden needs oppressive shoulder bulk');
+    assert.ok(size(s.armL).y > size(s.armR).y * 1.25, 'stalker arms must be substantially mismatched, not mirrored');
+    assert.ok(size(s.armL).y > s.height * .70, 'stalker hand must hang unnaturally far below the shoulder');
+    assert.ok(Math.abs(s.head.rotation.z) > .30, 'stalker needs a severely canted cranial vault');
+    const crawlerSize = size(models.crawler);
+    assert.ok(crawlerSize.x > c.height * 1.5 && crawlerSize.z > c.height * 1.8, 'crawler must read as low and spiderlike');
+    for (const distal of [...c.knees, ...c.elbows]) {
+      assert.ok(distal.position.y > 0, 'crawler joints must fold above their roots, not hang like a standing doll');
+      assert.ok(new THREE.Box3().setFromObject(distal).min.y < .13, 'each splayed limb must reach the floor');
+    }
+    assert.ok(size(sh.jaw).y > .65 && size(sh.jaw).y > size(w.jaw).y * 1.4, 'shrieker needs a split jaw extending down the throat');
+    for (const [kind, g] of Object.entries(models)) {
+      const u = g.userData;
+      assert.notEqual(u.armL.position.y, u.armR.position.y, `${kind} shoulders must not be mirror copies`);
+      g.updateMatrixWorld(true);
+      const mouthY = { warden: -.11, stalker: -.17, crawler: -.075, shrieker: -.31 }[kind];
+      const origin = new THREE.Vector3(0, mouthY, 1).applyMatrix4(u.head.matrixWorld);
+      const direction = new THREE.Vector3(0, 0, -1).transformDirection(u.head.matrixWorld);
+      const hit = new THREE.Raycaster(origin, direction).intersectObject(u.head, true)[0];
+      assert.ok(hit?.face, `${kind} mouth must have an interior`);
+      const color = hit.object.geometry.attributes.color, vertex = hit.face.a;
+      assert.ok(color && color.getX(vertex) < .01 && color.getY(vertex) < .01 && color.getZ(vertex) < .01, `${kind} mouth must open into shadow, not solid skin`);
+      const slit = u.head.children.find(mesh => mesh.material === u.eyeMat);
+      assert.ok(u.head.worldToLocal(hit.point.clone()).z < slit.position.z - .015, `${kind} mouth needs real depth behind its facial rim`);
+    }
+  } finally {
+    for (const g of Object.values(models)) V.disposeGroup(g);
+  }
+});
+
+test('faceted creature primitives stay cached across rebuilds without spherical doll anatomy', () => {
+  const allocated = [], tracked = { ...THREE };
+  for (const name of ['BufferGeometry', 'BoxGeometry', 'CylinderGeometry', 'PlaneGeometry', 'SphereGeometry', 'LatheGeometry']) {
+    tracked[name] = class extends THREE[name] {
+      constructor(...args) { super(...args); allocated.push({ name, geometry: this }); }
+    };
+  }
+  const shared = new Set(), owned = new Set(), disposals = new Map();
+  const rebuild = () => {
+    for (const kind of ['warden', 'stalker', 'crawler', 'shrieker']) {
+      const first = V.makeMonster(tracked, kind), second = V.makeMonster(tracked, kind);
+      assert.notEqual(first.userData.eyeMat, second.userData.eyeMat);
+      assert.equal(first.userData.resources.uniqueMaterials[0], first.userData.eyeMat);
+      first.traverse(o => {
+        if (!o.isMesh) return;
+        for (const resource of [o.geometry, o.material, o.material.map, o.material.normalMap, o.material.roughnessMap]) {
+          if (!resource || shared.has(resource) || owned.has(resource)) continue;
+          (resource.userData.hollowShared ? shared : owned).add(resource);
+          resource.addEventListener('dispose', () => disposals.set(resource, (disposals.get(resource) || 0) + 1));
+        }
+      });
+      V.disposeGroup(first); V.disposeGroup(first);
+      assertFiniteGeometry(second); V.disposeGroup(second);
+    }
+  };
+  rebuild();
+  const cached = allocated.filter(item => item.geometry.userData.hollowShared).map(item => item.geometry);
+  assert.ok(cached.length > 0 && cached.length <= 12, 'unit hulls, tapers and rags need a small finite geometry cache');
+  rebuild();
+  assert.deepEqual(allocated.filter(item => item.geometry.userData.hollowShared).map(item => item.geometry), cached, 'rebuilding creatures must not grow primitive caches');
+  assert.equal(allocated.filter(item => item.name === 'SphereGeometry' || item.name === 'LatheGeometry').length, 0, 'anatomy must use cut, off-centre facets instead of round doll volumes');
+  assert.ok(owned.size > 0);
+  for (const resource of owned) assert.equal(disposals.get(resource), 1, 'each owned batch/eye must be disposed exactly once');
+  for (const resource of shared) assert.equal(disposals.get(resource), undefined, 'one creature must never dispose a shared material or texture');
+  for (const geometry of cached) assert.ok(geometry.attributes.position.count < 300, 'cached primitive topology stays bounded');
 });
 
 function assertClearGeometry(room) {

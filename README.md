@@ -29,7 +29,7 @@ Run/score time (`elapsed`) uses raw frame delta, separately from the capped simu
 
 ## Atmosphere and case notes
 
-- Grounded procedural monsters have articulated limbs, treatment gowns, wraps, muted skin, and non-glowing eyes. Room detail includes stained bedding, privacy curtains, water damage, discarded records, and abandoned belongings; corridor detail adds worn surfaces, rails, overhead services, and wayfinding signs.
+- Procedural monsters have angular, asymmetric bodies, recessed non-glowing eyes, hooked fingers, distorted jaws, and torn clinical remnants. The Warden is hunched and restrained; Stalkers have mismatched elongated limbs, Crawlers move on contorted low limbs, and Shriekers have hanging split jaws. Room detail includes stained bedding, privacy curtains, water damage, discarded records, and abandoned belongings; corridor detail adds worn surfaces, rails, overhead services, and wayfinding signs.
 - Sparse working corridor lights leave stretches of darkness. Nearby practical lights share a small pool (up to three, one on low quality), alongside the player's torch.
 - **Five wall-mounted case notes** are placed in the Infirmary, Records, Generator, Treatment, and Isolation B. Approach a note and press **E** (touch **USE**) to show its readable title and text; notes can be read again.
 - A seeded atmospheric director schedules captioned footsteps, scrapes, pipe knocks, ventilation breaths, and smooth six-second power dips. It holds back ambient events during high threat, in shelters, and after exit power is restored. It never spawns or teleports monsters and never damages the player. Fuse noise and the exit alarm are separate gameplay alerts, not director-spawned threats.
@@ -38,11 +38,14 @@ Models, surface textures, and atmospheric audio are generated procedurally. This
 
 ## Survival systems
 
-- Four creature types: stalking hunters, fast low crawlers, alerting shriekers, and the slow, durable Warden. Solo runs have eight creatures; co-op runs have twelve.
+- Four creature types: quiet flanking Stalkers, low ambushing Crawlers, alerting Shriekers, and the slow, durable Warden. Solo runs have eight creatures; co-op runs have twelve. Stalkers hesitate briefly when watched, then commit to a rush; staring never freezes them indefinitely. Breaking sight and hiding still work.
 - Body-size-aware navigation routes creatures around furniture and closed doors. Shriekers call nearby threats; breaking sight, crouching, and noise decoys create opportunities to escape.
-- Three weapons with distinct ammunition, fire rate, reload, recoil, spread, and damage: carbine, sidearm, and shotgun.
+- Three switchable weapons with distinct ammunition, fire rate, reload, recoil, spread, and damage: carbine, sidearm, and shotgun. Only the selected gun appears in your hands; a shoulder torch provides light without a second hand-held prop.
 - Accelerated movement, sprint stamina, jumping, low-obstacle traversal, crouching, sliding, aim-down-sights, and camera/weapon motion.
-- Scavenge ammunition, medicine, batteries, and throwable decoys. Movement, gunfire, and light affect detection; the HUD reports noise and contextual interactions.
+- Walk over ammunition boxes and supply packs to collect them automatically. Supply packs also replenish the battery and a decoy. Pickups require ground-level contact and a clear path; they cannot be collected through closed doors. An empty equipped weapon starts reloading when ammunition arrives. Fuses and medical kits still require **E / USE**.
+- Monster hits reduce health without knockback, and body contact cannot shove the player through walls. Steady red screen corners intensify as health falls and recede when a medical kit heals you; the aiming area stays clear.
+- Directional creature audio uses irregular whispers, claw scrapes, guttural bursts, heavy creaks, and Shrieker wails. Quiet stalks avoid an immediate warning roar. Walls muffle the sounds, with a bounded, volume-limited mix rather than a continuous breathing loop for every monster.
+- Movement, gunfire, and light affect detection; the HUD reports noise and contextual interactions.
 
 The Warden takes 28 carbine body hits at full health. Ammunition is limited: retreat into a shelter, close and lock its door, crouch, and turn off your torch. Standing in an open doorway is not hiding. Use the bottom-of-screen prompt to see the current door or object action.
 
@@ -58,7 +61,7 @@ The Warden takes 28 carbine body hits at full health. Ammunition is limited: ret
 | Reload | R |
 | Switch weapon | 1, 2, 3 or Q |
 | Interact, read case note, use, close, lock, unlock | E; follow the contextual prompt |
-| Toggle torch | F |
+| Toggle shoulder torch | F |
 | Throw a decoy | V |
 | Expand map | M |
 | Pause / settings | Esc |
@@ -67,7 +70,7 @@ On phones and tablets, use the left virtual stick to move and drag the right sid
 
 Hold Fire for the automatic carbine. The sidearm and shotgun fire once per press/tap. Sprint, aim, and crouch are hold actions; release them to return to your normal stance. The torch slowly recharges while switched off.
 
-Pause settings include adaptive/performance/balanced/high graphics, look sensitivity, master volume, camera motion, and **Disturbing effects**. Settings persist on the device. Turning off Disturbing effects disables power dips, sudden audio stingers, film grain, gunfire flashes, and danger/damage flash overlays independently of camera motion. It does not remove monsters, prevent damage, or disable fuse/alarm attraction; atmospheric sounds and readable captions remain. Both motion and effects default to the browser's reduced-motion preference unless a saved setting overrides them.
+Pause settings include adaptive/performance/balanced/high graphics, look sensitivity, master volume, camera motion, and **Disturbing effects**. Settings persist on the device. Turning off Disturbing effects disables power dips, film grain, gunfire flashes, and danger/damage flashes, and softens sudden creature cries independently of camera motion. The steady red **health** corners remain visible, including with reduced motion enabled. It does not remove monsters, prevent damage, or disable fuse/alarm attraction; atmospheric sounds and readable captions remain. Both motion and effects default to the browser's reduced-motion preference unless a saved setting overrides them.
 
 Adaptive quality adjusts rendering resolution to frame time; actual FPS depends on device, browser, screen resolution, and thermal limits. Real-hardware performance is unverified; no desktop or phone frame-rate guarantee is made. Headphones make directional monster sounds easier to locate.
 
@@ -95,9 +98,9 @@ npm run test:browser
 The existing suites include:
 
 - **Layout and navigation:** 250 deterministic ward seeds covering stable room geometry and objective locations, long main halls, enclosed rooms, shelter isolation, and independent service loops; 1,100 furnished navigation routes using actual room colliders and all four monster sizes; movement contacts and weapon/monster rules.
-- **Procedural visuals:** articulated patient models, non-emissive eyes, clinical room detail and clear navigation axes, deterministic surface maps, sparse corridor fixtures, route-aware exit signs, bounded geometry/draw counts, and resource disposal. These structural checks do not establish visual realism or real-device speed.
+- **Procedural visuals and audio:** angular asymmetric creature models and additive animation poses, non-emissive eyes, bounded/disconnected spatial audio voices with occlusion and distinct creature cues, clinical room detail and clear navigation axes, deterministic surface maps, sparse corridor fixtures, route-aware exit signs, bounded geometry/draw counts, and resource disposal. These structural checks do not establish visual realism or real-device speed.
 - **Server and bridge:** local asset MIME/cache handling, path traversal, score validation and persistence, WebSocket presence/room limits, malformed clients, heartbeat cleanup, and timeout/reconnection behavior. A live-server test exchanges co-op state between two independent bridge instances.
-- **Browser UI and gameplay:** WebGL boot, menus/settings, movement, weapons, shelter concealment, medical aid, fuse-powered escape, two-peer world/fuse/door synchronization, and touch controls/layouts, using an isolated temporary scoreboard.
+- **Browser UI and gameplay:** WebGL boot, menus/settings, movement, single-equipped-weapon rendering, automatic ammo/supply pickup and two-peer claim ownership, wall/door contact without hit knockback, persistent health corners, stalk-and-rush behavior, shelter concealment, medical aid, fuse-powered escape, two-peer world/fuse/door synchronization, and touch controls/layouts, using an isolated temporary scoreboard.
 
 This is a coverage overview, not a claim that these commands have passed on the current build. Existing escape and co-op tests do not explicitly verify every new release/alarm condition. Dedicated verification is still needed for all five note interactions, director pacing and non-damaging behavior, fuse/alarm attraction, effects persistence and independence from motion, exact simulation-time release and host/guest gate agreement, and raw-delta elapsed time under slow frames.
 

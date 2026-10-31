@@ -150,7 +150,7 @@ async function main() {
       const health = await http.get(new URL('health', baseURL).href);
       assert.equal(health.status(), 200, '/health must return 200');
       assert.equal((await health.text()).trim(), 'ok');
-      const paths = ['', 'styles.css', 'bridge.js', 'vendor/three.min.js', 'systems.js', 'navigation.js', 'visuals.js', 'controls.js', 'game.js'];
+      const paths = ['', 'styles.css', 'bridge.js', 'vendor/three.min.js', 'systems.js', 'horror.js', 'audio.js', 'navigation.js', 'visuals.js', 'controls.js', 'game.js'];
       await Promise.all(paths.map(async asset => {
         const response = await http.get(new URL(asset, baseURL).href, { headers: { 'Cache-Control': 'no-cache' } });
         assert.equal(response.status(), 200, (asset || '/') + ' must return 200');

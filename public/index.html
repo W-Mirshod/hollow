@@ -14,6 +14,7 @@
 <canvas id="grain" width="256" height="144" aria-hidden="true"></canvas>
 <div id="vignette" aria-hidden="true"></div>
 <div id="danger" aria-hidden="true"></div>
+<div id="healthVignette" aria-hidden="true"></div>
 <div id="flash" aria-hidden="true"></div>
 <div id="lb" aria-hidden="true"><div class="bar-lb" id="barTop"></div><div class="bar-lb" id="barBot"><span id="skip">Enter · skip</span></div></div>
 
@@ -95,7 +96,7 @@
       <div class="note menu-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 14v-3a8 8 0 0 1 16 0v3M4 13H2v7h5v-7H4Zm16 0h2v7h-5v-7h3Z"/></svg> Headphones recommended</div>
       <details class="controls-details entry-detail">
         <summary>How to play <span aria-hidden="true">+</span></summary>
-        <p class="rules">Find three fuses. Power the east exit. Stay quiet, or lock a shelter and switch your torch off.</p>
+        <p class="rules">Find three fuses. Power the east exit. Walk over ammunition and supply packs to collect them. Keep one gun ready and listen behind you—some creatures stalk quietly before rushing.</p>
         <dl class="keys">
           <dt><kbd>W A S D</kbd></dt><dd>Move · mouse to look</dd>
           <dt><kbd>Shift</kbd> / <kbd>Alt</kbd></dt><dd>Sprint</dd>
@@ -106,7 +107,7 @@
           <dt><kbd>Right click</kbd></dt><dd>Hold to aim</dd>
           <dt><kbd>R</kbd></dt><dd>Reload</dd>
           <dt><kbd>Q</kbd> / <kbd>1–3</kbd></dt><dd>Change weapon</dd>
-          <dt><kbd>F</kbd></dt><dd>Toggle torch</dd>
+          <dt><kbd>F</kbd></dt><dd>Toggle shoulder torch</dd>
           <dt><kbd>V</kbd> / <kbd>M</kbd></dt><dd>Throw decoy / expand map</dd>
           <dt><kbd>Esc</kbd></dt><dd>Pause &amp; settings</dd>
         </dl>
@@ -175,7 +176,7 @@
       <label class="setting" for="settingsSensitivity"><span>Look sensitivity<small>Mouse and touch</small></span><input type="range" id="settingsSensitivity" min="0.4" max="2.5" step="0.05" value="1" aria-label="Look sensitivity"></label>
       <label class="setting" for="settingsVolume"><span>Master volume<small>Headphones help locate nearby threats</small></span><input type="range" id="settingsVolume" min="0" max="1" step="0.05" value="0.7" aria-label="Master volume"></label>
       <label class="setting" for="settingsMotion"><span>Camera motion<small>Weapon sway, head bob and recoil movement</small></span><input type="checkbox" id="settingsMotion" checked></label>
-      <label class="setting effects-setting" for="settingsEffects"><span>Disturbing effects<small id="settingsEffectsHelp">Off: reduce flicker and stingers.<br>Keep steady lighting and disable sudden audio stingers.</small></span><input type="checkbox" id="settingsEffects" checked aria-label="Disturbing effects" aria-describedby="settingsEffectsHelp"></label>
+      <label class="setting effects-setting" for="settingsEffects"><span>Disturbing effects<small id="settingsEffectsHelp">Off: steady lights, softer sounds.<br>Red health corners remain.</small></span><input type="checkbox" id="settingsEffects" checked aria-label="Disturbing effects" aria-describedby="settingsEffectsHelp"></label>
     </div>
     <p class="rules">A slow step is a quiet step. Lock a shelter from inside, crouch, then turn your torch off to hide. Watch the noise meter. The Warden is slow, but a stand-up fight costs precious ammunition.</p>
     <div class="btns"><button type="button" class="primary" id="resumeBtn">Return to the dark <span aria-hidden="true">↗</span></button><button type="button" class="quiet" id="pauseMenuBtn">Main menu</button></div>
@@ -214,6 +215,7 @@
 <script src="vendor/three.min.js"></script>
 <script src="systems.js"></script>
 <script src="horror.js"></script>
+<script src="audio.js"></script>
 <script src="navigation.js"></script>
 <script src="visuals.js"></script>
 <script src="controls.js"></script>

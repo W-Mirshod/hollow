@@ -104,11 +104,24 @@
     }
     return true;
   }
+  // Block approaching/crossing another body, but always let an overlapped actor
+  // move away. Contact constrains movement; it must never shove the other actor.
+  function blocksCircleMove(from,to,radius,other){
+    const dx=to.x-from.x,dz=to.z-from.z,ox=from.x-other.x,oz=from.z-other.z;
+    const limit=radius+other.r,initial=ox*ox+oz*oz,dot=ox*dx+oz*dz;
+    if(initial<limit*limit+1e-8&&dot>=-1e-8)return false;
+    const length=dx*dx+dz*dz,k=length>1e-10?Math.max(0,Math.min(1,-dot/length)):0;
+    return (ox+dx*k)**2+(oz+dz*k)**2<limit*limit-1e-8;
+  }
+  function injuryLevel(health){
+    const value=Number.isFinite(health)?Math.max(0,Math.min(100,health)):100;
+    return Math.pow(1-value/100,1.15);
+  }
   function insideRoom(room,x,z,margin){margin=margin||0;return x>room.x*CELL+margin&&x<(room.x+room.w)*CELL-margin&&z>room.z*CELL+margin&&z<(room.z+room.d)*CELL-margin;}
   function weaponDamage(kind,headshot,distance,monsterKind){
     const w=WEAPONS.find(v=>v.id===kind)||WEAPONS[0];
     const falloff=kind==='shotgun'?Math.max(.22,1-Math.max(0,distance-7)/25):kind==='pistol'?Math.max(.6,1-Math.max(0,distance-18)/70):1;
     return w.damage*falloff*(headshot?(monsterKind==='warden'?1.1:1.85):1);
   }
-  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,MONSTERS,seeded,generateMaze,flood,circleBox,insideRoom,weaponDamage};
+  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,MONSTERS,seeded,generateMaze,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage};
 });

@@ -210,15 +210,55 @@
     return add(THREE, parent, geom, mat, x, y, z, w, h, d, rx, ry, rz);
   }
 
-  function torso(THREE, parent, mat, x, y, z, heavy) {
-    const key = heavy ? 'torso:heavy' : 'torso:lean';
-    const geom = geometry(THREE, key, () => {
-      const outline = heavy ? [[0.18, -0.57], [0.23, -0.47], [0.22, -0.25], [0.31, 0.03], [0.39, 0.29], [0.32, 0.47], [0.12, 0.59]]
-        : [[0.11, -0.43], [0.13, -0.33], [0.12, -0.21], [0.17, -0.06], [0.235, 0.13], [0.25, 0.26], [0.195, 0.39], [0.08, 0.49]];
-      const g = new THREE.LatheGeometry(outline.map(p => new THREE.Vector2(p[0], p[1])), 14);
-      g.scale(1, 1, heavy ? 0.63 : 0.64); return g;
+  // Off-centre cross sections, not scaled spheres: a collapsed cheek, shoulder or
+  // knuckle keeps its broken silhouette even when animation replaces joint Euler angles.
+  function anatomy(THREE, parent, mat, shape, x, y, z, w, h, d, rx, ry, rz) {
+    const geom = geometry(THREE, 'creature:hull:' + shape, () => {
+      // y, half-width, half-depth, lateral displacement, forward displacement.
+      const profiles = {
+        skull: [[-1, .36, .51, .06, .04], [-.46, .79, .78, -.06, 0], [.32, 1, .90, .03, -.06], [.80, .80, .82, -.12, -.16], [1, .38, .50, -.19, -.13]],
+        shard: [[-1, .22, .26, .16, 0], [-.32, .87, .91, -.09, .11], [.49, 1, .65, .08, -.07], [1, .12, .24, -.13, .08]],
+        chest: [[-1, .37, .67, .13, .13], [-.40, .64, .78, -.08, .04], [.30, 1, 1, -.10, -.10], [.78, .94, .88, .04, -.05], [1, .40, .72, .12, -.15]],
+        hump: [[-1, .66, .63, .18, .05], [-.35, 1, .97, -.05, -.08], [.30, .89, 1, -.18, -.05], [.86, .51, .76, -.25, -.13], [1, .14, .31, -.31, -.11]],
+        pelvis: [[-1, .51, .54, .20, .05], [-.50, .81, .66, .05, .15], [.25, 1, 1, -.09, -.03], [1, .64, .61, -.20, -.11]],
+        palm: [[-1, .52, .64, .10, .12], [-.50, 1, .65, -.13, .04], [.52, .78, .81, .05, 0], [1, .49, .58, .14, -.10]]
+      }[shape];
+      const section = [[-.64, .82], [.31, 1], [.92, .42], [.82, -.55], [.30, -.90], [-.55, -.80], [-1, -.15], [-.91, .45]];
+      const rings = profiles.map(([yy, ww, dd, xx, zz]) => section.map(([a, b]) => [xx + a * ww, yy, zz + b * dd]));
+      const positions = [], uv = [];
+      const face = (a, b, c, ta, tb, tc) => { positions.push(...a, ...b, ...c); uv.push(...ta, ...tb, ...tc); };
+      for (let row = 0; row < rings.length - 1; row++) for (let j = 0; j < 8; j++) {
+        // Leave the lower face physically open; sockets and a recessed mouth sit
+        // inside this shell rather than being a smile painted over a round head.
+        if (shape === 'skull' && row < 2 && (j === 0 || j === 1 || j === 7)) continue;
+        const next = (j + 1) % 8, a = rings[row][j], b = rings[row][next], c = rings[row + 1][next], d0 = rings[row + 1][j];
+        const ta = [j / 8, row / (rings.length - 1)], tb = [(j + 1) / 8, ta[1]];
+        const tc = [tb[0], (row + 1) / (rings.length - 1)], td = [ta[0], tc[1]];
+        face(a, b, c, ta, tb, tc); face(a, c, d0, ta, tc, td);
+      }
+      for (const row of [0, rings.length - 1]) {
+        if (shape === 'skull' && row === 0) continue;
+        const p = profiles[row], center = [p[3], p[0], p[4]];
+        for (let j = 0; j < 8; j++) {
+          const a = rings[row][j], b = rings[row][(j + 1) % 8];
+          const ta = [a[0] * .5 + .5, a[2] * .5 + .5], tb = [b[0] * .5 + .5, b[2] * .5 + .5];
+          if (row === 0) face(center, b, a, [.5, .5], tb, ta);
+          else face(center, a, b, [.5, .5], ta, tb);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      g.computeVertexNormals(); return g;
     });
-    return add(THREE, parent, geom, mat, x, y, z);
+    return add(THREE, parent, geom, mat, x, y, z, w, h, d, rx, ry, rz);
+  }
+
+  function sinew(THREE, parent, mat, from, to, radius) {
+    const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to), delta = b.clone().sub(a);
+    const geom = geometry(THREE, 'creature:taper', () => new THREE.CylinderGeometry(.55, 1, 1, 5, 1));
+    const m = add(THREE, parent, geom, mat, (a.x + b.x) * .5, (a.y + b.y) * .5, (a.z + b.z) * .5, radius, delta.length(), radius);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize()); return m;
   }
 
   function cyl(THREE, parent, mat, x, y, z, top, bottom, len, rx, ry, rz, sides) {
@@ -298,8 +338,8 @@
   }
 
   function consolidateOrganicMaterials(THREE, root, palette) {
-    const material = standard(THREE, 'creature:organic-batch', 0xffffff, 0.84, 0, 'skin');
-    material.vertexColors = true;
+    const material = standard(THREE, 'creature:organic-batch', 0xffffff, 0.91, 0, 'skin');
+    material.vertexColors = true; material.flatShading = true;
     // Garment folds/wrap seams are geometry; vertex tinting keeps even dressed
     // articulated limbs at one draw per joint without a material-array draw penalty.
     material.side = THREE.DoubleSide;
@@ -307,7 +347,8 @@
     root.traverse(o => {
       if (!o.isMesh || !mergeable.has(o.material)) return;
       const geom = o.geometry.clone(), color = o.material.color;
-      geom.userData.hollowShared = false;
+      // r128 aliases userData when cloning; never relabel the cached source as owned.
+      geom.userData = Object.assign({}, geom.userData, { hollowShared: false });
       const values = new Float32Array(geom.attributes.position.count * 3);
       for (let i = 0; i < values.length; i += 3) {
         values[i] = color.r; values[i + 1] = color.g; values[i + 2] = color.b;
@@ -330,27 +371,29 @@
 
   function monsterPalette(THREE, kind) {
     const colors = {
-      warden: { skin: 0x858681, bone: 0x96968b, cloth: 0x515b58, eyes: 0x65665e },
-      stalker: { skin: 0x969b96, bone: 0xa2a39a, cloth: 0x737e79, eyes: 0x74776d },
-      crawler: { skin: 0x767c79, bone: 0x92988e, cloth: 0x646f6c, eyes: 0x676d68 },
-      shrieker: { skin: 0xa4a5a0, bone: 0xaba99f, cloth: 0x90938a, eyes: 0x7b7970 }
+      warden: { skin: 0x666c63, bone: 0x96917d, cloth: 0x363c36, eyes: 0x292b28 },
+      stalker: { skin: 0x858b7d, bone: 0xa3a08a, cloth: 0x4b554d, eyes: 0x30322e },
+      crawler: { skin: 0x666e68, bone: 0x8b9282, cloth: 0x3e4945, eyes: 0x272c29 },
+      shrieker: { skin: 0x97988b, bone: 0xaaa28d, cloth: 0x62665b, eyes: 0x343530 }
     }[kind];
     return {
       skin: standard(THREE, kind + ':skin', colors.skin, 0.87, 0, 'skin'),
       bone: standard(THREE, kind + ':bone', colors.bone, 0.72, 0, 'skin'),
       cloth: standard(THREE, kind + ':gown', colors.cloth, 0.98, 0, 'fabric'),
-      bandage: standard(THREE, 'creature:bandage', 0xaba797, 0.98, 0, 'fabric'),
-      dark: standard(THREE, 'creature:dark', 0x191713, 0.93, 0, 'skin'),
-      tendon: standard(THREE, 'creature:tendon', 0x595452, 0.86, 0, 'skin'),
-      // Kept instance-owned for the game's death/respawn color writes. No emission.
-      eye: new THREE.MeshStandardMaterial({ color: colors.eyes, roughness: 0.38, metalness: 0, fog: true })
+      bandage: standard(THREE, 'creature:bandage', 0x817c67, 0.98, 0, 'fabric'),
+      dark: standard(THREE, 'creature:dark', 0x090b0a, 1, 0, 'skin'),
+      tendon: standard(THREE, 'creature:tendon', 0x514742, 0.94, 0, 'skin'),
+      // Instance-owned for death/respawn writes; dry, recessed slits, not bright beads.
+      eye: new THREE.MeshStandardMaterial({ color: colors.eyes, roughness: 0.92, metalness: 0, fog: true })
     };
   }
 
-  function teeth(THREE, parent, mat, y, z, width, count, down) {
+  function teeth(THREE, parent, mat, y, z, width, count, down, x) {
     for (let i = 0; i < count; i++) {
-      box(THREE, parent, mat, (i / Math.max(1, count - 1) - 0.5) * width,
-        y + (down ? -1 : 1) * (i % 2) * 0.003, z, 0.014, 0.021 + (i % 2) * 0.004, 0.013);
+      if (i === 2 && count > 4) continue;
+      box(THREE, parent, mat, (x || 0) + (i / Math.max(1, count - 1) - .5) * width,
+        y + (down ? -1 : 1) * (i % 3) * .004, z + (i % 2) * .004,
+        .010, .014 + (i % 3) * .004, .012, .12, 0, (i % 2 ? 1 : -1) * .17);
     }
   }
 
@@ -371,9 +414,89 @@
   }
 
   function wraps(THREE, parent, mat, x, y, z, radius, count) {
-    for (let i = 0; i < count; i++) {
-      cyl(THREE, parent, mat, x, y - i * 0.032, z, radius, radius * 0.98, 0.029, 0.03, 0, i % 2 ? 0.045 : -0.045);
+    const geom = geometry(THREE, 'creature:wrap', () => new THREE.CylinderGeometry(1, .98, 1, 6, 1, true));
+    for (let i = 0; i < count; i++) add(THREE, parent, geom, mat, x, y - i * .032, z,
+      radius, .029, radius * 1.10, .03, 0, i % 2 ? .08 : -.06);
+  }
+
+  function rag(THREE, parent, mat, x, y, z, w, h, depth, rx, ry, rz) {
+    const geom = geometry(THREE, 'creature:rag', () => {
+      const g = new THREE.PlaneGeometry(1, 1, 8, 4), pos = g.attributes.position;
+      const hem = [.05, .28, -.02, .14, .48, .06, .24, -.03, .19];
+      for (let i = 0; i < pos.count; i++) {
+        const px = pos.getX(i), py = pos.getY(i), t = .5 - py;
+        pos.setXYZ(i, px + Math.sin(i * 1.7) * t * .028, py - t * t * t * hem[i % 9],
+          Math.sin(px * 31) * .65 + t * t * .35);
+      }
+      const indices = [];
+      for (let row = 0; row < 4; row++) for (let col = 0; col < 8; col++) {
+        if (row === 3 && (col === 1 || col === 4 || col === 6)) continue;
+        const a = row * 9 + col, b = a + 1, c = a + 9, d = c + 1;
+        indices.push(a, c, b);
+        if (row !== 2 || col !== 5) indices.push(b, c, d);
+      }
+      g.setIndex(indices); g.computeVertexNormals(); return g;
+    });
+    return add(THREE, parent, geom, mat, x, y, z, w, h, depth, rx, ry, rz);
+  }
+
+  function hollow(THREE, parent, mat, x, y, z, w, h, depth) {
+    const geom = geometry(THREE, 'creature:cavity', () => {
+      const outline = [[-.64, .87], [-.95, .16], [-.68, -.68], [-.13, -1], [.65, -.77], [1, .25], [.44, 1]];
+      const positions = [], uv = [];
+      const face = (a, b, c) => {
+        positions.push(...a, ...b, ...c);
+        for (const p of [a, b, c]) uv.push(p[0] * .5 + .5, p[1] * .5 + .5);
+      };
+      for (let i = 0; i < outline.length; i++) {
+        const a = [...outline[i], 0], b = [...outline[(i + 1) % outline.length], 0];
+        const c = [b[0] * .48, b[1] * .72, -1], d = [a[0] * .48, a[1] * .72, -1];
+        face(a, b, c); face(a, c, d); face(d, c, [-.07, -.11, -1.08]);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      g.computeVertexNormals(); return g;
+    });
+    return add(THREE, parent, geom, mat, x, y, z, w, h, depth);
+  }
+
+  function hookedHand(THREE, parent, p, at, side, size, crawling) {
+    const point = (x, y, z) => [at[0] + x * size, at[1] + (crawling ? z : y) * size, at[2] + (crawling ? -y : z) * size];
+    anatomy(THREE, parent, p.skin, 'palm', ...point(0, -.06, .006), .064 * size, .092 * size, .032 * size,
+      crawling ? -Math.PI / 2 : 0, 0, side * .075);
+    for (let f = 0; f < 4; f++) {
+      const x = (f - 1.5) * .031, length = [.22, .31, .27, .18][f];
+      const a = point(x, -.105, .012), b = point(x * 1.3 + side * .007, -.11 - length * .65, -.012);
+      const c = point(x * 1.5 + side * .017, -.11 - length, -.034), tip = point(x * 1.6 + side * .023, -.058 - length, .07);
+      sinew(THREE, parent, p.bone, point(x * .65, -.015, .022), a, .010 * size);
+      sinew(THREE, parent, p.skin, a, b, .015 * size);
+      sinew(THREE, parent, p.skin, b, c, .010 * size);
+      sinew(THREE, parent, p.bone, c, tip, .007 * size);
     }
+    sinew(THREE, parent, p.skin, point(side * .046, -.035, .018), point(side * .12, -.14, -.004), .020 * size);
+    sinew(THREE, parent, p.skin, point(side * .12, -.14, -.004), point(side * .086, -.20, .067), .012 * size);
+  }
+
+  function patientLimb(THREE, p, limb, name, bend, end, width, side, handSize, crawling) {
+    sinew(THREE, limb, p.skin, [0, 0, 0], bend, width);
+    sinew(THREE, limb, p.bone, [side * .012, -.025, .025], [bend[0], bend[1] * .93, bend[2] + .024], width * .18);
+    anatomy(THREE, limb, p.cloth, 'shard', side * .012, -.045, -.008, width * 1.18, .14, width,
+      crawling ? .6 : .07, .12, crawling ? side * 1.1 : side * .18);
+    const distal = joint(THREE, limb, name, ...bend);
+    anatomy(THREE, distal, p.bone, 'shard', 0, -.008, .012, width * .72, .083, width * .64, .1, 0, side * .21);
+    sinew(THREE, distal, p.skin, [0, 0, 0], end, width * .64);
+    sinew(THREE, distal, p.bone, [side * .014, -.025, .025], [end[0], end[1] * .93, end[2] + .020], width * .16);
+    wraps(THREE, distal, p.bandage, 0, -.018, .004, width * .71, side < 0 ? 3 : 1);
+    if (side < 0) rag(THREE, limb, p.bandage, side * width, -.16, .035, .065, .23, .013, crawling ? 1.25 : 0, 0, -.18);
+    if (handSize) hookedHand(THREE, distal, p, end, side, handSize, crawling);
+    else {
+      anatomy(THREE, distal, p.skin, 'palm', end[0], end[1] - .014, end[2] + .060, width * .76, .15, .05, -Math.PI / 2, side * .18);
+      for (let i = 0; i < 3; i++) sinew(THREE, distal, p.bone,
+        [end[0] + (i - 1) * .034, end[1] - .008, end[2] + .12],
+        [end[0] + (i - 1) * .040, end[1] - .025, end[2] + .21 - i * .019], width * .13);
+    }
+    return distal;
   }
 
   function makeMonster(THREE, requestedKind) {
@@ -382,154 +505,168 @@
     g.name = 'Blackwater Ward / ' + kind;
     if (!THREE.ColorManagement || !THREE.ColorManagement.enabled) p.eye.color.convertSRGBToLinear();
     const heavy = kind === 'warden', crawling = kind === 'crawler', screaming = kind === 'shrieker';
-    const hipY = crawling ? 0.62 : heavy ? 1.02 : 1.35;
-    const hipW = heavy ? 0.22 : crawling ? 0.24 : 0.135;
-    const shoulderY = crawling ? 0.71 : heavy ? 2.04 : 2.21;
-    const shoulderW = heavy ? 0.42 : crawling ? 0.31 : screaming ? 0.285 : 0.255;
-    const legL = joint(THREE, g, 'legL', -hipW, hipY, crawling ? -0.39 : -0.01);
-    const legR = joint(THREE, g, 'legR', hipW, hipY, crawling ? -0.39 : -0.01);
-    const armL = joint(THREE, g, 'armL', -shoulderW, shoulderY, crawling ? 0.27 : 0.035);
-    const armR = joint(THREE, g, 'armR', shoulderW, shoulderY, crawling ? 0.27 : 0.035);
-    const neck = joint(THREE, g, 'neck', 0, crawling ? 0.77 : heavy ? 2.26 : screaming ? 2.38 : 2.39, crawling ? 0.48 : 0.125);
-    const head = joint(THREE, neck, 'head', 0, 0, 0);
+    // These dimensions match RULES.MONSTERS. The head pivot is the hit-height;
+    // hunched backs, a long cranial vault and splayed limbs supply the silhouette.
+    const form = {
+      warden: { height: 2.8, head: 2.35, radius: .58, hips: [[-.245, 1.10, -.035], [.255, 1.02, .045]], shoulders: [[-.48, 2.30, .015], [.47, 2.13, .055]], neck: [-.055, 2.35, .28] },
+      stalker: { height: 2.65, head: 2.12, radius: .34, hips: [[-.135, 1.30, -.045], [.135, 1.21, .045]], shoulders: [[-.27, 2.18, -.035], [.255, 2.02, .04]], neck: [.075, 2.12, .18] },
+      crawler: { height: .9, head: .55, radius: .43, hips: [[-.20, .52, -.36], [.225, .45, -.43]], shoulders: [[-.245, .61, .22], [.26, .54, .16]], neck: [-.065, .55, .46] },
+      shrieker: { height: 2.3, head: 1.9, radius: .34, hips: [[-.15, 1.03, -.07], [.12, 1.08, .015]], shoulders: [[-.26, 1.78, .015], [.24, 1.71, -.025]], neck: [.015, 1.9, .17] }
+    }[kind];
+    const legL = joint(THREE, g, 'legL', ...form.hips[0]), legR = joint(THREE, g, 'legR', ...form.hips[1]);
+    const armL = joint(THREE, g, 'armL', ...form.shoulders[0]), armR = joint(THREE, g, 'armR', ...form.shoulders[1]);
+    const neck = joint(THREE, g, 'neck', ...form.neck), head = joint(THREE, neck, 'head', 0, 0, 0);
     const knees = [], elbows = [];
+    let jaw = null;
 
     if (crawling) {
-      oval(THREE, g, p.skin, 0, 0.64, -0.09, 0.27, 0.20, 0.58, -0.05);
-      oval(THREE, g, p.cloth, 0, 0.70, -0.31, 0.285, 0.145, 0.38);
-      const sheet = drape(THREE, g, p.cloth, 0, 0.80, -0.28, 0.56, 0.69, 0.025);
-      sheet.rotation.x = -Math.PI / 2;
-      box(THREE, g, p.bandage, 0.19, 0.842, -0.36, 0.08, 0.012, 0.11);
-      for (let i = 0; i < 7; i++) {
-        const z = -0.61 + i * 0.14;
-        oval(THREE, g, p.bone, 0, 0.81 + Math.sin(i * 0.43) * 0.035, z, 0.025, 0.026, 0.045, -0.25);
-        for (const side of [-1, 1]) link(THREE, g, p.bone, [side * 0.045, 0.80, z], [side * 0.26, 0.62, z + 0.06], 0.022, 0.014);
+      // A collapsed patient held off the floor by inverted, uneven elbows/knees.
+      anatomy(THREE, g, p.skin, 'chest', .01, .54, -.055, .265, .53, .16, Math.PI / 2, .04, -.08);
+      anatomy(THREE, g, p.skin, 'hump', .035, .74, -.19, .125, .147, .27, .09, .1, -.08);
+      rag(THREE, g, p.cloth, -.045, .773, -.18, .39, .56, .026, -Math.PI / 2, .07, -.13);
+      for (let i = 0; i < 6; i++) {
+        const z = -.49 + i * .145, x = Math.sin(i * .9) * .043;
+        anatomy(THREE, g, p.bone, 'shard', x, .745 + Math.sin(i * .7) * .026, z, .028, .053, .048, -.18, .1, -.15);
+        sinew(THREE, g, p.bone, [x, .745, z], [-.245, .565, z + .045], .020);
+        if (i !== 2) sinew(THREE, g, p.bone, [x, .723, z], [.23, .55, z - .025], .014);
       }
-      for (const [limb, side, front] of [[legL, -1, false], [legR, 1, false], [armL, -1, true], [armR, 1, true]]) {
-        const bend = [side * 0.23, -0.19, front ? 0.13 : -0.18];
-        const foot = [side * 0.32, -hipY + 0.025, front ? 0.48 : -0.16];
-        link(THREE, limb, p.skin, [0, 0, 0], bend, 0.093, 0.053);
-        oval(THREE, limb, p.bone, ...bend, 0.065, 0.058, 0.065);
-        link(THREE, limb, p.skin, bend, foot, 0.047, 0.027);
-        oval(THREE, limb, p.skin, foot[0], foot[1] + 0.01, foot[2] + 0.045, 0.07, 0.04, 0.11);
-        for (let f = 0; f < 4; f++) link(THREE, limb, p.skin,
-          [foot[0] + (f - 1.5) * 0.028, foot[1], foot[2] + 0.08],
-          [foot[0] + (f - 1.5) * 0.036, foot[1] - 0.006, foot[2] + 0.17], 0.011, 0.008);
-        wraps(THREE, limb, p.bandage, bend[0], bend[1], bend[2], 0.065, 3);
+      sinew(THREE, g, p.tendon, [-.07, .65, .25], [-.065, .55, .49], .055);
+      const bends = [[-.36, .10, -.30], [.29, .20, -.20], [-.34, .08, .12], [.33, .04, .25]];
+      const ends = [[.12, -.55, -.09], [.20, -.56, .13], [.17, -.61, .33], [.17, -.50, .24]];
+      for (const [i, limb] of [legL, legR, armL, armR].entries()) {
+        const distal = patientLimb(THREE, p, limb, ['kneeL', 'kneeR', 'elbowL', 'elbowR'][i], bends[i], ends[i], i < 2 ? .072 : .067, i % 2 ? 1 : -1, .86, true);
+        (i < 2 ? knees : elbows).push(distal);
       }
-      oval(THREE, head, p.skin, 0, 0.005, 0.08, 0.15, 0.19, 0.16, 0.24);
-      oval(THREE, head, p.dark, 0, -0.075, 0.224, 0.068, 0.043, 0.018);
-      for (const side of [-1, 1]) {
-        oval(THREE, head, p.dark, side * 0.062, 0.057, 0.211, 0.043, 0.036, 0.025);
-        oval(THREE, head, p.eye, side * 0.063, 0.052, 0.236, 0.012, 0.008, 0.008);
-        oval(THREE, head, p.skin, side * 0.063, 0.080, 0.220, 0.050, 0.018, 0.020);
-        oval(THREE, head, p.skin, side * 0.147, 0.006, 0.075, 0.021, 0.041, 0.024);
-      }
-      link(THREE, head, p.bone, [0, 0.075, 0.213], [0, -0.009, 0.253], 0.016, 0.022);
-      wraps(THREE, head, p.bandage, 0, 0.145, 0.065, 0.146, 2);
-      teeth(THREE, head, p.bone, -0.056, 0.241, 0.063, 4, true);
+      box(THREE, g, p.bandage, -.11, .798, -.31, .075, .013, .09, 0, .12, -.08);
     } else {
-      oval(THREE, g, p.cloth, 0, hipY + 0.06, 0, heavy ? 0.28 : 0.20, 0.245, heavy ? 0.18 : 0.13);
-      torso(THREE, g, p.skin, 0, heavy ? 1.61 : 1.79, 0.045, heavy);
-      oval(THREE, g, p.tendon, 0, hipY + 0.36, 0.10, heavy ? 0.25 : 0.125, 0.28, 0.055);
-      for (let i = 0; i < (heavy ? 4 : 6); i++) {
-        const yy = shoulderY - 0.15 - i * 0.11;
-        const w = (heavy ? 0.38 : 0.18) * (1 - i * 0.048);
-        for (const side of [-1, 1]) {
-          link(THREE, g, p.bone, [side * 0.035, yy, heavy ? 0.24 : 0.202],
-            [side * w * 0.92, yy + 0.055, heavy ? 0.16 : 0.137], heavy ? 0.022 : 0.016, 0.010);
-        }
-      }
-      for (let i = 0; i < 7; i++) oval(THREE, g, p.bone, 0, hipY + 0.23 + i * 0.135, heavy ? -0.205 : -0.11, 0.023, 0.028, 0.025);
-      // Split treatment gown; the attendant wears a longer, stained canvas apron.
-      for (const side of [-1, 1]) {
-        drape(THREE, g, p.cloth, side * (heavy ? 0.14 : 0.095), heavy ? 1.44 : 1.31,
-          heavy ? 0.265 : 0.155, heavy ? 0.30 : 0.21, heavy ? 1.28 : 0.69, 0.020, 0, side * 0.035);
-        drape(THREE, g, p.cloth, side * 0.10, 1.74, heavy ? -0.21 : -0.14, heavy ? 0.28 : 0.21, 0.98, 0.015, Math.PI);
-        link(THREE, g, p.bandage, [side * 0.17, shoulderY + 0.04, 0.13], [side * 0.15, shoulderY - 0.35, 0.24], 0.018);
-      }
-      box(THREE, g, p.bandage, -0.13, heavy ? 1.97 : 1.47, heavy ? 0.296 : 0.186, 0.075, 0.045, 0.006, 0, 0, -0.09);
-      for (let i = 0; i < 3; i++) box(THREE, g, p.dark, -0.15 + i * 0.016, heavy ? 1.97 : 1.47,
-        heavy ? 0.301 : 0.191, 0.005, 0.025, 0.003);
-      for (const [limb, side] of [[legL, -1], [legR, 1]]) {
-        const thigh = hipY * 0.46, shin = hipY * 0.52;
-        link(THREE, limb, p.cloth, [0, 0, 0], [side * 0.02, -thigh + 0.12, 0.05], heavy ? 0.13 : 0.10, heavy ? 0.09 : 0.063);
-        link(THREE, limb, p.skin, [side * 0.02, -thigh + 0.17, 0.05], [side * 0.02, -thigh, 0.05], heavy ? 0.086 : 0.050, heavy ? 0.074 : 0.045);
-        const knee = joint(THREE, limb, side < 0 ? 'kneeL' : 'kneeR', side * 0.02, -thigh, 0.05); knees.push(knee);
-        oval(THREE, knee, p.bone, 0, 0, 0.028, heavy ? 0.085 : 0.058, 0.071, 0.061);
-        link(THREE, knee, p.skin, [0, -0.035, 0], [0, -shin + 0.075, -0.035], heavy ? 0.075 : 0.050, heavy ? 0.047 : 0.034);
-        oval(THREE, knee, heavy ? p.dark : p.skin, 0, -shin + 0.05, 0.065,
-          heavy ? 0.10 : 0.07, heavy ? 0.07 : 0.065, heavy ? 0.19 : 0.16);
-        link(THREE, knee, p.bone, [side * 0.018, -0.055, 0.035], [side * 0.013, -shin + 0.11, 0.015], 0.014, 0.009);
-        if (side < 0) wraps(THREE, knee, p.bandage, 0, -shin * 0.43, 0, heavy ? 0.07 : 0.052, 4);
-      }
-      for (const [limb, side] of [[armL, -1], [armR, 1]]) {
-        const upper = heavy ? 0.53 : screaming ? 0.58 : 0.65, lower = heavy ? 0.51 : screaming ? 0.57 : 0.69;
-        oval(THREE, limb, p.cloth, side * 0.01, -0.065, 0, heavy ? 0.13 : 0.10, 0.14, heavy ? 0.13 : 0.10);
-        link(THREE, limb, p.skin, [0, -0.13, 0], [side * 0.025, -upper, 0.045], heavy ? 0.095 : 0.060, heavy ? 0.063 : 0.039);
-        const elbow = joint(THREE, limb, side < 0 ? 'elbowL' : 'elbowR', side * 0.025, -upper, 0.045); elbows.push(elbow);
-        oval(THREE, elbow, p.bone, 0, 0, -0.014, heavy ? 0.065 : 0.047, 0.068, 0.042);
-        link(THREE, elbow, p.skin, [0, 0, 0], [side * 0.045, -lower, 0.015], heavy ? 0.075 : 0.049, heavy ? 0.045 : 0.025);
-        wraps(THREE, elbow, p.bandage, side * 0.04, -lower + 0.08, 0.015, heavy ? 0.052 : 0.033, 3);
-        oval(THREE, elbow, p.skin, side * 0.045, -lower - 0.065, 0.03, heavy ? 0.115 : 0.062, heavy ? 0.17 : 0.095, heavy ? 0.075 : 0.039);
-        for (let f = 0; f < 4; f++) {
-          const x = side * 0.045 + (f - 1.5) * (heavy ? 0.048 : 0.031), length = (heavy ? 0.18 : 0.20) - Math.abs(f - 1.5) * 0.025;
-          link(THREE, elbow, p.skin, [x, -lower - 0.12, 0.027], [x + side * 0.013, -lower - 0.12 - length, 0.045], heavy ? 0.025 : 0.014, heavy ? 0.014 : 0.007);
-          oval(THREE, elbow, p.bone, x + side * 0.013, -lower - 0.115 - length, 0.052, heavy ? 0.010 : 0.006, 0.014, 0.003);
-        }
-        if (heavy || side < 0) {
-          wraps(THREE, limb, p.bandage, 0, -0.22, 0.02, heavy ? 0.092 : 0.063, 4);
-          drape(THREE, elbow, p.bandage, side * 0.067, -0.19, 0.04, 0.047, 0.24, 0.008, 0, side * 0.16);
-        }
-      }
-
-      cyl(THREE, neck, p.skin, 0, -0.07, -0.025, heavy ? 0.15 : 0.076, heavy ? 0.20 : 0.10, 0.22, 0.12);
-      oval(THREE, head, p.skin, 0, 0.12, 0.035, heavy ? 0.22 : 0.145, heavy ? 0.255 : 0.23, heavy ? 0.19 : 0.15, 0.06);
-      oval(THREE, head, p.dark, 0, screaming ? -0.015 : 0.01, 0.157, heavy ? 0.14 : 0.090, screaming ? 0.155 : 0.080, 0.044);
-      for (const side of [-1, 1]) {
-        oval(THREE, head, p.dark, side * (heavy ? 0.091 : 0.060), 0.165, 0.166, heavy ? 0.072 : 0.051, 0.057, 0.043, 0, 0, side * 0.18);
-        oval(THREE, head, p.eye, side * (heavy ? 0.091 : 0.060), 0.164, heavy ? 0.210 : 0.197, heavy ? 0.016 : 0.013, 0.008, 0.008);
-        oval(THREE, head, p.skin, side * (heavy ? 0.093 : 0.065), 0.207, 0.178, heavy ? 0.093 : 0.061, 0.027, 0.037, 0, 0, -side * 0.16);
-        oval(THREE, head, p.dark, side * (heavy ? 0.091 : 0.060), 0.164, heavy ? 0.218 : 0.205, 0.004, 0.005, 0.002);
-        oval(THREE, head, p.skin, side * (heavy ? 0.217 : 0.143), 0.105, 0.019, 0.025, 0.045, 0.021);
-        link(THREE, head, p.bone, [side * 0.128, 0.093, 0.113], [side * 0.087, -0.044, 0.163], 0.030, 0.021);
-      }
-      link(THREE, head, p.bone, [0, 0.177, 0.179], [0, 0.096, 0.204], 0.018, 0.025);
-      teeth(THREE, head, p.bone, screaming ? 0.018 : -0.003, 0.199, heavy ? 0.19 : 0.12, heavy ? 7 : 5, true);
+      const hipY = (form.hips[0][1] + form.hips[1][1]) * .5;
+      anatomy(THREE, g, p.cloth, 'pelvis', .015, hipY + .025, -.015, heavy ? .28 : .18, .22, heavy ? .19 : .12, .08, .08, -.12);
       if (heavy) {
-        // An orderly, not a knight: slack surgical mask, apron pocket, neck ties.
-        drape(THREE, head, p.bandage, 0, 0.025, 0.223, 0.30, 0.13, 0.013);
-        for (const side of [-1, 1]) link(THREE, head, p.bandage,
-          [side * 0.14, 0.06, 0.225], [side * 0.213, 0.11, 0.015], 0.007);
-        drape(THREE, g, p.cloth, 0.09, 1.53, 0.30, 0.23, 0.20, 0.012);
-        for (let i = 0; i < 3; i++) box(THREE, g, p.tendon, -0.13 + i * 0.10, 1.27 - i * 0.07, 0.29, 0.035, 0.22, 0.004, 0, 0, -0.10);
+        anatomy(THREE, g, p.skin, 'chest', .025, 1.79, .01, .49, .56, .28, .10, 0, -.04);
+        anatomy(THREE, g, p.skin, 'hump', -.105, 2.19, -.18, .45, .60, .36, -.20, .02, .11);
+        anatomy(THREE, g, p.tendon, 'shard', .045, 1.40, .245, .19, .26, .035, .12, 0, .12);
+        rag(THREE, g, p.cloth, -.13, 1.24, .295, .43, .97, .027, 0, -.06, .08);
+        rag(THREE, g, p.cloth, .24, 1.17, .17, .22, .72, .025, .08, .9, -.13);
+        // Canvas restraints bite across the hunch; no armour or ornamental chains.
+        box(THREE, g, p.bandage, -.025, 2.13, .285, .88, .12, .032, .10, 0, -.20);
+        box(THREE, g, p.cloth, .015, 1.80, .275, .70, .115, .035, .06, 0, .14);
+        box(THREE, g, p.bandage, -.23, 2.12, .315, .09, .77, .029, .12, -.08, .38);
+        box(THREE, g, p.bandage, .20, 2.0, .295, .08, .61, .030, .10, .08, -.32);
+        box(THREE, g, p.dark, .28, 1.84, .311, .145, .12, .023, 0, 0, .14);
+        box(THREE, g, p.bandage, .28, 1.84, .325, .09, .066, .016, 0, 0, .14);
+        rag(THREE, g, p.bandage, -.34, 1.77, .315, .08, .34, .019, 0, -.2, -.24);
       } else if (screaming) {
-        oval(THREE, neck, p.tendon, 0, -0.19, 0.068, 0.10, 0.19, 0.10);
-        wraps(THREE, neck, p.bandage, 0, -0.14, 0.015, 0.112, 3);
-        for (const side of [-1, 1]) {
-          link(THREE, head, p.skin, [side * 0.12, 0.06, 0.12], [side * 0.097, -0.16, 0.17], 0.027, 0.020);
-          link(THREE, head, p.skin, [side * 0.097, -0.16, 0.17], [side * 0.025, -0.16, 0.19], 0.021, 0.016);
-        }
-        drape(THREE, head, p.bandage, -0.115, -0.07, 0.06, 0.065, 0.31, 0.009, -0.5, -0.12);
-        teeth(THREE, head, p.bone, -0.135, 0.204, 0.10, 5, false);
+        anatomy(THREE, g, p.skin, 'chest', .02, 1.39, -.025, .23, .41, .14, -.08, -.1, .075);
+        anatomy(THREE, g, p.tendon, 'shard', -.02, 1.20, .105, .07, .22, .035, .08, 0, -.15);
+        rag(THREE, g, p.cloth, .10, 1.24, .145, .25, .45, .022, 0, -.12, -.14);
+        rag(THREE, g, p.cloth, .02, 1.46, -.16, .40, .56, .026, .1, Math.PI, .12);
+        rag(THREE, g, p.bandage, .12, 1.63, .12, .065, .40, .013, 0, .2, -.20);
       } else {
-        wraps(THREE, head, p.bandage, 0, 0.272, 0.023, 0.125, 3);
-        for (const side of [-1, 1]) link(THREE, g, p.tendon, [side * 0.09, 2.35, 0.1], [side * 0.23, 2.15, 0.12], 0.020, 0.012);
-        head.rotation.z = -0.07;
+        anatomy(THREE, g, p.skin, 'chest', -.045, 1.72, -.018, .228, .47, .155, .08, .12, -.13);
+        anatomy(THREE, g, p.tendon, 'shard', .045, 1.46, .122, .070, .25, .034, .12, 0, .14);
+        rag(THREE, g, p.cloth, .095, 1.40, .15, .24, .52, .025, 0, -.08, .13);
+        rag(THREE, g, p.cloth, -.10, 1.68, -.165, .30, .80, .022, .08, Math.PI, -.1);
+        rag(THREE, g, p.cloth, -.26, 2.05, .04, .14, .40, .025, .05, -.3, -.18);
       }
+      for (let i = 0; i < 5; i++) {
+        const yy = (heavy ? 2.16 : screaming ? 1.68 : 2.03) - i * (screaming ? .088 : .12);
+        const w = (heavy ? .37 : .205) * (1 - i * .065), front = heavy ? .315 : .173;
+        for (const side of [-1, 1]) {
+          const a = [-.024, yy - (side > 0 ? i * .007 : 0), front];
+          const b = [side * w * .63, yy + (side < 0 ? .053 : .013), front - .02];
+          if (side < 0 || i !== 2) sinew(THREE, g, p.bone, a, b, heavy ? .023 : .015);
+          sinew(THREE, g, p.bone, b, [side * w, yy - .035, front - .11], heavy ? .018 : .012);
+        }
+        anatomy(THREE, g, p.bone, 'shard', Math.sin(i) * .026, hipY + .20 + i * (heavy ? .23 : .14), heavy ? -.29 : -.17, .025, .059, .047, -.15, .12, .18);
+      }
+      const legBends = heavy ? [[-.075, -.47, .10], [.065, -.42, -.04]]
+        : screaming ? [[-.05, -.42, -.02], [.07, -.50, .10]] : [[-.09, -.58, .02], [.105, -.63, .18]];
+      const legEnds = heavy ? [[.025, -.55, -.085], [-.012, -.51, .09]]
+        : screaming ? [[.02, -.54, .10], [-.02, -.51, -.07]] : [[.08, -.65, -.065], [-.14, -.51, -.13]];
+      const armBends = heavy ? [[-.075, -.64, .09], [.105, -.53, -.03]]
+        : screaming ? [[-.06, -.43, .10], [.12, -.52, -.02]] : [[-.055, -.65, .045], [.085, -.43, -.075]];
+      const armEnds = heavy ? [[.025, -.69, .035], [-.015, -.79, .16]]
+        : screaming ? [[.035, -.44, .17], [-.17, -.34, .28]] : [[-.015, -.78, .055], [-.035, -.52, .15]];
+      for (let i = 0; i < 2; i++) {
+        const side = i ? 1 : -1;
+        knees.push(patientLimb(THREE, p, i ? legR : legL, i ? 'kneeR' : 'kneeL', legBends[i], legEnds[i], heavy ? .14 : .072, side, 0, false));
+        elbows.push(patientLimb(THREE, p, i ? armR : armL, i ? 'elbowR' : 'elbowL', armBends[i], armEnds[i], heavy ? .12 : .054, side, heavy ? 1.27 : screaming ? .93 : 1, false));
+      }
+      sinew(THREE, neck, p.skin, [0, -.23, -.17], [0, .035, -.035], heavy ? .14 : .065);
+      sinew(THREE, neck, p.bone, [-.04, -.22, -.075], [.023, .09, -.08], heavy ? .028 : .019);
+    }
+
+    const skullW = heavy ? .205 : crawling ? .125 : .12, front = heavy ? .208 : .142;
+    const eyeY = screaming ? .132 : crawling ? .055 : .105;
+    anatomy(THREE, head, p.skin, 'skull', 0, crawling ? .03 : heavy ? .075 : screaming ? .14 : .13, -.035,
+      skullW, heavy ? .28 : crawling ? .205 : screaming ? .225 : .36, heavy ? .185 : .135, .06, -.08, .035);
+    for (const side of [-1, 1]) {
+      const xx = side * skullW * (side < 0 ? .48 : .43), yy = eyeY - (side > 0 ? .03 : 0);
+      hollow(THREE, head, p.dark, xx, yy, front, heavy ? .064 : .044, side < 0 ? .042 : .032, .037);
+      sinew(THREE, head, p.skin, [side * .012, yy + .043, front + .027], [xx * 1.55, yy + .030, front + .010], heavy ? .031 : .021);
+      anatomy(THREE, head, p.skin, 'shard', side * skullW * .74, yy - .11, front - .013, heavy ? .058 : .034, .14, .047, .1, side * .3, side * .23);
+    }
+    // One almost lost slit; the other socket is occluded. No paired catchlights.
+    box(THREE, head, p.eye, skullW * .43, eyeY - .03, front - .012, .019, .005, .003, 0, 0, -.12);
+    anatomy(THREE, head, p.bone, 'shard', -.018, eyeY - .072, front + .009, .023, .083, .032, .15, -.14, -.16);
+    rag(THREE, head, p.bandage, -skullW * .51, eyeY + .062, front + .021, skullW * .83, crawling ? .18 : .22, .013, 0, -.16, .17);
+    if (crawling) {
+      hollow(THREE, head, p.dark, -.012, -.075, front + .006, .071, .108, .065);
+      sinew(THREE, head, p.skin, [-.105, .015, .09], [-.095, -.15, .18], .027);
+      sinew(THREE, head, p.bone, [-.095, -.15, .18], [-.023, -.18, .20], .022);
+      sinew(THREE, head, p.skin, [.092, .005, .09], [.055, -.157, .19], .022);
+      teeth(THREE, head, p.bone, -.012, front + .018, .045, 3, true, -.008);
+      head.rotation.set(.11, -.16, -.42); neck.rotation.set(.05, .12, .06);
+    } else {
+      jaw = joint(THREE, head, 'jaw', heavy ? .022 : screaming ? .008 : -.018, screaming ? .09 : .035, .025);
+      const drop = heavy ? .255 : screaming ? .565 : .33, width = heavy ? .145 : screaming ? .108 : .087;
+      hollow(THREE, jaw, p.dark, -.014, -drop * .52, front + .01, width, drop * (screaming ? .64 : .60), screaming ? .14 : .095);
+      for (const side of [-1, 1]) {
+        const hinge = [side * skullW * .82, .01, front * .58];
+        const corner = [side * width, -drop * (side < 0 ? .81 : .74), front + .022];
+        const chin = [side * (screaming ? .037 : .022), -drop * (side < 0 ? 1 : .94), front + .06];
+        sinew(THREE, jaw, p.skin, hinge, corner, heavy ? .047 : .027);
+        sinew(THREE, jaw, p.bone, corner, chin, heavy ? .030 : .021);
+        if (screaming) {
+          sinew(THREE, jaw, p.tendon, [side * .07, -.06, front - .024], [side * .049, -.47, front + .025], .016);
+          teeth(THREE, jaw, p.bone, chin[1] + .025, front + .062, .031, 2, false, side * .067);
+        }
+      }
+      teeth(THREE, head, p.bone, .018, front + .03, heavy ? .14 : .085, heavy ? 7 : 5, true);
+      if (!screaming) {
+        sinew(THREE, jaw, p.skin, [-.023, -drop, front + .06], [.033, -drop * .94, front + .065], .021);
+        teeth(THREE, jaw, p.bone, -drop + .028, front + .066, .08, 4, false, .008);
+      }
+      rag(THREE, jaw, p.bandage, -width, -drop * .53, front * .55, .05, heavy ? .22 : .27, .013, 0, -.45, -.18);
+      if (heavy) {
+        box(THREE, head, p.cloth, -.017, eyeY + .082, front - .002, .38, .061, .029, .1, -.1, -.14);
+        wraps(THREE, neck, p.bandage, 0, -.145, -.07, .145, 2);
+        head.rotation.set(.13, -.08, -.13); neck.rotation.set(.12, 0, -.03); jaw.rotation.x = .06;
+      } else if (screaming) {
+        // The mouth continues down between two pulled-apart mandibular rails.
+        sinew(THREE, neck, p.tendon, [-.06, -.40, -.07], [-.11, .13, .025], .023);
+        sinew(THREE, neck, p.tendon, [.07, -.36, -.04], [.085, .10, .013], .018);
+        for (let i = 0; i < 4; i++) box(THREE, neck, p.bone, .008, -.13 - i * .055, .043, .061, .015, .032, 0, 0, i * .04);
+        head.rotation.set(-.07, .09, .12); neck.rotation.set(-.03, .10, .04); jaw.rotation.x = .04;
+      } else {
+        head.rotation.set(.10, -.12, -.34); neck.rotation.set(.02, -.04, .08); jaw.rotation.x = -.04;
+      }
+    }
+    // Immutable local XYZ Euler baselines for additive animation. Distortions are
+    // also in mesh endpoints and the head child, so the legacy animator is safe.
+    const restPose = {};
+    for (const part of [legL, legR, armL, armR, neck, head, ...knees, ...elbows, ...(jaw ? [jaw] : [])]) {
+      restPose[part.name] = Object.freeze({ x: part.rotation.x, y: part.rotation.y, z: part.rotation.z });
     }
     consolidateOrganicMaterials(THREE, g, p);
     batch(THREE, g);
     const glow = { intensity: 0 }; // Compatibility handle only; never drives light or emission.
-    const height = crawling ? 1.1 : heavy ? 2.70 : screaming ? 2.98 : 2.92;
     g.userData = {
-      kind, direction: 'Blackwater Ward', legL, legR, armL, armR, neck, head, eyeMat: p.eye, eyeColor: p.eye.color.getHex(), glow,
-      limbs: [legL, legR, armL, armR], knees, elbows, phase: 0,
+      kind, direction: 'Blackwater Ward', legL, legR, armL, armR, neck, head, jaw, restPose: Object.freeze(restPose),
+      eyeMat: p.eye, eyeColor: p.eye.color.getHex(), glow, limbs: [legL, legR, armL, armR], knees, elbows, phase: 0,
       twitch: 0, twitchT: 1, speed: 0, chasing: false,
-      height, bodyRadius: heavy ? 0.52 : crawling ? 0.50 : 0.30,
-      headHeight: crawling ? 0.82 : heavy ? 2.42 : 2.53,
-      stride: crawling ? 0.2 : heavy ? 0.27 : 0.44,
-      resources: { uniqueMaterials: [p.eye] }
+      height: form.height, bodyRadius: form.radius, headHeight: form.head,
+      stride: crawling ? .2 : heavy ? .27 : .44, resources: { uniqueMaterials: [p.eye] }
     };
     return g;
   }
