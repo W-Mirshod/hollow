@@ -20,7 +20,7 @@ async function key(page,name,ms=150){await page.keyboard.down(name);await page.w
 
 test('offline-local boot, menus, settings, assets and restart are error-free',async({page})=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  const external=[];page.on('request',r=>{if(!r.url().startsWith('http://127.0.0.1:3099')&&!r.url().startsWith('data:'))external.push(r.url());});
+  const external=[];page.on('request',r=>{if(!r.url().startsWith('http://127.0.0.1:'+(Number(process.env.HOLLOW_TEST_PORT)||3099))&&!r.url().startsWith('data:'))external.push(r.url());});
   await ready(page);
   await expect(page.locator('#menu')).toBeVisible();await expect(page.locator('#startDarkBtn')).toBeVisible();
   await page.locator('#startDarkBtn').click();await expect(page.locator('#hud')).toBeVisible();
