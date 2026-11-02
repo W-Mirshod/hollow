@@ -2326,13 +2326,15 @@ function audioChaosEvent(e){
   if(e.type==='chaseStart'){if(playerAudio&&playerAudio.stinger('chase')!=null)logCue('player','chase');return;}
   if(e.type==='surge'){if(playerAudio&&playerAudio.surge(e.intensity)!=null)logCue('player','surge');return;}
   if(e.type==='blackout'){sThud(P.pos.x,H-.1,P.pos.z,.45,110);logCue('world','blackout');return;}
+  // chaosEvent() fills e.x/e.y/e.z (where the sparks fall, where the caption points) before it calls here.
+  const placed=Number.isFinite(e.x)&&Number.isFinite(e.z);
   if(e.type==='sparks'){
-    const l=Number.isInteger(e.light)?practicalLights[e.light]:null,o=l&&l.position;
-    if(o&&Number.isFinite(o.x))sSpark(o.x,o.y,o.z);else sSpark(P.pos.x+rnd(-2.5,2.5),H-.1,P.pos.z+rnd(-2.5,2.5));
+    const l=Number.isInteger(e.light)?practicalLights[e.light]:null,o=placed?e:l&&l.position;
+    if(o&&Number.isFinite(o.x))sSpark(o.x,Number.isFinite(o.y)?o.y:H-.3,o.z);else sSpark(P.pos.x+rnd(-2.5,2.5),H-.1,P.pos.z+rnd(-2.5,2.5));
     logCue('world','sparks');return;
   }
-  const b=Number(e.bearing),d=Number(e.distance);if(!Number.isFinite(b)||!Number.isFinite(d))return;
-  const x=P.pos.x+Math.cos(b)*d,z=P.pos.z+Math.sin(b)*d;
+  let x=e.x,z=e.z;
+  if(!placed){const b=Number(e.bearing),d=Number(e.distance);if(!Number.isFinite(b)||!Number.isFinite(d))return;x=P.pos.x+Math.cos(b)*d;z=P.pos.z+Math.sin(b)*d;}
   if(e.type==='scream'){sVoice('shrieker','scream',x,1.7,z);audioScare(1);}
   else if(e.type==='slam'){sThud(x,1.4,z,.95,170);audioAfter(.11,()=>sThud(x,1.1,z,.4,320));logCue('world','slam');audioScare(.8);}
   else if(e.type==='whisper'){sVoice(Math.random()<.5?'stalker':'crawler','whisper',x,1.5,z);audioAfter(rnd(.8,1.1),()=>audioGasp(.45,'whisper'));}

@@ -191,9 +191,11 @@ test('pausing stops every engine; resuming picks the reload foley back up',async
     HollowTest.pose({x:45,z:55,yaw:0,pitch:-1.2});HollowTest.advance(.35);
     HollowTest.action('fire',true);HollowTest.advance(.05);HollowTest.action('fire',false);
     HollowTest.action('reload',true);
-    HollowTest.chaosAudio({type:'scream',bearing:0,distance:10});
+    // chaosEvent() resolves a scare's bearing into x/z (its caption points there): the scream comes from there too.
+    HollowTest.chaosAudio({type:'scream',bearing:0,distance:10,x:41,z:50});
     return HollowGame.snapshot();
   });
+  expect(busy.audio.voices.find(v=>v.cue==='scream')?.position).toMatchObject({x:41,z:50});
   expect(busy.audio.activeVoices).toBeGreaterThan(0);
   expect(busy.playerAudio.activeVoices).toBeGreaterThan(0);
   expect(busy.weaponAudio.activeVoices).toBeGreaterThan(0);expect(busy.weaponAudio.reloading).toBe(true);
