@@ -25,10 +25,11 @@ async function ready(page,settings){
 }
 
 // Runs a whole seeded chase inside one evaluate, so real frames cannot interleave with the director.
+// Seed 7's director surges (with sparks) as the chase starts; atmosphere particles only age on real frames.
 async function chase(page){
   return page.evaluate(cell=>{
     const T=HollowTest,G=HollowGame;
-    T.build(4242);T.silence();T.torch(false);
+    T.build(7);T.silence();T.torch(false);
     const room=G.snapshot().rooms.filter(r=>!r.shelter).sort((a,b)=>b.w*b.d-a.w*a.d)[0];
     const x=(room.x+room.w/2)*cell,z=(room.z+room.d/2)*cell;
     T.pose({x,z,yaw:0});T.advance(.3);
@@ -37,11 +38,13 @@ async function chase(page){
     for(let i=0;i<70;i++){
       T.health(100);T.advance(.1);
       const s=G.snapshot();
-      samples.push({lights:s.chaosLights,visible:s.lighting.map(l=>l.visible),chasing:s.chaos.chasing,emergency:s.dopamine.emergency,live:s.dopamine.liveEmissive});
+      samples.push({lights:s.chaosLights,visible:s.lighting.map(l=>l.visible),chasing:s.chaos.chasing,emergency:s.dopamine.emergency,live:s.dopamine.liveEmissive,
+        tinted:s.dopamine.tintedCones,sparks:s.atmosphere?s.atmosphere.sparks:0});
       if(s.hud.banner)banners.add(s.hud.banner);
     }
     const end=G.snapshot();T.silence();
-    return {room:room.id,samples,banners:[...banners],chaos:end.chaos,intensity:end.chaosIntensity,beacons:end.beacons,liveBase:end.dopamine.liveBase,state:end.state};
+    return {room:room.id,samples,banners:[...banners],chaos:end.chaos,intensity:end.chaosIntensity,beacons:end.beacons,liveBase:end.dopamine.liveBase,state:end.state,
+      cones:end.atmosphere?end.atmosphere.cones:0};
   },CELL);
 }
 
@@ -65,6 +68,12 @@ test('chases make the practical lights stutter within bounds, without visibility
   expect(Math.max(...live)-Math.min(...live),'the ward strips flicker with the lights').toBeGreaterThan(0);
   expect(run.beacons).toHaveLength(2);
   expect(run.beacons[0].on).toBe(true);
+  expect(run.chaos.surges,'the director surges as the chase starts').toBeGreaterThanOrEqual(1);
+  expect(run.chaos.sparks).toBeGreaterThanOrEqual(1);
+  if(run.cones>0){
+    expect(Math.max(...run.samples.map(s=>s.sparks)),'chaos sparks reach the atmosphere').toBeGreaterThan(0);
+    expect(Math.max(...run.samples.map(s=>s.tinted)),'light shafts take the emergency tint').toBeGreaterThan(0);
+  }
   console.log('chase room',run.room,'events',JSON.stringify({surges:run.chaos.surges,blackouts:run.chaos.blackouts,sparks:run.chaos.sparks}),
     'stutters',levels.filter(k=>k<.5).length,'of',levels.length,'range',Math.min(...levels).toFixed(3),Math.max(...levels).toFixed(3));
 });
@@ -78,6 +87,7 @@ test('with effects off the lights hold their exact base level, nothing blacks ou
     for(const l of s.lights)if(l.base!==null)expect(l.level).toBe(l.base);
     expect(s.emergency).toBe(0);
     expect(s.live).toBe(run.liveBase);
+    expect(s.tinted).toBe(0);
   }
   expect(run.chaos.blackouts).toBe(0);
   expect(run.chaos.blackoutLevel).toBe(0);
@@ -120,6 +130,9 @@ test('a real shotgun headshot kills a crawler with HEADSHOT, points, score and s
   expect(first.markers).toBe(1);
   expect(first.hitstop,'solo kills freeze the simulation briefly').toBeGreaterThan(0);
   expect(first.dopamine.lastHitstop).toBeGreaterThanOrEqual(.045);
+  // The post-processing kill flash scales with the streak (a lone headshot stays below the full flash).
+  expect(first.dopamine.killFlash).toBeGreaterThan(.6);
+  expect(first.dopamine.killFlash).toBeLessThan(1);
   // The kill message is unchanged (every other monster is silenced, so none remain).
   expect(first.message).toMatch(/^(Crawler down · \d+ threats remain\.|The corridors are silent\. Restore the exit power\.)$/);
   expect(second.dead).toBe(true);

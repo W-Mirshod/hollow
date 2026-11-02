@@ -2227,7 +2227,8 @@ let sharedRows=null,sharedState='loading',myId=null,canPost=null,lastMine=null,s
 // streaks, hitstop and the HUDFX layer. Existing code calls in through one-line hooks only: chaosWorldBuilt
 // (buildRooms), chaosLightsRefreshed (refreshRoomLights), chaosStep (stepSurvival), dopaFrame (loop; returns the
 // hitstop-scaled simulation dt), dopaShotBegin/dopaShotHit/dopaShotEnd (fire), dopaHurt (damagePlayer), dopaSnapshot.
-const chaos=HollowChaos.create(worldSeed),streak=HollowChaos.createStreak({effects:preferences.effects});
+// The streak gets the live effects preference with every kill (a creation-time option would pin it).
+const chaos=HollowChaos.create(worldSeed),streak=HollowChaos.createStreak();
 const hud=HollowHUDFX.create({root:$('hud'),document,motion:preferences.motion,effects:preferences.effects,touch:dopaTouch()});
 const HITSTOP_SCALE=.08,EMERGENCY_RED=lin(0xff2414),SPARK_DOWN=new THREE.Vector3(0,-1,0),coneTint=new THREE.Color();
 let hitstopT=0,chaosLive=false;
