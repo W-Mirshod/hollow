@@ -2130,7 +2130,7 @@ if(!window.HollowPlayerAudio||!window.HollowWeaponAudio)throw new Error('A local
 const VOICE_PRIORITY={breath:0,step:1,whisper:2,moan:2,notice:3,laugh:3,growl:3,attack:4,death:4,scream:4};
 const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
 const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,crouching:false,danger:0,chase:false,health:100,effects:true,hidden:false};
-let reloadEmpty=false,audioChase=false,chaseStingT=0,exhaustCue=false,audioFault=false;
+let reloadEmpty=false,audioChase=false,chaseStingT=0,exhaustCue=false,audioFault=false,audioSeq=0;
 // Master safety limiter: a fast high-ratio compressor (its automatic makeup gain trimmed back out), then a soft
 // ceiling at -0.63 dBFS, so a pile-up of shots, screams and stingers never clips. Returns the chain's input.
 function masterOut(){
@@ -2143,7 +2143,7 @@ function masterOut(){
   return comp;
 }
 // A short ring buffer of played cues for QA (HollowGame.snapshot().audioLog).
-function logCue(src,cue,kind){audioLog.push({t:Math.round(t*1000)/1000,src,cue,kind:kind||null});if(audioLog.length>96)audioLog.shift();}
+function logCue(src,cue,kind){audioLog.push({n:++audioSeq,t:Math.round(t*1000)/1000,src,cue,kind:kind||null});if(audioLog.length>96)audioLog.shift();}
 function audioAfter(delay,fn){if(AC)audioLater.push({at:AC.currentTime+delay,fn});}
 
 /* creature voices */
