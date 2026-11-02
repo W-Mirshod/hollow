@@ -740,7 +740,7 @@ function collectLoot(l){
   if(l.taken)return;
   if(l.type==='fuse'&&(!NET.inGame||NET.role==='host'))alertMonsters(24,l.x,l.z);
   if(l.type==='medical'&&P.health>=100){showMsg('Health is full. Save this kit for later.',2);return;}
-  l.taken=true;l.g.visible=false;sPickup();
+  l.taken=true;l.g.visible=false;sPickup(l.type);
   rewardLoot(l.type);
 }
 function rewardLoot(type){
@@ -843,7 +843,7 @@ function selectWeapon(index){
   index=(index+weaponDefs.length)%weaponDefs.length;if(index===weaponIndex)return;
   weapons[weaponIndex].mag=mag;weapons[weaponIndex].reserve=reserve;
   gun.visible=false;weaponIndex=index;gun=weaponModels[index];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;
-  mag=weapons[index].mag;reserve=weapons[index].reserve;reloadT=0;fireT=.24;gunKick=0;flashT=0;semiFired=false;sMetal(0,560,.07);
+  mag=weapons[index].mag;reserve=weapons[index].reserve;reloadT=0;fireT=.24;gunKick=0;flashT=0;semiFired=false;weaponAudio?.equip(weaponDefs[index].id);
 }
 
 /* ---------- impacts ---------- */
@@ -872,7 +872,7 @@ const camFX=window.HollowCameraFX.create({seed:1337});
 const camIn={speed:0,walkSpeed:PL.walk,runSpeed:PL.run,running:false,crouching:false,aiming:false,onGround:true,sliding:false,strafe:0,lookDX:0,lookDY:0,stamina:1,exhausted:false,danger:0,health:100,motion:true};
 let camPrevYaw=0,camPrevPitch=0,csPrevX=0,csPrevZ=0;
 const touchMove={x:0,y:0};
-let state='menu',prevState='outside',torchOn=false,battery=1,elapsed=0,t=0,grace=0,danger=0,caughtT=0,ambientT=12,heartT=0,msgTimer=0;
+let state='menu',prevState='outside',torchOn=false,battery=1,elapsed=0,t=0,grace=0,danger=0,caughtT=0,ambientT=12,msgTimer=0;
 let cs=0,csFlags={},csFrom=null,chanFall=null,birdT=1,boxT=0;
 let aiFrozen=false;   // QA only (HollowTest.freezeAI): monsters hold still for deterministic fixtures
 const MAG=30;let mag=MAG,reserve=weaponDefs[0].reserve,fireT=0,reloadT=0,mouseDown=false,gunKick=0,flashT=0,gunOut=false,nearestD=99,caughtBy=null,stingerCD=0,mapT=0;
@@ -927,9 +927,9 @@ function spawnMonsters(count){
     m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.stalkT=0;m.watchT=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;
     m.g.position.copy(m.pos);m.g.rotation.set(0,m.yaw,0);m.g.visible=true;m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);});
 }
-function hideMonsters(){monsters.forEach(m=>{m.g.visible=false;m.spawned=false;m.dead=true;});if(creatureAudio)creatureAudio.stop();}
+function hideMonsters(){monsters.forEach(m=>{m.g.visible=false;m.spawned=false;m.dead=true;});stopAudio(state==='dead');}
 function resetSurvivor(){
-  if(creatureAudio)creatureAudio.stop();
+  stopAudio();
   P.health=100;P.crouching=false;P.eye=EYE;P.hidden=false;P.noise=0;P.groundY=0;P.jumpBuffer=0;P.coyote=0;slideT=0;LOCO.reset();P.sprint=0;P.strafe=0;if(atm)atm.clear();fxKill=fxFlash=0;damageT=0;stingerCD=0;aiming=false;semiFired=false;crouchHeld=false;sprintHeld=false;touchMove.x=touchMove.y=0;
   for(const k in keys)keys[k]=false;
   weaponModels.forEach(g=>g.visible=false);weapons=weaponDefs.map(w=>({mag:w.capacity,reserve:w.reserve}));weaponIndex=0;gun=weaponModels[0];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;
@@ -942,7 +942,7 @@ function newGame(full){
   if(full||!prebuiltSeed){worldSeed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);}
   prebuiltSeed=0;resetSurvivor();
   P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
-  battery=1;elapsed=0;danger=0;ambientT=14;heartT=0;$('flash').style.opacity=0;
+  battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   if(droneGain)droneGain.gain.value=0;
   if(full){
@@ -957,11 +957,11 @@ function newGame(full){
 }
 
 /* ---------- audio ---------- */
-let AC=null,master,noiseBuf,creatureAudio=null,droneFilter,droneGain=null,outGain,luxGain,sirenGain,echoIn,luxOn=false;
+let AC=null,master,noiseBuf,creatureAudio=null,playerAudio=null,weaponAudio=null,droneFilter,droneGain=null,outGain,luxGain,sirenGain,luxOn=false;
 function initAudio(){
   if(AC){if(AC.state==='suspended')AC.resume();return;}
   try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){AC=null;return;}
-  master=AC.createGain();master.gain.value=preferences.volume;master.connect(AC.destination);
+  master=AC.createGain();master.gain.value=preferences.volume;master.connect(masterOut());
   noiseBuf=AC.createBuffer(1,AC.sampleRate*2,AC.sampleRate);const d=noiseBuf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
   // horror drone
   droneFilter=AC.createBiquadFilter();droneFilter.type='lowpass';droneFilter.frequency.value=110;
@@ -979,9 +979,8 @@ function initAudio(){
     const tl=AC.createOscillator();tl.frequency.value=0.2+k*0.07;const tg=AC.createGain();tg.gain.value=0.012;tl.connect(tg);tg.connect(g.gain);o.connect(g);g.connect(luxGain);o.start();tl.start();});
   sirenGain=AC.createGain();sirenGain.gain.value=1;sirenGain.connect(master);
   creatureAudio=HollowAudio.create({context:AC,output:master,noiseBuffer:noiseBuf});
-  // corridor echo for gunshots
-  echoIn=AC.createGain();const ed=AC.createDelay(1),efb=AC.createGain(),elp=AC.createBiquadFilter();ed.delayTime.value=0.13;efb.gain.value=0.42;elp.type='lowpass';elp.frequency.value=1600;
-  echoIn.connect(ed);ed.connect(elp);elp.connect(efb);efb.connect(ed);elp.connect(master);
+  playerAudio=HollowPlayerAudio.create({context:AC,output:bodyOut(),noiseBuffer:noiseBuf});
+  weaponAudio=HollowWeaponAudio.create({context:AC,output:master,noiseBuffer:noiseBuf});
 }
 function noiseSrc(loop){const s=AC.createBufferSource();s.buffer=noiseBuf;s.loop=!!loop;return s;}
 function makePanner(ref,roll){const p=AC.createPanner();p.panningModel='HRTF';p.distanceModel='exponential';p.refDistance=ref||2;p.rolloffFactor=roll||1.3;p.maxDistance=60;p.connect(master);return p;}
@@ -1009,26 +1008,20 @@ function sThud(x,y,z,vol,freq){
 }
 function shaper(amount){const ws=AC.createWaveShaper(),c=new Float32Array(1024);for(let i=0;i<1024;i++){const x=i/512-1;c[i]=Math.tanh(x*amount);}ws.curve=c;return ws;}
 function sCreature(m,cue,volume=1){
-  if(!creatureAudio)return;
-  const spectating=state==='spect'||state==='pause'&&prevState==='spect',viewer=spectating?R.pos:P.pos;
-  if(Math.hypot(viewer.x-m.pos.x,viewer.z-m.pos.z)>(cue==='breath'?16:38))return;
-  if(!preferences.effects&&(cue==='notice'||cue==='attack')){cue='breath';volume*=.65;}
-  const y=cue==='step'?.15:m.stats.head,eye=spectating?(R.raw.y||0)+(R.raw.crouch?1:EYE):P.pos.y+P.eye;
-  return creatureAudio.play(m.kind,cue,{x:m.pos.x,y,z:m.pos.z,volume,occluded:!sightLine(viewer.x,eye,viewer.z,m.pos.x,y,m.pos.z)});
+  const id=sVoice(m.kind,cue,m.pos.x,cue==='step'?.15:m.stats.head,m.pos.z,cue==='step'?volume*(STEP_LEVEL[m.kind]||1):volume);
+  if(id!=null)vox(m).said[cue]=t;
+  return id;
 }
 function updateMonsterAudio(m,dt,moved){
-  const quiet=m.state==='stalk';m.voiceT-=dt;
-  if(m.voiceT<=0){m.voiceT=quiet?rnd(4.5,7.5):m.state==='chase'?rnd(2.2,4):rnd(5,9);sCreature(m,'breath',quiet?.55:.85);}
+  m.voiceT-=dt;
+  monsterVoice(m,dt);
 }
-
-
 // Creature footsteps, driven by the monster animation's foot plants (pose.footstep / pose.stepIntensity).
-// I2: may refine the step cue and volumes here.
+// sCreature applies I2's per-kind step weighting (STEP_LEVEL). I2: may refine the step volumes here.
 function onMonsterFootstep(m,intensity){
   sCreature(m,'step',(m.state==='stalk'?.3:1)*(.45+.55*intensity));
   if(m.kind==='warden'&&state==='play'){const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);if(d<9)camFX.addTrauma(.12*(1-d/9));}
 }
-function sHeart(vol){if(!AC)return;const n=AC.currentTime;[0,0.17].forEach((d,k)=>{const o=AC.createOscillator(),g=AC.createGain();o.frequency.setValueAtTime(62,n+d);o.frequency.exponentialRampToValueAtTime(38,n+d+0.15);o.connect(g);g.connect(master);env(g,n+d,0.008,vol*(k?0.7:1),0.18);o.start(n+d);o.stop(n+d+0.3);});}
 function sClick(){if(!AC)return;const n=AC.currentTime,o=AC.createOscillator(),g=AC.createGain();o.type='square';o.frequency.value=2400;o.connect(g);g.connect(master);env(g,n,0.002,0.06,0.03);o.start(n);o.stop(n+0.05);}
 function sSlam(){
   if(!AC)return;const n=AC.currentTime,p=makePanner(3,0.8);setPos(p,0,1.5,DZC);
@@ -1078,19 +1071,8 @@ function sCrash(){
   [2093,3136,4186].forEach(fr=>{const o=AC.createOscillator(),og=AC.createGain();o.frequency.value=fr*rnd(.98,1.02);o.connect(og);og.connect(p);env(og,n,0.003,0.08,1.6);o.start(n);o.stop(n+1.8);});
   const b=AC.createOscillator(),bg=AC.createGain();b.frequency.setValueAtTime(70,n);b.frequency.exponentialRampToValueAtTime(30,n+0.6);b.connect(bg);bg.connect(p);env(bg,n,0.004,1,0.7);b.start(n);b.stop(n+0.8);
 }
-function sShot(){
-  if(!AC)return;const n=AC.currentTime,s=noiseSrc(),hp=AC.createBiquadFilter(),lp=AC.createBiquadFilter(),g=AC.createGain();
-  const kind=weaponDefs[weaponIndex].id;
-  hp.type='highpass';hp.frequency.value=kind==='shotgun'?90:kind==='pistol'?550:300;lp.type='lowpass';lp.frequency.setValueAtTime(kind==='pistol'?7500:kind==='shotgun'?3300:6000,n);lp.frequency.exponentialRampToValueAtTime(900,n+.15);
-  s.connect(hp);hp.connect(lp);lp.connect(g);g.connect(master);g.connect(echoIn);env(g,n,0.002,0.85,0.17);s.start(n,Math.random());s.stop(n+0.25);
-  const o=AC.createOscillator(),og=AC.createGain();o.frequency.setValueAtTime(150,n);o.frequency.exponentialRampToValueAtTime(45,n+0.14);o.connect(og);og.connect(master);og.connect(echoIn);env(og,n,0.002,0.8,0.16);o.start(n);o.stop(n+0.25);
-  const c=AC.createOscillator(),cg=AC.createGain();c.type='square';c.frequency.value=rnd(3200,3800);c.connect(cg);cg.connect(master);env(cg,n+0.05,0.001,0.02,0.03);c.start(n+0.05);c.stop(n+0.1);
-}
 function sMetal(at,f,v){if(!AC)return;const n=AC.currentTime+at,o=AC.createOscillator(),g=AC.createGain();o.type='triangle';o.frequency.value=f;o.connect(g);g.connect(master);env(g,n,0.002,v,0.09);o.start(n);o.stop(n+0.15);
   const s=noiseSrc(),hf=AC.createBiquadFilter(),hg=AC.createGain();hf.type='highpass';hf.frequency.value=2500;s.connect(hf);hf.connect(hg);hg.connect(master);env(hg,n,0.001,v*0.8,0.04);s.start(n,Math.random());s.stop(n+0.08);}
-function sDry(){sMetal(0,900,0.1);}
-function sReload(){sMetal(0.25,600,0.14);sMetal(0.33,420,0.1);sMetal(1.25,700,0.16);sMetal(1.32,500,0.12);sMetal(1.8,820,0.15);sMetal(1.95,560,0.18);}
-function sPickup(){sMetal(0,520,0.12);sMetal(0.09,760,0.12);}
 
 function sWardSound(kind,x,z){
   if(!AC||preferences.volume===0)return;
@@ -1176,7 +1158,7 @@ function showScreen(id){renderRequested=true;['name','menu','pause','dead','win'
   // A button that closed its own screen keeps focus until the browser's next focus fix-up (a whole frame on slow GPUs),
   // and the key handler ignores buttons: release it now so the next key reaches the game.
   const f=document.activeElement;if(f&&f!==document.body&&f.closest('[hidden]')&&f.blur)f.blur();}
-function resume(){initAudio();state=prevState;showScreen(null);lock();}
+function resume(){initAudio();state=prevState;showScreen(null);lock();resumeAudio();}
 
 $('startDarkBtn')?.addEventListener('click',()=>{initAudio();newGame(false);showScreen(null);lock();});
 $('changeName').addEventListener('click',()=>openNameScreen());
@@ -1206,7 +1188,7 @@ document.addEventListener('pointerlockchange',()=>{if(!(controls?controls.touch:
 function releaseInput(){for(const k in keys)keys[k]=false;mouseDown=false;fireQueued=false;aiming=false;crouchHeld=false;sprintHeld=false;touchMove.x=touchMove.y=0;P.jumpBuffer=0;P.running=false;}
 addEventListener('blur',()=>{if(state==='play'||state==='outside')pause();releaseInput();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){if(state==='play'||state==='outside')pause();releaseInput();}});
-function pause(){if(state==='pause')return;if(!NET.inGame&&creatureAudio)creatureAudio.stop();prevState=state;state='pause';releaseInput();$('pauseLede').textContent=NET.inGame?'Your partner’s game continues. Shelter before pausing.':'Take a breath. The world is paused.';showScreen('pause');if(document.pointerLockElement)try{document.exitPointerLock();}catch(e){}}
+function pause(){if(state==='pause')return;audioPause();prevState=state;state='pause';releaseInput();$('pauseLede').textContent=NET.inGame?'Your partner’s game continues. Shelter before pausing.':'Take a breath. The world is paused.';showScreen('pause');if(document.pointerLockElement)try{document.exitPointerLock();}catch(e){}}
 addEventListener('resize',()=>{renderRequested=true;renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();});
 // A lost GPU device (WebGPU) or WebGL context pauses play; the renderer is rebuilt on the same canvas once the
 // device is back, because WebGPURenderer cannot restore a lost backend itself.
@@ -1289,6 +1271,7 @@ function updatePlayer(dt){
     const oldY=P.pos.y;P.velY-=14*h;P.pos.y+=P.velY*h;
     movePlayer(P.vel.x*h,P.vel.z*h);
     const ground=groundHeight(P.pos.x,P.pos.z,Math.max(P.pos.y,oldY));
+    if(P.pos.y<=ground&&!P.onGround&&P.velY<-6)playerAudio?.land(Math.min(1,(-P.velY-5)/6));
     if(P.pos.y<=ground){
       if(!P.onGround&&P.velY<-1){camFX.land(-P.velY);sStep(Math.min(.4,-P.velY*.035),stepKind());}
       P.pos.y=ground;P.groundY=ground;P.velY=0;P.onGround=true;
@@ -1299,8 +1282,8 @@ function updatePlayer(dt){
   }
   P.noise=mouseDown&&mag>0?1:mv.noise;
 }
-// I2: attach the exhaustion gasp (player-audio) here.
-function onExhausted(){}
+// Stamina just ran out: the one exhaustion gasp (player-audio); the breathing turns ragged on its own.
+function onExhausted(){audioOnExhausted();}
 function stepKind(){return state==='outside'||P.pos.x<0?'grass':state==='cutscene'&&U.progress.value<.5?'carpet':specialRooms.some(r=>r.type==='lounge'&&RULES.insideRoom(r,P.pos.x,P.pos.z))?'carpet':'metal';}
 // One camera-rig step per frame (loop and HollowTest.advance). Footsteps follow the rig's plant events.
 function updateCameraRig(dt,speed,ground){
@@ -1449,7 +1432,7 @@ function damagePlayer(m){
   sCreature(m,'attack');sThud(P.pos.x,1,P.pos.z,.16,90);
   if(P.health<=0){caught(m);return;}
   showMsg(m.kind==='warden'?'The Warden hits hard. Run, lock a door, hide.':`${m.stats.name} attack · find cover or a medical kit.`,2.5);
-
+  playerAudio?.hurt(m.stats.damage);
 }
 function watchingMonster(m,tg){
   const dx=m.pos.x-tg.x,dz=m.pos.z-tg.z,d=Math.hypot(dx,dz);
@@ -1517,7 +1500,7 @@ function updateMonster(m,dt){
   if(m.state==='chase'){
     if(previousState!=='chase')chargeCue(m,!!tg?.local);
     if(sees&&m.kind==='shrieker'&&m.screamT<=0){
-      m.screamT=16;if(previousState==='chase')sCreature(m,'notice');m.anim.scream(1.6);
+      m.screamT=16;if(previousState==='chase')sCreature(m,'scream');m.anim.scream(1.6);
       alertMonsters(28,m.pos.x,m.pos.z);m.lastSeen.set(tg.x,0,tg.z);
       if(tg.local)showMsg('A Shrieker called the others. Change direction.',2.8);
     }
@@ -1644,11 +1627,12 @@ function fire(){
         if(metalAt(hit.x,hit.z))atm.sparks(hit.x-_d.x*k,hit.y-_d.y*k,hit.z-_d.z*k,{dir:_atmNd,count:16});
         else atm.debris(hit.x-_d.x*k,hit.y-_d.y*k,hit.z-_d.z*k,{dir:_atmNd});}
     }else if(wallDistance<48)puff(hit,false);
+    audioBullet(hit,best,distance,wallDistance);
   }
-  if(didHit){hitMarkerT=.16;sMetal(0,1700,.025);}
+  if(didHit){hitMarkerT=.16;audioHitTick();}
   const recoil=w.recoil*(aiming?.65:1);camFX.kick(recoil,rnd(-1,1)*w.recoil*.25);
   P.pitch=Math.min(1.35,P.pitch+recoil*.35);P.yaw+=rnd(-.001,.001);
-  if(w.id==='shotgun'){sMetal(.35,440,.14);camFX.addTrauma(.2);}
+  if(w.id==='shotgun')camFX.addTrauma(.2);
 }
 function hitMonster(m,dmg,from,headshot,strength){
   if(m.dead)return;
@@ -1739,7 +1723,8 @@ function caught(m){
   if(!localInDanger())return;
   if(state==='pause'){showScreen(null);}
   state='caught';caughtT=0;caughtBy=m;torchOn=true;mouseDown=false;
-  if(creatureAudio)creatureAudio.stop();sCreature(m,'attack');m.anim.scream(1.5);$('hud').hidden=true;
+  stopAudio();sCreature(m,'attack');m.anim.scream(1.5);$('hud').hidden=true;
+  audioOnCaught(m);
 }
 function updateCaught(dt){
   caughtT+=dt;const g=caughtBy.g;
@@ -1896,12 +1881,9 @@ function loop(){
       $('winText').textContent=`Cold air on your face. You got out in ${fmtTime(elapsed)}. Behind you, ${kills>=monCount?'nothing is walking any more':'something keeps walking'}.`;
       $('winRank').textContent='';
       showScreen('win');recordWin(elapsed,kills);try{document.exitPointerLock();}catch(e){}
-      if(creatureAudio)creatureAudio.stop();if(droneGain)fadeTo(droneGain,0,2);mouseDown=false;
+      stopAudio();if(droneGain)fadeTo(droneGain,0,2);mouseDown=false;
     }
-    const strain=Math.max(danger,RULES.injuryLevel(P.health));
-    heartT-=dt;if(strain>.15&&heartT<=0){heartT=1.25-strain*.65;sHeart(.06+strain*.16);}
-    if(droneGain){const target=preferences.effects?.025+danger*.035+fuses*.006:.014;droneGain.gain.setTargetAtTime(target,AC.currentTime,1.2);}
-    if(AC&&droneFilter)droneFilter.frequency.value=110+danger*260;
+    if(droneGain){const target=preferences.effects?.025+fuses*.006:.014;droneGain.gain.setTargetAtTime(target,AC.currentTime,1.2);}
   }else if(state==='caught')updateCaught(dt);
   if(NET.inGame){
     if(state!=='play'&&state!=='caught'&&state!=='coopEnd'){elapsed+=rawDt;simulationTime+=dt;updateRooms(dt);updateThreats(dt);}
@@ -1933,6 +1915,7 @@ function loop(){
   sunSprite.position.copy(camera.position).addScaledVector(sunDir,400);
   for(const c of clouds)c.position.copy(camera.position).addScaledVector(c.userData.dir,420);
   updateListener();
+  audioFrame(dt);
 
   updateHealthVignette();
   const post=!!(fx&&fx.enabled);
@@ -1996,9 +1979,6 @@ function setAvatarName(n){const x=avLabelCv.getContext('2d');x.clearRect(0,0,256
 
 function sStepAt(x,z,vol){if(!AC)return;const n=AC.currentTime,p=makePanner(1.8,1.2);setPos(p,x,0.1,z);const s=noiseSrc(),f=AC.createBiquadFilter(),g=AC.createGain();
   f.type='lowpass';f.frequency.value=rnd(380,700);s.connect(f);f.connect(g);g.connect(p);env(g,n,0.006,vol,0.13);s.start(n,Math.random());s.stop(n+0.2);}
-function sShotAt(x,z){if(!AC)return;const n=AC.currentTime,p=makePanner(3,0.9);setPos(p,x,1.5,z);const s=noiseSrc(),lp=AC.createBiquadFilter(),g=AC.createGain();
-  lp.type='lowpass';lp.frequency.setValueAtTime(5000,n);lp.frequency.exponentialRampToValueAtTime(700,n+0.15);s.connect(lp);lp.connect(g);g.connect(p);g.connect(echoIn);env(g,n,0.002,0.9,0.17);s.start(n,Math.random());s.stop(n+0.25);
-  const o=AC.createOscillator(),og=AC.createGain();o.frequency.setValueAtTime(140,n);o.frequency.exponentialRampToValueAtTime(45,n+0.14);o.connect(og);og.connect(p);env(og,n,0.002,0.7,0.16);o.start(n);o.stop(n+0.25);}
 
 async function initNet(){
   try{NET.room=await claude.use('room');}catch(e){NET.room=null;}
@@ -2103,7 +2083,7 @@ function startCoopRound(seed,gen){
   R.dmApplied=new Array(MAX_MON).fill(0);R.lastSh=R.gn===gen?R.sh:0;R.seen=false;
   buildMazeSeeded(seed);resetSurvivor();
   P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
-  battery=1;elapsed=0;danger=0;ambientT=14;heartT=0;$('flash').style.opacity=0;
+  battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   setHell();P.pos.set(PED.x-.85,0,PED.z+(NET.role==='host'?-.8:.8));P.yaw=Math.PI/2;P.pitch=0;grace=10;
   if(NET.role==='host')spawnMonsters(12);else{hideMonsters();monCount=12;}
@@ -2133,7 +2113,7 @@ function coopFinish(){
   coopShowEnd(title,text,false);
 }
 function coopShowEnd(title,text,hostGone){
-  state='coopEnd';NET.over=true;if(creatureAudio)creatureAudio.stop();
+  state='coopEnd';NET.over=true;stopAudio();
   if(droneGain)fadeTo(droneGain,0,2);
   $('ceTitle').textContent=title;$('ceTitle').className='title'+(title.startsWith('It found')||title.startsWith('Left')?' red':'');
   $('ceText').textContent=text;
@@ -2277,6 +2257,220 @@ function updateShare(){
 }
 function cleanRow(r){if(!r||typeof r!=='object')return null;const time=Number(r.time);if(!isFinite(time)||time<=0)return null;
   return {name:String(r.name||'Someone').slice(0,18),time,kills:Math.max(0,Math.min(12,Number(r.kills)||0)),at:Number(r.at)||0,uid:r.uid||null,imported:!!r.imported};}
+// ===== I2: audio integration =====
+// Creature voices (audio.js), the player's body (player-audio.js) and the weapons (weapon-audio.js) are driven from
+// here; call sites elsewhere only make short calls into this section.
+if(!window.HollowPlayerAudio||!window.HollowWeaponAudio)throw new Error('A local game asset could not be loaded.');
+const VOICE_PRIORITY={breath:0,step:1,whisper:2,moan:2,notice:3,laugh:3,growl:3,attack:4,death:4,scream:4};
+// Footsteps by weight: the Warden's tread carries, the others creep about 3-4.5 dB under it.
+const STEP_LEVEL={warden:1,stalker:.85,crawler:.85,shrieker:.85};
+const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
+const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,crouching:false,danger:0,chase:false,health:100,effects:true,hidden:false};
+// A threat call ducks the player's body bus (breathing, heartbeat, chase music): [max distance m, gain, hold s].
+const DUCK={scream:[30,.4,1.4],notice:[20,.65,.9],laugh:[12,.7,1],whisper:[10,.7,1.2]};
+let reloadEmpty=false,audioChase=false,chaseStingT=0,audioFault=false,audioSeq=0,bodyBus=null,duckFree=0,duckDepth=1,duckEnd=0;
+// Master safety limiter: a fast high-ratio compressor (its automatic makeup gain trimmed back out), then a soft
+// ceiling at -0.63 dBFS, so a pile-up of shots, screams and stingers never clips. Returns the chain's input.
+function masterOut(){
+  const comp=AC.createDynamicsCompressor(),trim=AC.createGain(),ceiling=AC.createWaveShaper(),curve=new Float32Array(2049);
+  comp.threshold.value=-4;comp.knee.value=3;comp.ratio.value=20;comp.attack.value=.002;comp.release.value=.12;
+  trim.gain.value=.816;
+  for(let i=0;i<curve.length;i++){const x=i/1024-1,a=Math.abs(x);curve[i]=Math.sign(x)*(a<.8?a:.8+.15*Math.tanh((a-.8)/.15));}
+  ceiling.curve=curve;ceiling.oversample='none';
+  comp.connect(trim);trim.connect(ceiling);ceiling.connect(AC.destination);
+  return comp;
+}
+// HollowPlayerAudio's own bus. A scream, a rush notice, a laugh or a whisper nearby ducks it, so the call cuts through an
+// exhausted player's panting and the chase bed; a stinger is never ducked and holds ducking off for 1.5 s.
+function bodyOut(){bodyBus=AC.createGain();bodyBus.connect(master);return bodyBus;}
+function bodyGain(value,tau){const g=bodyBus.gain,now=AC.currentTime;g.cancelScheduledValues(now);g.setValueAtTime(g.value,now);g.setTargetAtTime(value,now,tau);}
+function duckBody(cue,d){
+  const k=DUCK[cue],now=AC.currentTime;if(!k||!bodyBus||d>k[0]||now<duckFree)return;
+  duckDepth=now<duckEnd?Math.min(duckDepth,k[1]):k[1];duckEnd=Math.max(duckEnd,now+k[2]);
+  bodyGain(duckDepth,.03);bodyBus.gain.setTargetAtTime(1,duckEnd,.25);
+}
+function playStinger(cue,kind){
+  if(!playerAudio||playerAudio.stinger(cue)==null)return false;
+  logCue('player',cue,kind);duckFree=AC.currentTime+1.5;duckEnd=0;if(bodyBus)bodyGain(1,.02);
+  return true;
+}
+// A short ring buffer of played cues for QA (HollowGame.snapshot().audioLog).
+function logCue(src,cue,kind){audioLog.push({n:++audioSeq,t:Math.round(t*1000)/1000,src,cue,kind:kind||null});if(audioLog.length>96)audioLog.shift();}
+function audioAfter(delay,fn){if(AC)audioLater.push({at:AC.currentTime+delay,fn});}
+
+/* creature voices */
+// One creature cue at a world position, gated by distance, the effects setting and the voice budget; walls muffle it.
+function sVoice(kind,cue,x,y,z,volume=1){
+  if(!creatureAudio)return null;
+  const spectating=state==='spect'||state==='pause'&&prevState==='spect',viewer=spectating?R.pos:P.pos,d=Math.hypot(viewer.x-x,viewer.z-z);
+  if(d>(cue==='breath'?16:cue==='whisper'?10:cue==='scream'?60:38))return null;
+  if(!preferences.effects){
+    if(cue==='notice'||cue==='attack'||cue==='scream'||cue==='laugh'){if(d>38)return null;cue='breath';volume*=.65;}
+    else if(cue==='whisper'||cue==='moan'||cue==='growl')volume*=.5;
+  }
+  if(!voiceRoom(cue))return null;
+  const eye=spectating?(R.raw.y||0)+(R.raw.crouch?1:EYE):P.pos.y+P.eye;
+  const id=creatureAudio.play(kind,cue,{x,y,z,volume,occluded:!sightLine(viewer.x,eye,viewer.z,x,y,z)});
+  if(id!=null){logCue('creature',cue,kind);duckBody(cue,d);}
+  return id;
+}
+// A full mix gives up its oldest lowest-priority voice: a growl, laugh or scream must never take a rush's notice.
+function voiceRoom(cue){
+  if(VOICE_PRIORITY[cue]<3||cue==='notice'||cue==='attack'||cue==='death')return true;
+  const s=creatureAudio.snapshot();if(s.activeVoices<s.maxVoices)return true;
+  let victim=null;for(const v of s.voices)if(!victim||VOICE_PRIORITY[v.cue]<VOICE_PRIORITY[victim.cue])victim=v;
+  return !victim||victim.cue!=='notice';
+}
+function vox(m){return m.vox||(m.vox={state:null,whisperT:rnd(2,6),moanT:rnd(8,16),laughT:0,laughed:false,chargeT:0,lungeCD:0,lunge:0,painAt:-99,killed:false,said:{attack:-99,scream:-99}});}
+function playerSees(m){return watchingMonster(m,{x:P.pos.x,z:P.pos.z,yaw:P.yaw,torch:torchOn})&&los(P.pos.x,P.pos.z,m.pos.x,m.pos.z);}
+// The voice timer plus the moments that matter: a chase starting, a stare, a hiding player, a whisper behind your back.
+function monsterVoice(m,dt){
+  const v=vox(m),d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);
+  v.killed=false;v.whisperT-=dt;v.moanT-=dt;v.laughT-=dt;v.chargeT-=dt;v.lungeCD-=dt;
+  if(m.lungeT>v.lunge+.05)audioOnLunge(m);
+  v.lunge=m.lungeT;
+  if(m.state!==v.state){
+    v.state=m.state;
+    if(m.state==='stalk')v.laughed=false;
+    // chargeCue plays the notice; the Warden and the Shrieker follow it with a scream, the sneaky kinds with a growl.
+    if(m.state==='chase'&&v.chargeT<=0){
+      const cue=m.kind==='warden'||m.kind==='shrieker'?'scream':'growl';v.chargeT=6;m.voiceT=Math.max(m.voiceT,rnd(2.2,3.4));
+      if(t-v.said.scream>2)audioAfter(rnd(.35,.55),()=>{if(!m.dead&&m.state==='chase')sCreature(m,cue);});
+    }
+  }
+  if(m.state==='stalk'){
+    if(!v.laughed&&(m.watchT>.5||P.hidden&&d<8)){v.laughed=true;sCreature(m,'laugh');m.voiceT=Math.max(m.voiceT,2.5);return;}
+    if(d<=6&&v.whisperT<=0&&!playerSees(m)){v.whisperT=rnd(8,14);sCreature(m,'whisper');m.voiceT=Math.max(m.voiceT,3);return;}
+  }else if(m.state!=='chase'&&P.hidden&&d<8&&v.laughT<=0){v.laughT=rnd(20,30);sCreature(m,'laugh');m.voiceT=Math.max(m.voiceT,2.5);return;}
+  if(m.voiceT>0)return;
+  if(m.state==='chase'){m.voiceT=rnd(1.6,3);sCreature(m,'growl');}
+  else if(m.state==='stalk'){m.voiceT=rnd(4.5,7.5);sCreature(m,'breath',.55);}
+  else{
+    m.voiceT=rnd(5,9);
+    if(d<8&&v.whisperT<=0){v.whisperT=rnd(8,14);sCreature(m,'whisper');}
+    else if(v.moanT<=0&&Math.random()<.4){v.moanT=rnd(12,20);sCreature(m,'moan');}
+    else sCreature(m,'breath',.85);
+  }
+}
+// A lunge (a pounce, a door bash) growls, the Shrieker screams; a hit on the player already has its attack cue.
+function audioOnLunge(m){
+  const v=vox(m);if(v.lungeCD>0||t-v.said.attack<.8)return;
+  v.lungeCD=m.kind==='shrieker'?8:3;sCreature(m,m.kind==='shrieker'?'scream':'growl');
+}
+// I1b's hitMonster reports every shot result here: info={m,headshot,kill,armored,result}.
+function audioOnHit(info){
+  const m=info&&info.m;if(!m||m.dead||info.kill)return;
+  const v=vox(m);if(t-v.painAt<1.5)return;
+  v.painAt=t;sCreature(m,'growl',m.kind==='warden'?.6:.85);m.voiceT=Math.max(m.voiceT,1.2);
+}
+function audioOnKill(info){
+  const m=info&&info.m;if(!m)return;const v=vox(m);if(v.killed)return;v.killed=true;
+  const r=info.result;playStinger(info.headshot?'headshot':'kill',m.kind);
+  if(r&&(r.count>=2||r.label==='WARDEN DOWN'))playStinger('streak',r.label);
+}
+function audioGasp(k,why){if(state==='play'&&playerAudio&&playerAudio.gasp(k)!=null)logCue('player','gasp',why);}
+function audioOnExhausted(){audioGasp(.8,'exhausted');}
+// The killing blow: a cry under the scare hit, then a Stalker or Shrieker laughs over the body.
+function audioOnCaught(m){
+  if(playerAudio){playerAudio.hurt(100);playStinger('scare','caught');}
+  if(m.kind==='stalker'||m.kind==='shrieker')audioAfter(rnd(.5,.7),()=>sCreature(m,'laugh'));
+}
+
+/* chaos director events (I1b calls this for every event) */
+function audioChaosEvent(e){
+  if(!e||!AC)return;
+  if(e.type==='chaseStart'){playStinger('chase');return;}
+  if(e.type==='surge'){if(playerAudio&&playerAudio.surge(e.intensity)!=null)logCue('player','surge');return;}
+  if(e.type==='blackout'){sThud(P.pos.x,H-.1,P.pos.z,.45,110);logCue('world','blackout');return;}
+  // chaosEvent() fills e.x/e.y/e.z (where the sparks fall, where the caption points) before it calls here.
+  const placed=Number.isFinite(e.x)&&Number.isFinite(e.z);
+  if(e.type==='sparks'){
+    const l=Number.isInteger(e.light)?practicalLights[e.light]:null,o=placed?e:l&&l.position;
+    if(o&&Number.isFinite(o.x))sSpark(o.x,Number.isFinite(o.y)?o.y:H-.3,o.z);else sSpark(P.pos.x+rnd(-2.5,2.5),H-.1,P.pos.z+rnd(-2.5,2.5));
+    logCue('world','sparks');return;
+  }
+  let x=e.x,z=e.z;
+  if(!placed){const b=Number(e.bearing),d=Number(e.distance);if(!Number.isFinite(b)||!Number.isFinite(d))return;x=P.pos.x+Math.cos(b)*d;z=P.pos.z+Math.sin(b)*d;}
+  if(e.type==='scream'){sVoice('shrieker','scream',x,1.7,z);audioScare(1);}
+  else if(e.type==='slam'){sThud(x,1.4,z,.95,170);audioAfter(.11,()=>sThud(x,1.1,z,.4,320));logCue('world','slam');audioScare(.8);}
+  else if(e.type==='whisper'){sVoice(Math.random()<.5?'stalker':'crawler','whisper',x,1.5,z);audioAfter(rnd(.8,1.1),()=>audioGasp(.45,'whisper'));}
+  else if(e.type==='laugh'){sVoice('stalker','laugh',x,1.6,z);audioAfter(rnd(.6,.9),()=>audioGasp(.6,'laugh'));}
+}
+function audioScare(k){if(!playerAudio)return;playStinger('scare');audioAfter(.15,()=>audioGasp(k,'scare'));}
+function sSpark(x,y,z){
+  if(!AC)return;const n=AC.currentTime,p=makePanner(2,1.2);setPos(p,x,y,z);
+  for(let k=0,grains=preferences.effects?7:3;k<grains;k++){const st=n+rnd(0,.22),s=noiseSrc(),f=AC.createBiquadFilter(),g=AC.createGain();
+    f.type='highpass';f.frequency.value=rnd(2500,6000);s.connect(f);f.connect(g);g.connect(p);env(g,st,.001,rnd(.06,.2),rnd(.015,.05));s.start(st,Math.random());s.stop(st+.08);}
+  const o=AC.createOscillator(),og=AC.createGain();o.type='sawtooth';o.frequency.value=120;o.connect(og);og.connect(p);env(og,n,.004,.035,.18);o.start(n);o.stop(n+.25);
+}
+
+/* weapons */
+function sShot(){
+  if(!weaponAudio)return;const w=weaponDefs[weaponIndex],floor=stepKind();
+  if(weaponAudio.shot(w.id,{aiming,ammo:mag,capacity:w.capacity,indoor:floor==='grass'?0:1,effects:preferences.effects})!=null)logCue('weapon','shot',w.id);
+  weaponAudio.casing(w.id,{surface:floor});
+}
+function sShotAt(x,z){
+  if(!weaponAudio)return;const viewer=state==='spect'||state==='pause'&&prevState==='spect'?R.pos:P.pos;
+  weaponAudio.remoteShot(weaponDefs[R.raw.weapon]?.id||'rifle',{x,y:1.5,z,occluded:!los(x,z,viewer.x,viewer.z),distance:Math.hypot(x-viewer.x,z-viewer.z)});
+}
+function sDry(){if(weaponAudio&&weaponAudio.dry(weaponDefs[weaponIndex].id)!=null)logCue('weapon','dry');}
+function sReload(){const w=weaponDefs[weaponIndex];reloadEmpty=mag===0;if(weaponAudio&&weaponAudio.reload(w.id,w.reload,{empty:reloadEmpty})!=null)logCue('weapon','reload',w.id);}
+function sPickup(type){playStinger(type==='fuse'?'fuse':'pickup',type);}
+// Per pellet, once fire() has resolved it: flesh on monsters, the struck material on walls, doors and props.
+function audioBullet(hit,best,distance,wallDistance){
+  if(best){
+    const m=best.m,headshot=best.y>m.stats.head,armored=m.kind==='warden';
+    if(headshot)shotHit.headshot=true;if(armored)shotHit.armored=true;
+    if(weaponAudio&&weaponAudio.impact('flesh',{x:hit.x,y:hit.y,z:hit.z,distance})!=null)logCue('weapon','impact','flesh');
+    // Until I1b's hitMonster reports hits and kills itself.
+    if(typeof chaosEvent!=='function'){const info={m,headshot,kill:m.dead,armored,result:null};if(m.dead)audioOnKill(info);else audioOnHit(info);}
+  }else if(wallDistance<48&&weaponAudio){
+    const surface=surfaceAt(hit.x+_d.x*.08,hit.y+_d.y*.08,hit.z+_d.z*.08);
+    if(weaponAudio.impact(surface,{x:hit.x,y:hit.y,z:hit.z,distance:wallDistance})!=null)logCue('weapon','impact',surface);
+  }
+}
+function surfaceAt(x,y,z){
+  if(y<=0||y>=H)return 'concrete';
+  if(metalAt(x,z))return 'metal';
+  for(const p of roomProps)if(y<p.h+.05&&Math.abs(x-p.x)<p.w/2+.1&&Math.abs(z-p.z)<p.d/2+.1)return p.h>1.3?'metal':'wood';
+  return 'concrete';
+}
+// One tick per volley, on the same event as the visual hit marker.
+function audioHitTick(){
+  if(weaponAudio&&weaponAudio.hitMarker({headshot:shotHit.headshot,armored:shotHit.armored})!=null)logCue('weapon','hitMarker',shotHit.headshot?'headshot':shotHit.armored?'armored':'body');
+  shotHit.headshot=shotHit.armored=false;
+}
+
+/* per frame, stopping and resuming */
+function audioFrame(dt){
+  if(!AC)return;
+  try{
+    const now=AC.currentTime;
+    for(let i=0;i<audioLater.length;){if(audioLater[i].at<=now)audioLater.splice(i,1)[0].fn();else i++;}
+    const active=state==='play';
+    let chase=false;
+    if(active)for(const m of monsters)if(!m.dead&&m.state==='chase'&&Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z)<32){chase=true;break;}
+    // Until I1b's chaos director reports chaseStart.
+    chaseStingT=Math.max(0,chaseStingT-dt);
+    if(typeof chaos==='undefined'&&chase&&!audioChase&&chaseStingT<=0){chaseStingT=8;audioChaosEvent({type:'chaseStart'});}
+    audioChase=chase;
+    if(!playerAudio)return;
+    bodyIn.active=active;bodyIn.stamina=P.stamina;bodyIn.exhausted=P.exhausted;bodyIn.running=P.running;bodyIn.moving=P.moving;bodyIn.crouching=P.crouching;
+    bodyIn.danger=danger;bodyIn.chase=chase;bodyIn.health=P.health;bodyIn.effects=preferences.effects;bodyIn.hidden=P.hidden;
+    playerAudio.update(dt,bodyIn);
+  }catch(error){if(!audioFault){audioFault=true;console.warn('[The Hollow] Audio update failed:',error);}}
+}
+// keepTails lets the death screen hear the last laugh and the scare hit ring out.
+function stopAudio(keepTails){
+  if(weaponAudio)weaponAudio.stop();
+  if(keepTails)return;
+  if(creatureAudio)creatureAudio.stop();if(playerAudio)playerAudio.stop();audioLater.length=0;
+}
+// A co-op pause keeps the shared world audible but holds the reload, which no longer advances.
+function audioPause(){if(!NET.inGame)stopAudio();else if(weaponAudio)weaponAudio.cancelReload();}
+function resumeAudio(){const w=weaponDefs[weaponIndex];if(weaponAudio&&state==='play'&&reloadT>0)weaponAudio.reload(w.id,w.reload,{empty:reloadEmpty,progress:1-reloadT/w.reload});}
+
 function renderBoards(){
   const shared=sharedRows!==null;
   const all=(shared?sharedRows:localScores.map(cleanRow).filter(Boolean)).slice().sort((a,b)=>a.time-b.time);
@@ -2352,6 +2546,7 @@ function snapshot(){return {
   player:{speed:Math.hypot(P.vel.x,P.vel.z),sprint:P.sprint,stamina:P.stamina,exhausted:P.exhausted,sliding:slideT>0,strafe:P.strafe},
   camera:{...camFX.snapshot(),y:camFX.pose.pos.y,x:camFX.pose.pos.x,roll:camFX.pose.rot.roll,pitch:camFX.pose.rot.pitch,fovAdd:camFX.pose.fov,fov:camera.fov,weaponZ:camFX.pose.weapon.z},
   injury:RULES.injuryLevel(P.health),audio:creatureAudio?creatureAudio.snapshot():null,
+  playerAudio:playerAudio?playerAudio.snapshot():null,weaponAudio:weaponAudio?weaponAudio.snapshot():null,audioLog:audioLog.slice(),bodyDuck:bodyBus&&AC.currentTime<duckEnd?duckDepth:1,
     horror:{...horror.snapshot(),effects:preferences.effects,notesRead:readNotes.size},
       flashes:{muzzle:!!muzzleFlash?.visible,world:muzzleLight.userData.level,weapon:fpFlash.userData.level,partner:avFlash.userData.level},
     records:caseNotes.map(n=>({id:n.id,x:n.x,z:n.z,title:n.title})),
@@ -2383,6 +2578,7 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     action:inputAction,pause,quality:applyQuality,pickupReach,
     path:(index,x,z)=>{setPathTo(monsters[index],x,z);return monsters[index].path.map(cell=>cell.slice());},
     navClear:(ax,az,bx,bz,radius)=>movementClear(ax,az,bx,bz,radius),
+    chaosAudio:event=>audioChaosEvent(event),
     build:seed=>{buildMazeSeeded(seed);resetSurvivor();P.pos.set(PED.x-.85,0,PED.z);P.vel.set(0,0,0);setHell();state='play';showScreen(null);spawnMonsters(8);grace=10;},
     collide:(position,radius=PR)=>{const point={...position};resolve(point,radius);return point;}
   });
