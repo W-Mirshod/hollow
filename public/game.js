@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 try {
-if(!window.THREE||!window.TSL||!window.HollowRenderer||!window.HollowSystems||!window.HollowVisuals||!window.HollowNavigation||!window.HollowHorror||!window.HollowAudio||!window.HollowChaos||!window.HollowHUDFX)throw new Error('A local game asset could not be loaded.');
+if(!window.THREE||!window.TSL||!window.HollowRenderer||!window.HollowSystems||!window.HollowLocomotion||!window.HollowCameraFX||!window.HollowVisuals||!window.HollowNavigation||!window.HollowHorror||!window.HollowAudio||!window.HollowChaos||!window.HollowHUDFX)throw new Error('A local game asset could not be loaded.');
 const $=id=>document.getElementById(id);
 const clamp01=v=>v<0?0:v>1?1:v;
 const lerp=(a,b,k)=>a+(b-a)*k;
@@ -13,7 +13,7 @@ const RULES=window.HollowSystems;
 const S=RULES.CELL, H=3.2, W=RULES.SIZE, N=(W-1)/2, HF=H+2.4;
 const ENT_Z=2, DZ0=ENT_Z*S, DZ1=DZ0+S, DZC=DZ0+S/2;      // door spans z 6..9
 const PED={x:16.5,z:DZC}, CHAN={x:10.5,z:DZC}, START={x:-34,z:DZC};
-const WALK=2.8, RUN=5.6, CROUCH=1.4;
+const LOCO=window.HollowLocomotion.create(RULES.PLAYER),PL=LOCO.constants;
 const EYE=1.6, PR=0.32, MR=0.38;
 const IS_TOUCH=matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>1;
 let preferences={quality:'auto',sensitivity:1,volume:.7,motion:!matchMedia('(prefers-reduced-motion: reduce)').matches,effects:!matchMedia('(prefers-reduced-motion: reduce)').matches};
@@ -86,6 +86,11 @@ camera.add(spot);
 const spotTarget=new THREE.Object3D();spotTarget.position.set(0,-0.25,-6);camera.add(spotTarget);spot.target=spotTarget;
 const bounce=physical(new THREE.PointLight(0xffe7c4,0,4.5),2,1);camera.add(bounce);
 const muzzleLight=physical(new THREE.PointLight(0xffb060,0,12),5,1);muzzleLight.position.set(0.18,-0.1,-1.0);camera.add(muzzleLight);
+// Atmosphere (light shafts, dust, torch beam, beacons, tracers, blood, sparks): optional, the game runs without it.
+const _atmDir=new THREE.Vector3(),_atmMz=new THREE.Vector3(),_atmNd=new THREE.Vector3(),_atmIn={cameraPosition:camera.position,cameraDirection:_atmDir,torchOn:false,danger:0,flicker:1};
+let atm=null,atmBeam=null,atmBeacons=[];
+try{atm=window.HollowAtmosphere?.create({THREE,TSL:window.TSL,scene,camera,quality:qualityLevel,effects:preferences.effects})||null;if(atm)atmBeam=atm.torchBeam(camera);}
+catch(e){console.warn('[The Hollow] atmosphere disabled:',e);atm=null;}
 
 /* ---------- environments ---------- */
 const ENV={
@@ -620,7 +625,7 @@ function buildRooms(){
     const strip=own(new THREE.Mesh(new THREE.BoxGeometry(2.4,.035,.12),new THREE.MeshBasicMaterial({color:lin(r.shelter?0x83d4c2:r.fuse?0xffc282:0xa6c4dd)})));
     strip.position.set(cx,H-.07,cz);group.add(strip);strip.position.x=0;strip.position.z=0;
     // Only the three nearest practical lights are active. Emissive fixtures stay visible.
-    roomLights.push({x:cx,z:cz,color:r.shelter?0xbac3a7:r.fuse?0xcdb48b:0x9caeaa,shelter:!!r.shelter});
+    roomLights.push({x:cx,z:cz,color:r.shelter?0xbac3a7:r.fuse?0xcdb48b:0x9caeaa,shelter:!!r.shelter,box:{minX:r.x*S,maxX:(r.x+r.w)*S,minZ:r.z*S,maxZ:(r.z+r.d)*S}});
         const record=HollowHorror.RECORDS[r.id];
         if(record){
           const [paper,ink]=cv(512,512);ink.fillStyle='#b6ae95';ink.fillRect(0,0,512,512);
@@ -656,6 +661,30 @@ function buildRooms(){
   const gate=own(new THREE.Mesh(new THREE.BoxGeometry(.14,H,S),isolationDoorMaterial()));
   gate.position.set((W-1)*S-.02,H/2,(W-2)*S+S/2);gate.castShadow=true;dynamicWorld.add(gate);dynamicWorld.userData.gate=gate;dynamicWorld.userData.exitSign=exitSign;
   mazeNavigator=HollowNavigation.create({grid,cellSize:S,props:roomProps,circles:obstacles,doors:()=>roomDoors.map(d=>({...d.box,open:d.open}))});
+  if(atm)addAtmosphereFixtures();
+}
+// Beacon mount beside open cell (cx,cz): on the first wall found (W, E, N, S), 0.2 m off it.
+function beaconMount(cx,cz){for(const [dx,dz] of [[-1,0],[1,0],[0,-1],[0,1]])if(grid[cz+dz]?.[cx+dx]===1)return{x:cx*S+S/2+dx*(S/2-.2),z:cz*S+S/2+dz*(S/2-.2)};return{x:cx*S+S/2,z:cz*S+S/2};}
+// xz box of the straight open run through (cx,cz), at most 2 cells each way: beacon blades stop at the walls.
+function runBox(cx,cz){const open=(x,z)=>grid[z]?.[x]===0;let a=0,b=0;
+  if(open(cx-1,cz)||open(cx+1,cz)){while(a<2&&open(cx-a-1,cz))a++;while(b<2&&open(cx+b+1,cz))b++;return{minX:(cx-a)*S,maxX:(cx+b+1)*S,minZ:cz*S,maxZ:(cz+1)*S};}
+  while(a<2&&open(cx,cz-a-1))a++;while(b<2&&open(cx,cz+b+1))b++;return{minX:cx*S,maxX:(cx+1)*S,minZ:(cz-a)*S,maxZ:(cz+b+1)*S};}
+// One light cone per fixture (all at 0; the lit ones follow their PointLight every frame) and the beacons.
+function addAtmosphereFixtures(){
+  atm.clear({fixtures:true});
+  for(const l of roomLights){const ward=!l.box;
+    l.cone=atm.addLightCone({x:l.x,z:l.z,y:ward?H-.23:H-.09,radius:ward?1.35:1.4,color:l.color,intensity:0,
+      bounds:ward?{minX:l.x-S/2,maxX:l.x+S/2,minZ:l.z-S/2,maxZ:l.z+S/2}:l.box});}
+  const cells=[[W-2,W-2],...specialRooms.filter(r=>r.fuse).map(r=>[r.door.x,r.door.z])];
+  atmBeacons=cells.map(([cx,cz],i)=>{const p=beaconMount(cx,cz),box=runBox(cx,cz);if(i===0)box.maxX=Math.min(box.maxX,(W-1)*S);
+    return atm.addBeacon({x:p.x,y:2.6,z:p.z,bounds:box});});
+  atm.prewarm();
+}
+// Closed isolation doors and the exit gate are metal (blocksRay's boxes plus 10 cm: a hit can sit just in front).
+function metalAt(x,z){
+  if(!exitOpen&&Math.abs(x-((W-1)*S-.02))<.22&&Math.abs(z-((W-2)*S+S/2))<S/2)return true;
+  for(const d of roomDoors)if(!d.open&&Math.abs(x-d.box.x)<d.box.w/2+.1&&Math.abs(z-d.box.z)<d.box.d/2+.1)return true;
+  return false;
 }
 function makeLoot(type,x,z,room){
   const group=new THREE.Group();group.position.set(x,type==='fuse'?.3:.15,z);dynamicWorld.add(group);
@@ -670,7 +699,8 @@ const exitTint=lin(0xd09b62);
 function refreshRoomLights(){
   const viewer=state==='spect'||state==='pause'&&prevState==='spect'?R.pos:P.pos;
     const nearest=roomLights.map(l=>({...l,d:Math.hypot(l.x-viewer.x,l.z-viewer.z)})).sort((a,b)=>a.d-b.d);
-  practicalLights.forEach((l,i)=>{l.visible=qualityLevel!=='low'||i===0;const info=nearest[i];if(!info||info.d>24||state==='outside'||state==='menu'){setLight(l,0);return;}l.color.setHex(info.color,THREE.LinearSRGBColorSpace);l.position.set(info.x,2.85,info.z);setLight(l,(info.shelter?1.45:1.75)*(info.shelter?1:horror.snapshot().lighting));
+  for(const f of roomLights)if(f.cone)f.cone.setIntensity(0);
+  practicalLights.forEach((l,i)=>{l.userData.cone=null;l.visible=qualityLevel!=='low'||i===0;const info=nearest[i];if(!info||info.d>24||state==='outside'||state==='menu'){setLight(l,0);return;}l.color.setHex(info.color,THREE.LinearSRGBColorSpace);l.position.set(info.x,2.85,info.z);setLight(l,(info.shelter?1.45:1.75)*(info.shelter?1:horror.snapshot().lighting));l.userData.cone=info.cone||null;
       if(exitPowered&&!exitOpen&&!info.shelter)l.color.lerp(exitTint,.35);});
   chaosLightsRefreshed(nearest);
 }
@@ -804,6 +834,13 @@ let gun=weaponModels[0],gunMag=gun.userData.magazine,muzzleFlash=gun.userData.mu
 const GUN_BASE=new THREE.Vector3(.22,-.24,-.38);
 weaponModels.forEach(model=>{model.position.copy(GUN_BASE);model.visible=false;fpRig.add(model);});
 fpScene.environment=scene.environment;
+// Post-processing (bloom, filmic grade, damage/danger): optional; low quality is the direct render.
+let fx=null,fxKill=0,fxFlash=0;
+function createPostFX(){
+  try{fx=window.HollowPostFX?.create({THREE,TSL:window.TSL,renderer,scene,fpScene,camera,quality:qualityLevel,effects:preferences.effects,motion:preferences.motion})||null;}
+  catch(e){console.warn('[The Hollow] post-processing disabled:',e);fx=null;}
+}
+createPostFX();
 function selectWeapon(index){
   index=(index+weaponDefs.length)%weaponDefs.length;if(index===weaponIndex)return;
   weapons[weaponIndex].mag=mag;weapons[weaponIndex].reserve=reserve;
@@ -830,11 +867,15 @@ for(let i=0;i<MAX_MON;i++){const kind=MONSTER_ORDER[i],g=makeMonster(kind);g.vis
 
 /* ---------- state ---------- */
 const keys={};
-const P={pos:new THREE.Vector3(),vel:new THREE.Vector3(),velY:0,onGround:true,yaw:-Math.PI/2,pitch:0,bob:0,bobPhase:0,stamina:1,exhausted:false,running:false,moving:false,health:100,crouching:false,eye:EYE,hidden:false,noise:0,groundY:0,jumpBuffer:0,coyote:0,landing:0,slide:0};
-let aiming=false,semiFired=false,fireQueued=false,crouchHeld=false,sprintHeld=false,slideT=0,lean=0,mapExpanded=false;
+const P={pos:new THREE.Vector3(),vel:new THREE.Vector3(),velY:0,onGround:true,yaw:-Math.PI/2,pitch:0,stamina:1,exhausted:false,running:false,sprint:0,strafe:0,moving:false,health:100,crouching:false,eye:EYE,hidden:false,noise:0,groundY:0,jumpBuffer:0,coyote:0,slide:0};
+let aiming=false,semiFired=false,fireQueued=false,crouchHeld=false,sprintHeld=false,slideT=0,mapExpanded=false;
+// CoD-style camera rig: pose is visual only (never moves P.pos). camIn is reused every frame.
+const camFX=window.HollowCameraFX.create({seed:1337});
+const camIn={speed:0,walkSpeed:PL.walk,runSpeed:PL.run,running:false,crouching:false,aiming:false,onGround:true,sliding:false,strafe:0,lookDX:0,lookDY:0,stamina:1,exhausted:false,danger:0,health:100,motion:true};
+let camPrevYaw=0,camPrevPitch=0,csPrevX=0,csPrevZ=0;
 const touchMove={x:0,y:0};
-let state='menu',prevState='outside',torchOn=false,battery=1,elapsed=0,t=0,grace=0,danger=0,caughtT=0,ambientT=12,heartT=0,lastStep=0,msgTimer=0;
-let cs=0,csFlags={},csFrom=null,shakeAmt=0,chanFall=null,birdT=1,boxT=0;
+let state='menu',prevState='outside',torchOn=false,battery=1,elapsed=0,t=0,grace=0,danger=0,caughtT=0,ambientT=12,heartT=0,msgTimer=0;
+let cs=0,csFlags={},csFrom=null,chanFall=null,birdT=1,boxT=0;
 const MAG=30;let mag=MAG,reserve=weaponDefs[0].reserve,fireT=0,reloadT=0,mouseDown=false,gunKick=0,flashT=0,gunOut=false,nearestD=99,caughtBy=null,stingerCD=0,mapT=0;
 let visited=new Uint8Array(W*W),ammoBoxes=[];
 
@@ -890,7 +931,7 @@ function spawnMonsters(count){
 function hideMonsters(){monsters.forEach(m=>{m.g.visible=false;m.spawned=false;m.dead=true;});if(creatureAudio)creatureAudio.stop();}
 function resetSurvivor(){
   if(creatureAudio)creatureAudio.stop();
-  P.health=100;P.crouching=false;P.eye=EYE;P.hidden=false;P.noise=0;P.groundY=0;P.jumpBuffer=0;P.coyote=0;P.landing=0;slideT=0;damageT=0;stingerCD=0;aiming=false;semiFired=false;crouchHeld=false;sprintHeld=false;touchMove.x=touchMove.y=0;
+  P.health=100;P.crouching=false;P.eye=EYE;P.hidden=false;P.noise=0;P.groundY=0;P.jumpBuffer=0;P.coyote=0;slideT=0;LOCO.reset();P.sprint=0;P.strafe=0;if(atm)atm.clear();fxKill=fxFlash=0;damageT=0;stingerCD=0;aiming=false;semiFired=false;crouchHeld=false;sprintHeld=false;touchMove.x=touchMove.y=0;
   for(const k in keys)keys[k]=false;
   weaponModels.forEach(g=>g.visible=false);weapons=weaponDefs.map(w=>({mag:w.capacity,reserve:w.reserve}));weaponIndex=0;gun=weaponModels[0];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;
   mag=weapons[0].mag;reserve=weapons[0].reserve;reloadT=0;fireT=.3;gunKick=0;mouseDown=false;fireQueued=false;flashT=0;hitMarkerT=0;setLight(muzzleLight,0);setLight(fpFlash,0);
@@ -899,7 +940,7 @@ function newGame(full){
   if(NET.g)leaveRoom();NET.inGame=false;avatar.visible=false;
   avSpot.visible=avFlash.visible=false;
   worldSeed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);resetSurvivor();
-  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;P.bob=0;
+  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
   battery=1;elapsed=0;danger=0;ambientT=14;heartT=0;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   if(droneGain)droneGain.gain.value=0;
@@ -1113,7 +1154,7 @@ function inputAction(action,pressed){
   if(action==='fire'){mouseDown=pressed;if(pressed){semiFired=false;fireQueued=true;}}
   if(action==='aim')aiming=pressed;
   if(action==='sprint')sprintHeld=pressed;
-  if(action==='crouch'){if(pressed&&P.running&&P.onGround&&P.stamina>.2){slideT=.65;P.stamina-=.16;}crouchHeld=pressed;}
+  if(action==='crouch'){if(pressed&&P.onGround&&LOCO.slide()){slideT=LOCO.state.slideT;P.crouching=true;P.stamina=LOCO.state.stamina;}crouchHeld=pressed;}
   if(!pressed)return;
   if(action==='jump')P.jumpBuffer=.16;
   if(action==='torch'&&state==='play'){if(battery>.01){torchOn=!torchOn;sClick();}else showMsg('Battery depleted. Leave the torch off to recharge.',2);}
@@ -1174,6 +1215,7 @@ async function restoreGraphics(){
     const next=await window.HollowCreateRenderer({forceWebGL:!old.backend.isWebGPUBackend});
     renderer=window.HollowRenderer=next;window.HollowBackend=next.backend.isWebGPUBackend?'webgpu':'webgl2';
     configureRenderer();watchDevice(next);graphicsDown=false;renderRequested=true;
+    if(fx){try{fx.dispose();}catch(e){}createPostFX();}if(atm)atm.prewarm();
     // A restored WebGL context is shared with the new renderer and the old objects died with it: only a lost
     // WebGPU device is released explicitly.
     old.setAnimationLoop(null);if(old.backend.isWebGPUBackend)old.dispose().catch(()=>{});
@@ -1187,6 +1229,8 @@ function applyQuality(level){
   if(!Object.prototype.hasOwnProperty.call(qualityProfiles,level))return;renderRequested=true;qualityLevel=level;const profile=qualityProfiles[level];renderScale=profile.ratio;
   // Shadow settings are part of the renderer's pipeline cache key: materials need no manual rebuild.
   renderer.setPixelRatio(Math.min(devicePixelRatio||1,renderScale));renderer.shadowMap.enabled=profile.shadows;
+  if(atm)atm.setQuality(level);
+  if(fx){fx.setQuality(level);if(!fx.enabled){const hell=U.progress.value>.5;$('grain').style.opacity=hell?(preferences.effects?.027:0):.03;$('vignette').style.opacity=hell?.6:.35;if(!hell)canvas.style.filter='saturate(1.06)';}}
   muzzleLight.visible=level!=='low';practicalLights.forEach((light,i)=>light.visible=level!=='low'||i===0);
   spot.shadow.mapSize.set(profile.shadowSize,profile.shadowSize);
   for(const world of [scene,fpScene])world.traverse(o=>{if(o.isMesh){const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{for(const map of [m.map,m.normalMap,m.roughnessMap,m.userData?.transitionMap])if(map){const aniso=level==='low'?1:4;if(map.anisotropy!==aniso){map.anisotropy=aniso;map.needsUpdate=true;}}});}});
@@ -1196,6 +1240,8 @@ for(const [id,key] of [['settingsQuality','quality'],['settingsSensitivity','sen
   el.addEventListener('input',()=>{preferences[key]=el.type==='checkbox'?el.checked:key==='quality'?el.value:Number(el.value);try{localStorage.setItem('hollow.settings',JSON.stringify(preferences));}catch(e){}
     if(key==='quality')applyQuality(preferences.quality==='auto'?(IS_TOUCH?'low':'high'):preferences.quality);
     if(key==='volume'&&master)master.gain.value=preferences.volume;
+    if((key==='effects'||key==='motion')&&fx)fx.setOptions({effects:preferences.effects,motion:preferences.motion});
+    if(key==='effects'&&atm)atm.setPreferences({effects:preferences.effects});
         if(key==='effects'){renderRequested=true;$('grain').style.opacity=preferences.effects?.027:0;if(!preferences.effects){if(creatureAudio)creatureAudio.stop();$('flash').style.opacity=0;setLight(spot,torchOn?3.6:0);weaponModels.forEach(g=>g.userData.muzzleFlash.visible=false);setLight(muzzleLight,0);setLight(fpFlash,0);setLight(avFlash,0);}refreshRoomLights();}
   });
 }
@@ -1214,22 +1260,19 @@ function updatePlayer(dt){
   if(keys.ArrowUp)P.pitch=Math.min(1.35,P.pitch+1.2*dt);if(keys.ArrowDown)P.pitch=Math.max(-1.35,P.pitch-1.2*dt);
   let ix=(keys.KeyD?1:0)-(keys.KeyA?1:0)+touchMove.x,iz=(keys.KeyW?1:0)-(keys.KeyS?1:0)+touchMove.y;
   const inputLength=Math.hypot(ix,iz);if(inputLength>1){ix/=inputLength;iz/=inputLength;}
-  slideT=Math.max(0,slideT-dt);P.crouching=crouchHeld||slideT>0;
+  const mv=LOCO.update(dt,{forward:iz,strafe:ix,sprint:sprintHeld||keys.AltLeft||keys.AltRight||keys.ShiftLeft||keys.ShiftRight,crouch:crouchHeld,aiming,onGround:P.onGround});
+  slideT=mv.slideT;P.crouching=mv.crouching;P.running=mv.running;P.stamina=mv.stamina;P.exhausted=mv.exhausted;P.sprint=mv.sprint;P.strafe=ix;
+  if(mv.events&HollowLocomotion.EVENTS.EXHAUSTED)onExhausted();
   P.eye=lerp(P.eye,P.crouching?1.0:EYE,1-Math.exp(-dt*12));
   P.moving=Math.hypot(ix,iz)>.08||slideT>0;
-  const wantRun=sprintHeld||keys.AltLeft||keys.AltRight||keys.ShiftLeft||keys.ShiftRight;
-  if(P.exhausted&&P.stamina>.3)P.exhausted=false;
-  P.running=!!(wantRun&&P.moving&&!P.crouching&&!aiming&&!P.exhausted&&P.stamina>0);
-  if(P.running){P.stamina=Math.max(0,P.stamina-dt/8);if(P.stamina<=0)P.exhausted=true;}
-  else P.stamina=Math.min(1,P.stamina+dt/(P.moving?8:5));
   P.jumpBuffer=Math.max(0,P.jumpBuffer-dt);
   P.coyote=P.onGround?.1:Math.max(0,P.coyote-dt);
-  if(P.jumpBuffer>0&&P.coyote>0&&!P.crouching&&P.stamina>.08){
+  if(P.jumpBuffer>0&&P.coyote>0&&LOCO.jump()){
     // A small vault assist clears waist-high furniture without raising every jump.
         const vault=roomProps.some(p=>p.h>.8&&p.h<=1.1&&Math.abs(P.pos.x-p.x)<p.w/2+PR+.18&&Math.abs(P.pos.z-p.z)<p.d/2+PR+.18);
-        P.velY=vault?5.65:5.15;P.onGround=false;P.coyote=0;P.jumpBuffer=0;P.stamina=Math.max(0,P.stamina-.08);sStep(.1,stepKind());
+        P.velY=vault?5.65:5.15;P.onGround=false;P.coyote=0;P.jumpBuffer=0;P.stamina=mv.stamina;sStep(.1,stepKind());
   }
-  const speed=slideT>0?RUN*1.15:P.crouching?CROUCH:P.running?RUN:aiming?WALK*.7:WALK;
+  const speed=mv.speed;
   const fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw),rx=Math.cos(P.yaw),rz=-Math.sin(P.yaw);
   if(slideT>0&&inputLength<.1)iz=1;
   const tx=(fx*iz+rx*ix)*speed,tz=(fz*iz+rz*ix)*speed;
@@ -1241,24 +1284,30 @@ function updatePlayer(dt){
     movePlayer(P.vel.x*h,P.vel.z*h);
     const ground=groundHeight(P.pos.x,P.pos.z,Math.max(P.pos.y,oldY));
     if(P.pos.y<=ground){
-      if(!P.onGround&&P.velY<-1){P.landing=Math.min(.15,-P.velY*.015);sStep(Math.min(.4,-P.velY*.035),stepKind());}
+      if(!P.onGround&&P.velY<-1){camFX.land(-P.velY);sStep(Math.min(.4,-P.velY*.035),stepKind());}
       P.pos.y=ground;P.groundY=ground;P.velY=0;P.onGround=true;
     }else P.onGround=false;
     if(P.pos.x>0&&P.pos.x<W*S&&P.pos.z>0&&P.pos.z<W*S&&P.pos.y+P.eye+.16>H){
       P.pos.y=H-P.eye-.16;P.velY=Math.min(0,P.velY);
     }
   }
-  P.landing*=Math.exp(-dt*10);
-  const hs=Math.hypot(P.vel.x,P.vel.z);
-  if(P.onGround&&hs>.35)stepBob(dt,P.running);else P.bob*=Math.exp(-dt*8);
-  P.noise=mouseDown&&mag>0?1:slideT>0?.8:P.running?.8:P.moving?(P.crouching?.09:.3):.02;
-  lean=lerp(lean,-ix*(P.running?.026:.013),1-Math.exp(-dt*7));
+  P.noise=mouseDown&&mag>0?1:mv.noise;
 }
+// I2: attach the exhaustion gasp (player-audio) here.
+function onExhausted(){}
 function stepKind(){return state==='outside'||P.pos.x<0?'grass':state==='cutscene'&&U.progress.value<.5?'carpet':specialRooms.some(r=>r.type==='lounge'&&RULES.insideRoom(r,P.pos.x,P.pos.z))?'carpet':'metal';}
-function stepBob(dt,running){
-  P.bobPhase+=dt*(P.crouching?5:running?11:7.2);
-  const step=Math.floor(P.bobPhase/Math.PI);if(step!==lastStep){lastStep=step;sStep(P.crouching?.035:running?.3:.11,stepKind());}
-  P.bob=preferences.motion?Math.sin(P.bobPhase)*(P.crouching?.012:running?.045:.022):0;
+// One camera-rig step per frame (loop and HollowTest.advance). Footsteps follow the rig's plant events.
+function updateCameraRig(dt,speed,ground){
+  let dy=P.yaw-camPrevYaw;dy-=Math.round(dy/(2*Math.PI))*2*Math.PI;
+  const dp=P.pitch-camPrevPitch;camPrevYaw=P.yaw;camPrevPitch=P.pitch;
+  const live=state==='play'||state==='outside';
+  camIn.speed=speed==null?Math.hypot(P.vel.x,P.vel.z):speed;camIn.running=live&&P.running;camIn.crouching=P.crouching;
+  camIn.aiming=aiming&&!reloadT;camIn.onGround=ground==null?P.onGround:ground;camIn.sliding=live&&slideT>0;camIn.strafe=live?P.strafe:0;
+  camIn.lookDX=dy;camIn.lookDY=dp;camIn.stamina=P.stamina;camIn.exhausted=P.exhausted;
+  camIn.danger=state==='play'?danger:0;camIn.health=state==='play'||state==='caught'?P.health:100;camIn.motion=preferences.motion;
+  const pose=camFX.update(dt,camIn);
+  if(pose.footstep&&(live||state==='cutscene'))sStep(.01+.29*pose.stepIntensity,stepKind());
+  return pose;
 }
 
 /* ---------- cutscene: the walk to the button, then the change ---------- */
@@ -1276,8 +1325,6 @@ function updateCutscene(dt){
   if(cs<1.8){const a=ease(0,1.6,cs);P.pos.x=lerp(csFrom.x,X0,a);P.pos.z=lerp(csFrom.z,DZC,a);P.yaw=angLerp(csFrom.yaw,base,a);P.pitch=lerp(csFrom.pitch,0.04,a);}
   else{
     const w=ease(1.8,8.8,cs);P.pos.x=lerp(X0,X1,w);P.pos.z=DZC;
-    const walking=cs<8.8;
-    if(walking)stepBob(dt,false);else P.bob*=Math.max(0,1-6*dt);
     let yaw=base+0.14*Math.sin((cs-1.8)*0.9)*(1-ease(7.5,8.8,cs));
     const chanLook=ease(4.2,6.0,cs)*(1-ease(6.6,8.2,cs));
     let pitch=lerp(0.04,0.5,chanLook);
@@ -1315,7 +1362,7 @@ function updateCutscene(dt){
   once('touch',11.2,()=>{sPress();luxOn=false;if(luxGain){const n=AC.currentTime;luxGain.gain.cancelScheduledValues(n);luxGain.gain.setValueAtTime(0,n);}});
   button.material.emissive.setRGB(cs<11.2?0.33+0.12*Math.sin(cs*4):Math.max(0,1.8*(1-(cs-11.2)/0.8)),0,0);
   // the change
-  once('siren',12.4,()=>{sSiren();shakeAmt=0.004;});
+  once('siren',12.4,()=>{sSiren();camFX.addTrauma(.15);});
   once('plaque',16.8,()=>{plaque.material.map=plaqueHell;plaque.material.needsUpdate=true;});
   once('paint',15.8,()=>{paintings.forEach(p=>{p.material.map=p.userData.ht;p.material.needsUpdate=true;});});
   once('sky',16.3,()=>{skyU.top.value.copy(untone(0x050203));skyU.hor.value.copy(untone(0x1a0505));skyU.bot.value.set(0);sunSprite.visible=false;clouds.forEach(c=>c.visible=false);});
@@ -1325,13 +1372,12 @@ function updateCutscene(dt){
   if(cs>13.5&&cs<14.6){chandelier.rotation.z=Math.sin(cs*31)*0.03;chandelier.rotation.x=Math.cos(cs*27)*0.02;}
   once('drop',14.6,()=>{chanFall={v:0};chandelier.getObjectByName('chain').visible=false;});
   if(chanFall&&!chanFall.done){chanFall.v+=9.8*dt;chandelier.position.y-=chanFall.v*dt;setLight(chanLight,preferences.effects?1.2*flick:.7);
-    if(chandelier.position.y<=0.9){chandelier.position.y=0.9;chandelier.rotation.set(0.05,0.4,0.22);chanFall.done=true;sCrash();shakeAmt=0.09;setLight(chanLight,0);bulbMat.color.copy(lin(0x0a0604));obstacles.push({x:CHAN.x,z:CHAN.z,r:0.75,chan:true});}}
-  once('slam',16.0,()=>{sSlam();shakeAmt=Math.max(shakeAmt,0.06);});
+    if(chandelier.position.y<=0.9){chandelier.position.y=0.9;chandelier.rotation.set(0.05,0.4,0.22);chanFall.done=true;sCrash();camFX.addTrauma(.9);setLight(chanLight,0);bulbMat.color.copy(lin(0x0a0604));obstacles.push({x:CHAN.x,z:CHAN.z,r:0.75,chan:true});}}
+  once('slam',16.0,()=>{sSlam();camFX.addTrauma(.6);});
   // darkness, then the torch
   once('torch',21.6,()=>{torchOn=true;torch.visible=false;hand.visible=false;gunOut=true;gun.visible=true;sClick();sMetal(0.4,560,0.14);sMetal(0.55,800,0.12);});
   if(cs>=21.6){const k=ease(21.6,22.0,cs);setLight(spot,2.6*k);setLight(bounce,0.18*k);lensMat.color.setRGB(k,k*0.92,k*0.8);}
   once('end',22.8,()=>endCutscene());
-  shakeAmt*=Math.max(0,1-2.2*dt);
 }
 function skipCutscene(){
   if(luxGain){const n=AC.currentTime;luxGain.gain.cancelScheduledValues(n);luxGain.gain.setValueAtTime(0,n);}
@@ -1392,7 +1438,8 @@ function alertMonsters(radius,x,z){
 }
 function damagePlayer(m){
   if(!localInDanger()||damageT>0||grace>0||P.hidden)return;
-  P.health=Math.max(0,P.health-m.stats.damage);damageT=1.05;P.landing=preferences.motion?.06:0;m.lungeT=.3;
+  P.health=Math.max(0,P.health-m.stats.damage);damageT=1.05;m.lungeT=.3;
+  {const dx=m.pos.x-P.pos.x,dz=m.pos.z-P.pos.z,dist=Math.max(.01,Math.hypot(dx,dz));camFX.punch((dx*Math.cos(P.yaw)-dz*Math.sin(P.yaw))/dist,.5);camFX.addTrauma(.45);}
   sCreature(m,'attack');sThud(P.pos.x,1,P.pos.z,.16,90);
   dopaHurt(m);
   if(P.health<=0){caught(m);return;}
@@ -1564,11 +1611,13 @@ function fire(){
   if(mag<=0){sDry();fireT=.3;semiFired=true;if(reserve>0)startReload();else showMsg('Weapon empty. Switch weapons or find supplies.',2);return;}
   mag--;weapons[weaponIndex].mag=mag;fireT=w.interval;gunKick=1;flashT=.045;semiFired=true;sShot();NET.shots++;
   if(!NET.inGame||NET.role==='host')alertMonsters(w.noise);
-  _o.set(P.pos.x,P.pos.y+P.eye+P.bob,P.pos.z);
+  _o.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
   _shotQuat.setFromEuler(_shotEuler.set(P.pitch,P.yaw,0,'YXZ'));_shotDir.set(0,0,-1).applyQuaternion(_shotQuat);
   const spread=w.spread*(aiming?.4:1)*(P.crouching?.65:1)+(P.moving?.008:0);
   dopaShotBegin();
   let didHit=false;
+  if(atm&&gun.userData.muzzlePosition)_atmMz.copy(gun.userData.muzzlePosition).applyEuler(gun.rotation).add(gun.position);
+  if(w.pellets>1)fxFlash=.55;
   for(let pellet=0;pellet<w.pellets;pellet++){
     _d.copy(_shotDir);_d.x+=rnd(-spread,spread);_d.y+=rnd(-spread,spread);_d.z+=rnd(-spread,spread);_d.normalize();
     let wallDistance=48;
@@ -1581,18 +1630,25 @@ function fire(){
       const y=_o.y+_d.y*at;if(y<.06||y>m.stats.height)continue;distance=at;best={m,y};
     }
     const hit=_o.clone().addScaledVector(_d,Math.max(0,distance-.04));
+    const streak=w.pellets===1||pellet%3===0;
+    if(atm&&streak)atm.tracer(_o.x,_o.y,_o.z,hit.x,hit.y,hit.z,gun.userData.muzzlePosition?{muzzle:_atmMz}:undefined);
     if(best){
-      didHit=true;puff(hit,true);
+      didHit=true;if(atm)atm.blood(hit.x,hit.y,hit.z,{dir:_d,amount:w.pellets>1?.4:1});else puff(hit,true);
       const damage=RULES.weaponDamage(w.id,best.y>best.m.stats.head,distance,best.m.kind);
       dopaShotHit(best.m,best.y>best.m.stats.head,distance);
       if(NET.inGame&&NET.role==='guest'){const k=monsters.indexOf(best.m);NET.dm[k]=(NET.dm[k]||0)+damage;best.m.stagger=.2;}
       else hitMonster(best.m,damage);
+    }else if(wallDistance<48&&atm){
+      if(streak){const k=.12;_atmNd.copy(_d).negate();
+        if(metalAt(hit.x,hit.z))atm.sparks(hit.x-_d.x*k,hit.y-_d.y*k,hit.z-_d.z*k,{dir:_atmNd,count:16});
+        else atm.debris(hit.x-_d.x*k,hit.y-_d.y*k,hit.z-_d.z*k,{dir:_atmNd});}
     }else if(wallDistance<48)puff(hit,false);
   }
   dopaShotEnd();
   if(didHit){hitMarkerT=.16;sMetal(0,1700,.025);}
-  P.pitch=Math.min(1.35,P.pitch+w.recoil*(aiming?.65:1));P.yaw+=rnd(-.003,.003);
-  if(w.id==='shotgun')sMetal(.35,440,.14);
+  const recoil=w.recoil*(aiming?.65:1);camFX.kick(recoil,rnd(-1,1)*w.recoil*.25);
+  P.pitch=Math.min(1.35,P.pitch+recoil*.35);P.yaw+=rnd(-.001,.001);
+  if(w.id==='shotgun'){sMetal(.35,440,.14);camFX.addTrauma(.2);}
 }
 function hitMonster(m,dmg,from){
   if(m.dead)return;
@@ -1600,6 +1656,7 @@ function hitMonster(m,dmg,from){
   if(from)m.lastSeen.set(from.x,0,from.z);else m.lastSeen.copy(P.pos);m.lost=0;
   if(m.hp<=0){
     m.dead=true;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
+    fxKill=1;
     const left=monsters.filter((o,i)=>i<monCount&&!o.dead).length;
     showMsg(left?`${m.stats.name} down · ${left} threats remain.`:'The corridors are silent. Restore the exit power.',2.5);
   }else if(m.kind==='warden'&&noticeT<=0){noticeT=12;showMsg('It barely flinched. Save ammunition: break sight, lock a room, hide.',3.2);}
@@ -1618,8 +1675,9 @@ function updateGun(dt){
   gun.userData.run=lerp(gun.userData.run||0,P.running?1:0,1-Math.exp(-dt*8));
   gun.userData.aim=lerp(gun.userData.aim||0,aiming&&!P.running&&!reloadT?1:0,1-Math.exp(-dt*12));
   const rk=gun.userData.run,ak=gun.userData.aim;
-  gun.position.set(lerp(GUN_BASE.x,.025,ak)+rk*.04,lerp(GUN_BASE.y,-.12,ak)+P.bob*.4-rp*.16-rk*.08,GUN_BASE.z+gunKick*(w.id==='shotgun'?.09:.045)+ak*.07);
-  gun.rotation.set(gunKick*.09+rp*.45-rk*.35,rk*.38,rp*.6+lean*.5);
+  const wp=camFX.pose.weapon;
+  gun.position.set(lerp(GUN_BASE.x,.025,ak)+rk*.04+wp.x,lerp(GUN_BASE.y,-.12,ak)-rp*.16-rk*.08+wp.y,GUN_BASE.z+ak*.07+wp.z);
+  gun.rotation.set(rp*.45-rk*.35+wp.pitch,rk*.38+wp.yaw,rp*.6+wp.roll);
   if(gunMag)gunMag.visible=!(reloadT>0&&progress>.3&&progress<.65);
   if(gun.userData.bolt)gun.userData.bolt.position.z=(gun.userData.bolt.userData.restZ||0)+gunKick*.025;
   const flashing=preferences.effects&&flashT>0;
@@ -1701,7 +1759,33 @@ const gc=$('grain').getContext('2d'),gimg=gc.createImageData(256,144);
 function drawGrain(){const d=gimg.data;for(let i=0;i<d.length;i+=4){const v=Math.random()*255;d[i]=d[i+1]=d[i+2]=v;d[i+3]=255;}gc.putImageData(gimg,0,0);}
 
 /* ---------- loop ---------- */
-const timer=new THREE.Timer();let frame=0,hudT=0;
+const timer=new THREE.Timer();let frame=0,hudT=0,baseFov=72;
+function updateAtmosphere(dt){
+  if(!atm)return;
+  for(const l of practicalLights){const c=l.userData.cone;if(c)c.setIntensity(l.visible?l.intensity/(1.75*l.userData.scale):0);}
+  const ch=typeof chaos!=='undefined'?chaos:null;
+  if(ch&&typeof ch.beacon==='function')for(let i=0;i<atmBeacons.length;i++){const s=ch.beacon(i),b=atmBeacons[i];b.setActive(s.on);b.setAngle(s.angle);b.setIntensity(s.intensity);}
+  atmBeam.setIntensity(qualityLevel==='low'?0:spot.userData.level/4);
+  camera.getWorldDirection(_atmDir);_atmIn.torchOn=spot.userData.level>0;_atmIn.danger=danger;
+  atm.update(state==='pause'?0:dt,_atmIn);
+}
+// The post pipeline draws vignette/grain/danger/damage itself: the CSS layers it replaces are zeroed while it runs
+// (#healthVignette stays the CSS injury frame).
+function hideCssPostOverlays(){
+  for(const id of ['grain','vignette','danger','flash']){const s=$(id).style;if(s.opacity!=='0')s.opacity=0;}
+  if(canvas.style.filter!=='none')canvas.style.filter='none';
+}
+function updatePostFX(dt){
+  if(!fx)return;
+  const u=fx.uniforms,hell=state!=='outside'&&state!=='menu'&&!(state==='cutscene'&&cs<13);
+  fxKill=Math.max(0,fxKill-dt/.35);fxFlash=Math.max(0,fxFlash-dt*6);
+  u.danger.value=state==='play'||state==='caught'?Math.min(1,danger+(state==='caught'?.3:0)):0;
+  u.damage.value=state==='play'||state==='caught'?Math.min(1,damageT/1.05):0;
+  u.health.value=1;
+  u.grain.value=hell?.35:.1;u.vignette.value=state==='cutscene'&&cs>=13&&cs<21.6?1:hell?.5:.3;
+  u.saturation.value=!hell?1.06:state==='cutscene'?.72:1;
+  u.killFlash.value=fxKill;u.flash.value=fxFlash;
+}
 function updateHealthVignette(){
   const active=state==='play'||state==='caught'||state==='pause'&&prevState==='play';
   const injury=active?RULES.injuryLevel(P.health):0;
@@ -1794,43 +1878,53 @@ function loop(){
     netTick(dt);
   }
   if(state==='play'||state==='caught'||(NET.inGame&&state!=='coopEnd'))monsters.forEach(m=>animateMonster(m,sdt));
+  if(state==='caught')camFX.addTrauma(1);
+  if(state==='cutscene'){const sp=dt>0?Math.hypot(P.pos.x-csPrevX,P.pos.z-csPrevZ)/dt:0;updateCameraRig(dt,sp,true);}
+  else if(!['menu','pause','dead','win','coopEnd'].includes(state))updateCameraRig(dt);
+  csPrevX=P.pos.x;csPrevZ=P.pos.z;
   updateGun(dt);updatePuffs(dt);
   if(luxOn){boxT-=dt;if(boxT<=0){boxT=0.46;sMusicBox();}}
   if(msgTimer>0){msgTimer-=dt;if(msgTimer<=0)$('msg').style.opacity=0;}
 
   // camera
-  let shake=preferences.motion?shakeAmt:0;
-  if(state==='play'&&preferences.motion){const md=nearestD;if(md<5)shake=Math.max(shake,(1-md/5)*.008);}
-  if(state==='caught'&&preferences.motion)shake=.035;
-  if(state==='spect'||(state==='pause'&&prevState==='spect')){
+  const spectating=state==='spect'||(state==='pause'&&prevState==='spect'),cam=camFX.pose;
+  if(spectating){
     camera.position.set(R.pos.x,(R.raw.y||0)+(R.raw.crouch?1:EYE),R.pos.z);camera.rotation.set(R.pitch,R.yaw,0);
   }else{
-  camera.position.set(P.pos.x+rnd(-shake,shake),P.pos.y+P.eye+P.bob-P.landing+rnd(-shake,shake),P.pos.z);
-  camera.rotation.y=P.yaw+rnd(-shake,shake)*.5;camera.rotation.x=P.pitch;camera.rotation.z=preferences.motion?lean+Math.sin(P.bobPhase*.5)*.003:0;
+    camera.rotation.set(P.pitch+cam.rot.pitch,P.yaw+cam.rot.yaw,cam.rot.roll);
+    camera.position.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
+    camera.translateX(cam.pos.x);camera.translateY(cam.pos.y);camera.translateZ(cam.pos.z);
   }
-  const desiredFov=aiming&&!reloadT&&!P.running?55:P.running&&preferences.motion?77:72;
-  if(Math.abs(camera.fov-desiredFov)>.05){camera.fov=lerp(camera.fov,desiredFov,1-Math.exp(-dt*10));camera.updateProjectionMatrix();}
-  torch.position.y=-0.27+P.bob*0.35;
+  baseFov=lerp(baseFov,aiming&&!reloadT&&!P.running?55:72,1-Math.exp(-dt*10));
+  const fov=baseFov+(spectating?0:cam.fov);
+  if(Math.abs(camera.fov-fov)>.01){camera.fov=fov;camera.updateProjectionMatrix();}
+  torch.position.y=-0.27+cam.weapon.y;
   sky.position.copy(camera.position);
   sunSprite.position.copy(camera.position).addScaledVector(sunDir,400);
   for(const c of clouds)c.position.copy(camera.position).addScaledVector(c.userData.dir,420);
   updateListener();
 
   updateHealthVignette();
+  const post=!!(fx&&fx.enabled);
+  if(post)hideCssPostOverlays();
+  else{
   $('danger').style.opacity=preferences.effects&&(state==='play'||state==='caught')?Math.min(.8,danger*.5+(state==='caught'?.3:0)):0;
   if(state==='play')$('flash').style.opacity=preferences.effects&&damageT>.7?Math.max(0,(damageT-.7)*.7):0;
+  }
   hudT-=dt;if(hudT<=0){hudT=.08;updateHUD();}
   if(state==='play'||state==='spect'){mapT-=dt;if(mapT<=0){mapT=.2;drawMap();}}
-  if(preferences.effects&&qualityLevel!=='low'&&frame%6===0)drawGrain();
+  if(!post&&preferences.effects&&qualityLevel!=='low'&&frame%6===0)drawGrain();
   camera.updateMatrixWorld();fpRig.position.copy(camera.position);fpRig.quaternion.copy(camera.quaternion);
   fpHemi.color.copy(hemi.color);fpHemi.groundColor.copy(hemi.groundColor);setLight(fpHemi,Math.max(.25,hemi.userData.level*.9));
   if(state==='play'||state==='spect'){
     for(const r of specialRooms)r.group.visible=Math.hypot(r.group.position.x-camera.position.x,r.group.position.z-camera.position.z)<38;
     for(const m of monsters)m.g.visible=!!m.spawned&&(!m.dead&&Math.hypot(m.pos.x-camera.position.x,m.pos.z-camera.position.z)<42||m.dead&&m.deadT<18&&Math.hypot(m.pos.x-camera.position.x,m.pos.z-camera.position.z)<25);
   }
+  updateAtmosphere(sdt);updatePostFX(dt);
   renderer.info.reset();
   if(['menu','pause','dead','win','coopEnd'].includes(state)&&!renderRequested&&lastRenderedState===state)return;
   renderRequested=false;lastRenderedState=state;
+  if(fx){fx.render(dt);renderCalls=renderer.info.render.drawCalls;renderedFrames++;return;}
   // clear -> world -> clear depth -> viewmodel, expressed with auto-clear flags: an explicit clear()/clearDepth()
   // would add a full-screen output (tone-mapping) pass each. The world renders straight into the renderer's own HDR
   // frame buffer (internal to three r187), so tone mapping and sRGB output run once, after the viewmodel.
@@ -1976,7 +2070,7 @@ function startCoopRound(seed,gen){
   NET.actions=[];NET.actionSeq=0;NET.actionAck=0;NET.claimed.clear();R.actions=[];R.actionAck=0;R.grants=[];
   R.dmApplied=new Array(MAX_MON).fill(0);R.lastSh=R.gn===gen?R.sh:0;R.seen=false;
   buildMazeSeeded(seed);resetSurvivor();
-  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;P.bob=0;
+  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
   battery=1;elapsed=0;danger=0;ambientT=14;heartT=0;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   setHell();P.pos.set(PED.x-.85,0,PED.z+(NET.role==='host'?-.8:.8));P.yaw=Math.PI/2;P.pitch=0;grace=10;
@@ -2135,22 +2229,22 @@ let sharedRows=null,sharedState='loading',myId=null,canPost=null,lastMine=null,s
 // hitstop-scaled simulation dt), dopaShotBegin/dopaShotHit/dopaShotEnd (fire), dopaHurt (damagePlayer), dopaSnapshot.
 const chaos=HollowChaos.create(worldSeed),streak=HollowChaos.createStreak({effects:preferences.effects});
 const hud=HollowHUDFX.create({root:$('hud'),document,motion:preferences.motion,effects:preferences.effects,touch:dopaTouch()});
-const HITSTOP_SCALE=.08,EMERGENCY_RED=lin(0xff2414),SPARK_DOWN=new THREE.Vector3(0,-1,0);
+const HITSTOP_SCALE=.08,EMERGENCY_RED=lin(0xff2414),SPARK_DOWN=new THREE.Vector3(0,-1,0),coneTint=new THREE.Color();
 let hitstopT=0,chaosLive=false;
-// chaos.beacon(0..1), refreshed every simulation step for the emergency beacons. TODO(I3 visuals): atmosphere beacons read these.
+// chaos.beacon(0..1), refreshed every simulation step. The atmosphere beacons read chaos.beacon(i) in updateAtmosphere.
 const beacons=[chaos.beacon(0),chaos.beacon(1)];
 const chaosIn={active:false,danger:0,chasers:0,nearest:99,alarm:false,sheltered:false,effects:true,health:100,lights:0,yaw:0,cue:false};
 const dopa={state:'',motion:preferences.motion,effects:preferences.effects,touch:dopaTouch(),snap:chaos.snapshot(),
   hEvents:0,hFuses:0,fuses:0,powered:false,open:false,chasers:0,chaseT:-1e9,lostT:-1e9,emergency:0,shock:0,hemi:-1,
-  live:null,liveBase:.45,liveColor:new THREE.Color(),livePhase:0,shot:{id:0,hits:0,head:false,list:[]},
-  hitstops:0,lastHitstop:0,kills:0,lastKill:null,damage:null,damageHits:0};
+  live:null,liveBase:.45,liveColor:new THREE.Color(),livePhase:0,cones:new Map(),shot:{id:0,hits:0,head:false,list:[],flash0:0},
+  flashCD:0,hitstops:0,lastHitstop:0,kills:0,lastKill:null,damage:null,damageHits:0};
 function dopaTouch(){return !!(controls?controls.touch:IS_TOUCH);}
 function dopaTrauma(amount){const rig=typeof camFX!=='undefined'?camFX:null;if(rig&&typeof rig.addTrauma==='function')rig.addTrauma(amount);}
 function chaosWorldBuilt(ward){
   chaos.reset(worldSeed);streak.reset();hud.clear();hitstopT=0;chaosLive=false;chaosHemiRestore();chaosBeacons();
   const h=horror.snapshot();dopa.hEvents=h.events;dopa.hFuses=h.fuses;dopa.snap=chaos.snapshot();
   dopa.fuses=fuses;dopa.powered=exitPowered;dopa.open=exitOpen;dopa.chasers=0;dopa.chaseT=dopa.lostT=-1e9;dopa.emergency=dopa.shock=0;
-  dopa.hitstops=dopa.lastHitstop=dopa.kills=dopa.damageHits=0;dopa.lastKill=dopa.damage=null;
+  dopa.hitstops=dopa.lastHitstop=dopa.kills=dopa.damageHits=dopa.flashCD=0;dopa.lastKill=dopa.damage=null;dopa.cones.clear();
   for(const m of monsters){m.dopaHitT=-1e9;m.dopaHead=false;m.dopaDown=!!m.dead;m.dopaShot=-1;}
   for(const l of practicalLights){l.userData.base=undefined;l.userData.shelter=false;}
   // The shared ward:live strip material (re-armed by decorateWard on every build) flickers with light channel 0.
@@ -2160,7 +2254,7 @@ function chaosWorldBuilt(ward){
   const practicals=ward&&ward.userData.practicals;dopa.livePhase=practicals&&practicals.length?practicals[0].phase:0;
 }
 function chaosLightsRefreshed(nearest){
-  practicalLights.forEach((l,i)=>{const u=l.userData,info=nearest[i];u.base=u.level;u.shelter=!!(info&&info.shelter);u.phase=info?info.phase:undefined;(u.tint||(u.tint=new THREE.Color())).copy(l.color);});
+  practicalLights.forEach((l,i)=>{const u=l.userData,info=nearest[i];u.base=u.level;u.shelter=!!(info&&info.shelter);u.phase=info?info.phase:undefined;u.hex=info?info.color:0;(u.tint||(u.tint=new THREE.Color())).copy(l.color);});
 }
 function chaosStep(dt){
   const h=horror.snapshot(),cue=h.events!==dopa.hEvents||h.fuses!==dopa.hFuses;dopa.hEvents=h.events;dopa.hFuses=h.fuses;
@@ -2187,6 +2281,12 @@ function chaosLights(){
     const steady=!effects||!chaosLive||u.shelter||!(u.base>0);
     setLight(l,steady?u.base:u.base*chaos.lightLevel(i,u.phase));
     if(u.tint){if(steady||k<.002)l.color.copy(u.tint);else l.color.copy(u.tint).lerp(EMERGENCY_RED,k);}
+    // The fixture's light shaft (atmosphere cone, assigned in refreshRoomLights) takes the same emergency tint.
+    const cone=u.cone;
+    if(cone&&typeof cone.setColor==='function'){
+      if(!steady&&k>=.002){if(!dopa.cones.has(cone))dopa.cones.set(cone,u.hex);cone.setColor(coneTint.set(u.hex).lerp(EMERGENCY_RED,k));}
+      else if(dopa.cones.has(cone)){cone.setColor(dopa.cones.get(cone));dopa.cones.delete(cone);}
+    }
   }
   const live=dopa.live;
   if(live){
@@ -2213,10 +2313,10 @@ function chaosEvent(e){
     // TODO(I2 audio): fade the chase bed.
   }else if(e.type==='surge'){
     dopa.shock=Math.max(dopa.shock,.3*(e.intensity||0));
-    // TODO(I2 audio): surge zap. TODO(I3 visuals): postfx surge follows chaos.snapshot().surgeLevel (chaosVisuals).
+    // TODO(I2 audio): surge zap. The postfx surge uniform follows chaos.snapshot().surgeLevel (chaosVisuals).
   }else if(e.type==='blackout'){
     dopa.shock=Math.max(dopa.shock,.5);
-    // TODO(I2 audio): breaker thunk. TODO(I3 visuals): postfx blackout follows blackoutLevel (chaosVisuals).
+    // TODO(I2 audio): breaker thunk. The postfx blackout uniform follows blackoutLevel (chaosVisuals).
   }else if(e.type==='sparks'){
     chaosSparks(e);
     // TODO(I2 audio): spark crackle at e.x/e.y/e.z.
@@ -2264,7 +2364,7 @@ function dopaFrame(rawDt,dt){
   }
   if(state!==dopa.state){dopa.state=state;if(state==='caught'||state==='dead'||state==='win'||state==='coopEnd')hud.clear();}
   if(chaosLive&&state!=='play'&&state!=='pause'){chaosLive=false;chaosIn.active=false;chaos.update(0,chaosIn);dopa.snap=chaos.snapshot();dopa.emergency=0;chaosBeacons();chaosLights();}
-  dopa.shock=Math.max(0,dopa.shock-rawDt*1.6);
+  dopa.shock=Math.max(0,dopa.shock-rawDt*1.6);dopa.flashCD=Math.max(0,dopa.flashCD-rawDt);
   let sdt=dt;
   if(NET.inGame||state!=='play')hitstopT=0;
   else if(hitstopT>0){const frozen=Math.min(dt,hitstopT);hitstopT-=frozen;sdt=dt-frozen*(1-HITSTOP_SCALE);}
@@ -2278,7 +2378,7 @@ function dopaObjectives(){
 }
 // One marker, one streak hit and at most one hitstop per shot, however many pellets land. fire() never targets a
 // dead monster, so a monster hit by this shot that is dead at the end of it was killed by it.
-function dopaShotBegin(){const s=dopa.shot;s.id++;s.hits=0;s.head=false;s.list.length=0;}
+function dopaShotBegin(){const s=dopa.shot;s.id++;s.hits=0;s.head=false;s.list.length=0;s.flash0=typeof fxKill!=='undefined'?fxKill:0;}
 function dopaShotHit(m,headshot,distance){
   const s=dopa.shot;
   if(m.dopaShot!==s.id){m.dopaShot=s.id;m.dopaShotHead=false;if(s.list.length<12)s.list.push(m);}
@@ -2291,7 +2391,9 @@ function dopaShotEnd(){
   for(const m of s.list){if(m.dead){if(!killed)killed=m;}else if(m.kind==='warden')armored=true;}
   const hit=streak.hit(simulationTime,{headshot:s.head});dopaHitstop(hit.hitstop);
   hud.hit({headshot:s.head,kill:!!killed,armored:armored&&!killed});
-  for(const m of s.list)if(m.dead){m.dopaResult=dopaKill(m,m.dopaShotHead,m.dopaDist);result=m.dopaResult;}
+  let flash=0;
+  for(const m of s.list)if(m.dead){m.dopaResult=dopaKill(m,m.dopaShotHead,m.dopaDist);result=m.dopaResult;flash=Math.max(flash,result.flash);}
+  if(killed)dopaKillFlash(flash,s.flash0);
   if(typeof audioOnHit==='function')audioOnHit({m:killed||s.list[0],headshot:s.head,kill:!!killed,armored:armored&&!killed,result});
   if(typeof audioOnKill==='function')for(const m of s.list)if(m.dead)audioOnKill({m,headshot:!!m.dopaShotHead,kill:true,armored:false,result:m.dopaResult});
 }
@@ -2310,9 +2412,16 @@ function dopaGuestKills(){
     if(m.dopaDown)continue;m.dopaDown=true;
     if(!(simulationTime-m.dopaHitT<=1.6))continue;
     hud.hit({headshot:!!m.dopaHead,kill:true});
-    const r=dopaKill(m,m.dopaHead,m.dopaDist);
+    const r=dopaKill(m,m.dopaHead,m.dopaDist);dopaKillFlash(r.flash,typeof fxKill!=='undefined'?fxKill:0);
     if(typeof audioOnKill==='function')audioOnKill({m,headshot:!!m.dopaHead,kill:true,armored:false,result:r});
   }
+}
+// The postfx kill flash (fxKill, set to 1 by hitMonster) scales with the streak's flash and starts at most ~3 times a
+// second; inside the cooldown the earlier flash just keeps fading. Effects off: the streak flash is 0, so no new flash.
+function dopaKillFlash(flash,before){
+  if(typeof fxKill==='undefined')return;
+  if(flash>0&&dopa.flashCD<=0){fxKill=Math.max(before,.45+.55*flash);dopa.flashCD=.34;}
+  else fxKill=before;
 }
 // Hitstop only slows local solo simulation (stepSurvival and monster animation), never look, HUD, audio or co-op.
 function dopaHitstop(seconds){if(NET.inGame||!(seconds>0))return;hitstopT=Math.max(hitstopT,seconds);dopa.hitstops++;dopa.lastHitstop=seconds;}
@@ -2325,7 +2434,8 @@ function dopaSnapshot(){
     beacons:beacons.map(b=>({on:b.on,angle:b.angle,intensity:b.intensity})),
     chaosLights:practicalLights.map((l,i)=>({index:i,visible:l.visible,base:l.userData.base===undefined?null:l.userData.base,level:l.userData.level,shelter:!!l.userData.shelter})),
     dopamine:{hitstops:dopa.hitstops,lastHitstop:dopa.lastHitstop,emergency:dopa.emergency,shock:dopa.shock,kills:dopa.kills,lastKill:dopa.lastKill,
-      damage:dopa.damage,damageHits:dopa.damageHits,liveEmissive:dopa.live?dopa.live.emissiveIntensity:null,liveBase:dopa.liveBase}};
+      damage:dopa.damage,damageHits:dopa.damageHits,liveEmissive:dopa.live?dopa.live.emissiveIntensity:null,liveBase:dopa.liveBase,
+      killFlash:typeof fxKill!=='undefined'?fxKill:null,tintedCones:dopa.cones.size}};
 }
 function fnv(str){let h=0x811c9dc5;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,0x01000193)>>>0;}return h.toString(36);}
 function encodeResult(r){const j=JSON.stringify({n:r.name,t:r.time,k:r.kills,a:r.at});const b=btoa(unescape(encodeURIComponent(j))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');return 'HOLLOW-'+b+'-'+fnv('hollow|'+j);}
@@ -2419,11 +2529,14 @@ function snapshot(){return {
   state,seed:worldSeed,position:{x:P.pos.x,y:P.pos.y,z:P.pos.z},yaw:P.yaw,pitch:P.pitch,onGround:P.onGround,crouching:P.crouching,running:P.running,hidden:P.hidden,health:P.health,stamina:P.stamina,torchOn,battery,
   weapon:weaponDefs[weaponIndex].id,mag,reserve,reloadT,aiming,elapsed,simulationTime,fuses,exitPowered,exitRelease,exitOpen,decoys,
   viewmodel:{weapons:weaponModels.filter(model=>model.visible).map(model=>model.userData.kind),torch:torch.visible,hand:hand.visible},
+  player:{speed:Math.hypot(P.vel.x,P.vel.z),sprint:P.sprint,stamina:P.stamina,exhausted:P.exhausted,sliding:slideT>0,strafe:P.strafe},
+  camera:{...camFX.snapshot(),y:camFX.pose.pos.y,x:camFX.pose.pos.x,roll:camFX.pose.rot.roll,pitch:camFX.pose.rot.pitch,fovAdd:camFX.pose.fov,fov:camera.fov,weaponZ:camFX.pose.weapon.z},
   injury:RULES.injuryLevel(P.health),audio:creatureAudio?creatureAudio.snapshot():null,
     horror:{...horror.snapshot(),effects:preferences.effects,notesRead:readNotes.size},
       flashes:{muzzle:!!muzzleFlash?.visible,world:muzzleLight.userData.level,weapon:fpFlash.userData.level,partner:avFlash.userData.level},
     records:caseNotes.map(n=>({id:n.id,x:n.x,z:n.z,title:n.title})),
     // intensity keeps the r128 light level; candela is the physical value sent to the renderer.
+    atmosphere:atm?atm.snapshot():null,postfx:fx?fx.snapshot():null,
     lighting:practicalLights.map(l=>({visible:l.visible,intensity:l.userData.level,candela:l.intensity,x:l.position.x,z:l.position.z})),
     notes:captionText,
     ...dopaSnapshot(),
@@ -2445,7 +2558,7 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     silence:()=>{hideMonsters();grace=100000;},
     enemy:(index,pose)=>{const m=monsters[index];m.pos.set(pose.x,0,pose.z);m.g.position.copy(m.pos);m.hp=m.stats.hp;m.dead=false;m.spawned=true;m.g.visible=true;m.state=pose.state||'wander';m.path=[];m.yaw=pose.yaw||0;m.g.rotation.set(0,m.yaw,0);m.lastSeen.copy(P.pos);m.attackT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;m.stalkT=0;m.watchT=0;m.lost=0;m.spotCD=0;m.repath=0;m.lungeT=0;m.voiceT=3;grace=0;},
     health:value=>{P.health=finiteNumber(value,100,0,100);damageT=0;},torch:value=>{torchOn=value;},
-    advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));}updateHUD();updateHealthVignette();},
+    advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateCameraRig(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));}updateHUD();updateHealthVignette();},
     hit:(index,damage)=>hitMonster(monsters[index],damage),
     action:inputAction,pause,quality:applyQuality,pickupReach,
     path:(index,x,z)=>{setPathTo(monsters[index],x,z);return monsters[index].path.map(cell=>cell.slice());},
