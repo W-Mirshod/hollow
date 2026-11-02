@@ -183,8 +183,8 @@ function create(opts = {}) {
   const flag = v => (v === undefined ? !reduced : v !== false) ? 1 : 0;
   const I = { baseExposure: uniform(1), effects: uniform(flag(opts.effects)), motion: uniform(flag(opts.motion)),
     grainScale: uniform(1), bloomStrength: uniform(0.55), bloomRadius: uniform(0.35), bloomThreshold: uniform(1), bloomKnee: uniform(0.5),
-    lensDirt: uniform(2), contrast: uniform(0.16), chromatic: uniform(0.0025),
-    shadowTint: uniform(new Vector3(0.9, 1.0, 1.07)), highlightTint: uniform(new Vector3(1.07, 1.0, 0.88)) };
+    lensDirt: uniform(2), contrast: uniform(0.22), chromatic: uniform(0.0025),
+    shadowTint: uniform(new Vector3(0.92, 0.98, 1.08)), highlightTint: uniform(new Vector3(1.08, 1.0, 0.86)) };
   let dirtTex = null, chain = null, quality = 'low', disposed = false, lastTime = 0, failure = null;
   const tiers = {};
   for (const k of Object.keys(TIERS)) tiers[k] = Object.assign({}, TIERS[k], opts.tiers && opts.tiers[k]);
