@@ -95,13 +95,14 @@ test('sprinting into exhaustion gasps, then breathes hard and ragged',async({pag
   await page.evaluate(()=>HollowTest.pose({x:45,z:30,yaw:Math.PI}));
   await page.keyboard.down('KeyW');await page.keyboard.down('ShiftLeft');
   try{
-    // Exhaustion is the frame the bar hits zero; it starts refilling on the next one.
+    // The gasp belongs to the simulation step that empties the bar (onExhausted), not to a rendered frame.
     const spent=await page.evaluate(()=>{
-      const exhausted=s=>s.player?s.player.exhausted:s.stamina===0;
-      for(let i=0;i<240&&!exhausted(HollowGame.snapshot());i++)HollowTest.advance(.05);
+      for(let i=0;i<240&&!HollowGame.snapshot().player.exhausted;i++)HollowTest.advance(.05);
       return HollowGame.snapshot();
     });
+    expect(spent.player.exhausted).toBe(true);
     expect(spent.stamina,'Sprinting empties the stamina bar').toBe(0);
+    expect(cues(spent.audioLog,'player','gasp','exhausted'),'The exhaustion step gasps').toHaveLength(1);
     let heard;
     await expect.poll(async()=>{heard=await snapshot(page);const b=heard.playerAudio.breathing;return b.exhausted&&b.rate>35;},{intervals:[50,100,250]}).toBe(true);
     expect(heard.playerAudio.breathing.level,'Exhausted breathing is audible').toBeGreaterThan(0);
