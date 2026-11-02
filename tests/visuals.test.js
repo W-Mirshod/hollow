@@ -447,6 +447,89 @@ test('procedural PBR pixels vary deterministically with cached linear normal/rou
   }
 });
 
+function canvasPixels(c) {
+  return c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+}
+
+// Mean absolute RGB step between two pixel columns (or rows) of a square canvas.
+function edgeStep(data, n, a, b, rows) {
+  let sum = 0;
+  for (let k = 0; k < n; k++) {
+    const p = (rows ? a * n + k : k * n + a) * 4, q = (rows ? b * n + k : k * n + b) * 4;
+    sum += Math.abs(data[p] - data[q]) + Math.abs(data[p + 1] - data[q + 1]) + Math.abs(data[p + 2] - data[q + 2]);
+  }
+  return sum / n;
+}
+
+test('ward surfaces are coherent, tileable, deterministic PBR sets sized by the quality tier', () => {
+  assert.deepEqual({ ...V.configure({ quality: 'nonsense' }) }, { quality: 'low' });
+  assert.throws(() => V.surface('ward-nothing'));
+  const fresh = { ...context, window: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/visuals.js'), 'utf8'), fresh);
+  const n = 128;
+  for (const kind of ['ward-wall', 'ward-floor', 'ward-ceiling']) {
+    const set = V.surface(kind, { size: n });
+    assert.equal(V.surface(kind, { size: n }), set, `${kind} is cached`);
+    assert.equal(set.size, n);
+    const albedo = canvasPixels(set.albedo), normal = canvasPixels(set.normal), roughness = canvasPixels(set.roughness);
+    const roughValues = new Set();
+    let tilted = 0, minRough = 255, maxRough = 0;
+    for (let i = 0; i < normal.length; i += 4) {
+      const x = normal[i] / 255 * 2 - 1, y = normal[i + 1] / 255 * 2 - 1, z = normal[i + 2] / 255 * 2 - 1;
+      assert.ok(Math.abs(Math.hypot(x, y, z) - 1) < 0.02, `${kind} normal is not unit length`);
+      assert.ok(z > 0, `${kind} normal points into the surface`);
+      if (Math.hypot(x, y) > 0.03) tilted++;
+      assert.equal(albedo[i + 3], 255); assert.equal(normal[i + 3], 255); assert.equal(roughness[i + 3], 255);
+      roughValues.add(roughness[i]); minRough = Math.min(minRough, roughness[i]); maxRough = Math.max(maxRough, roughness[i]);
+    }
+    assert.ok(tilted > n * n * 0.02, `${kind} has almost no relief`);
+    assert.ok(roughValues.size > 24 && maxRough - minRough > 100, `${kind} roughness is flat`);
+    // Maps wrap without seams: the wrap step is no larger than ordinary neighbouring steps (walls tile horizontally).
+    for (const rows of kind === 'ward-wall' ? [false] : [false, true]) {
+      let inner = 0;
+      for (let k = 0; k < n - 1; k++) inner += edgeStep(albedo, n, k, k + 1, rows);
+      assert.ok(edgeStep(albedo, n, n - 1, 0, rows) < (inner / (n - 1)) * 2.5 + 2, `${kind} shows a seam`);
+    }
+    const again = fresh.window.HollowVisuals.surface(kind, { size: n });
+    for (const map of ['albedo', 'normal', 'roughness']) assert.deepEqual(canvasPixels(again[map]), canvasPixels(set[map]), `${kind} ${map} is not deterministic`);
+  }
+  // Floors carry glossy standing water beside rough grout; the wall's enamel wainscot is glossier than its matte paint.
+  const floor = canvasPixels(V.surface('ward-floor', { size: n }).roughness);
+  let wet = 0;
+  for (let i = 0; i < floor.length; i += 4) if (floor[i] < 0.12 * 255) wet++;
+  assert.ok(wet > 0 && wet < n * n * 0.35, 'standing water is missing or floods the floor');
+  const wall = canvasPixels(V.surface('ward-wall', { size: n }).roughness), rowMean = y => {
+    let sum = 0; for (let x = 0; x < n; x++) sum += wall[(y * n + x) * 4]; return sum / n;
+  };
+  assert.ok(rowMean(Math.round(n * 0.75)) + 40 < rowMean(Math.round(n * 0.25)), 'wainscot enamel is not glossier than the upper paint');
+  const macro = V.surface('ward-macro', { size: 64 });
+  const m = canvasPixels(macro.map);
+  for (let c = 0; c < 3; c++) {
+    let lo = 255, hi = 0;
+    for (let i = c; i < m.length; i += 4) { lo = Math.min(lo, m[i]); hi = Math.max(hi, m[i]); }
+    assert.ok(hi - lo > 200, `macro channel ${c} lacks range`);
+  }
+});
+
+test('painted canvases derive matching relief and paint-driven roughness maps', () => {
+  const [w, h] = [64, 32], source = context.document.createElement('canvas'), x = source.getContext('2d');
+  source.width = w; source.height = h;
+  const img = x.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    const v = (i % w) >= 20 && (i % w) < 40 ? 220 : 40;
+    img.data[i * 4] = v; img.data[i * 4 + 1] = v * 0.8; img.data[i * 4 + 2] = 30; img.data[i * 4 + 3] = 255;
+  }
+  x.putImageData(img, 0, 0);
+  const maps = V.deriveMaps(source, { roughness: (r, g, b, l) => l > 0.5 ? 0.25 : 0.8 });
+  const normal = canvasPixels(maps.normal), rough = canvasPixels(maps.roughness);
+  assert.equal(maps.normal.width, w); assert.equal(maps.roughness.height, h);
+  const at = (data, px, py) => data[(py * w + px) * 4];
+  assert.equal(at(rough, 30, 5), Math.round(0.25 * 255)); assert.equal(at(rough, 5, 5), Math.round(0.8 * 255));
+  // The bright band is raised: its left edge faces -x (red < 128), its right edge +x.
+  assert.ok(at(normal, 20, 5) < 110 && at(normal, 39, 5) > 146);
+  assert.equal(at(normal, 30, 5), 128);
+});
+
 test('ward fabrics carry colored stains and signs identify the facility below the manor', () => {
   const room = V.decorateRoom(THREE, { type: 'infirmary' }), lines = [];
   let foundFabric = false;

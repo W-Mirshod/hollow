@@ -62,6 +62,479 @@
     return out;
   }
 
+  // ---------- tileable raster toolkit for coherent procedural PBR surfaces ----------
+  // Albedo, height and roughness come from the same features, so grout, cracks, chipped paint and puddles light
+  // correctly under the moving torch. Every buffer is periodic: maps tile without seams. Pure pixel math (no
+  // canvas paths), so node tests see exactly the pixels a browser uploads.
+  const DETAIL = { low: 0, medium: 1, high: 2 };
+  let detail = 0;
+  const surfaces = new Map();
+  // Branch clamps: these run per pixel and must not depend on Math.max/min call overhead.
+  const sat = v => v < 0 ? 0 : v > 1 ? 1 : v;
+  const smoothstep = (a, b, v) => { const t = sat((v - a) / (b - a)); return t * t * (3 - 2 * t); };
+
+  // Octaves are [cellsX, cellsY, amplitude]; unequal cell counts give streaks.
+  function noiseField(n, seed, octaves) {
+    const out = new Float32Array(n * n), random = seeded(seed);
+    const x0 = new Int32Array(n), x1 = new Int32Array(n), sx = new Float32Array(n);
+    for (const [cx, cy, amp] of octaves) {
+      const lat = new Float32Array(cx * cy);
+      for (let i = 0; i < lat.length; i++) lat[i] = random();
+      for (let x = 0; x < n; x++) {
+        const f = x * cx / n, i = Math.floor(f), t = f - i;
+        x0[x] = i % cx; x1[x] = (i + 1) % cx; sx[x] = t * t * (3 - 2 * t);
+      }
+      for (let y = 0; y < n; y++) {
+        const f = y * cy / n, j = Math.floor(f), t = f - j, sy = t * t * (3 - 2 * t);
+        const r0 = (j % cy) * cx, r1 = ((j + 1) % cy) * cx, row = y * n;
+        for (let x = 0; x < n; x++) {
+          const s = sx[x], a = lat[r0 + x0[x]], b = lat[r0 + x1[x]], c = lat[r1 + x0[x]], d = lat[r1 + x1[x]];
+          const top = a + (b - a) * s;
+          out[row + x] += (top + (c + (d - c) * s - top) * sy) * amp;
+        }
+      }
+    }
+    return out;
+  }
+
+  // Bilinear periodic upsample (m -> n): cheap large-scale fields.
+  function upsample(src, m, n) {
+    const out = new Float32Array(n * n), k = m / n, i0 = new Int32Array(n), i1 = new Int32Array(n), tx = new Float32Array(n);
+    for (let x = 0; x < n; x++) { const f = x * k, i = Math.floor(f); i0[x] = i % m; i1[x] = (i + 1) % m; tx[x] = f - i; }
+    for (let y = 0; y < n; y++) {
+      const r0 = i0[y] * m, r1 = i1[y] * m, ty = tx[y], row = y * n;
+      for (let x = 0; x < n; x++) {
+        const a = src[r0 + i0[x]], c = src[r1 + i0[x]], t = tx[x];
+        const top = a + (src[r0 + i1[x]] - a) * t;
+        out[row + x] = top + (c + (src[r1 + i1[x]] - c) * t - top) * ty;
+      }
+    }
+    return out;
+  }
+
+  // Smooth bump: 1 at v = 0, 0 beyond |v| >= w (a cheap stand-in for a gaussian in per-pixel loops).
+  const bump = (v, w) => { const t = v * v / (w * w); return t >= 1 ? 0 : (1 - t) * (1 - t); };
+
+  // Anti-aliased capsule from (x0,y0) to (x1,y1), radius r px, wrapping around the tile.
+  function stroke(n, x0, y0, x1, y1, r, visit) {
+    const dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy || 1e-9;
+    const minX = Math.floor(Math.min(x0, x1) - r - 1), maxX = Math.ceil(Math.max(x0, x1) + r + 1);
+    const minY = Math.floor(Math.min(y0, y1) - r - 1), maxY = Math.ceil(Math.max(y0, y1) + r + 1);
+    for (let y = minY; y <= maxY; y++) {
+      const row = (((y % n) + n) % n) * n;
+      for (let x = minX; x <= maxX; x++) {
+        const t = sat(((x - x0) * dx + (y - y0) * dy) / l2);
+        const px = x0 + t * dx - x, py = y0 + t * dy - y, cover = sat(r + 0.5 - Math.sqrt(px * px + py * py));
+        if (cover > 0) visit(row + (((x % n) + n) % n), cover, t);
+      }
+    }
+  }
+
+  // Wandering crack with thinner side branches, max-blended into mask.
+  function crack(n, random, mask, x, y, angle, steps, step, r) {
+    for (let i = 0; i < steps; i++) {
+      angle += (random() - 0.5) * 0.9;
+      const nx = x + Math.cos(angle) * step * (0.6 + random() * 0.8), ny = y + Math.sin(angle) * step * (0.6 + random() * 0.8);
+      const w = r * (1 - i / steps * 0.6);
+      stroke(n, x, y, nx, ny, w, (k, c) => { if (c > mask[k]) mask[k] = c; });
+      if (random() < 0.14 && steps > 4) crack(n, random, mask, nx, ny, angle + (random() < 0.5 ? 1 : -1) * (0.6 + random() * 0.7), Math.ceil(steps * 0.35), step * 0.8, r * 0.6);
+      x = nx; y = ny;
+    }
+  }
+
+  // Height (mm) -> tangent-space normal map; px/py are millimetres per pixel across/down the image.
+  function normalPixels(h, n, px, py, out) {
+    const data = out || new Uint8ClampedArray(n * n * 4), left = new Int32Array(n), right = new Int32Array(n);
+    for (let x = 0; x < n; x++) { left[x] = (x + n - 1) % n; right[x] = (x + 1) % n; }
+    const kx = -1 / (2 * px), ky = 1 / (2 * py);
+    for (let y = 0; y < n; y++) {
+      const up = left[y] * n, down = right[y] * n, row = y * n;
+      for (let x = 0; x < n; x++) {
+        const dx = (h[row + right[x]] - h[row + left[x]]) * kx, dy = (h[down + x] - h[up + x]) * ky;
+        const inv = 1 / Math.sqrt(dx * dx + dy * dy + 1), p = (row + x) * 4;
+        data[p] = (dx * inv * 0.5 + 0.5) * 255; data[p + 1] = (dy * inv * 0.5 + 0.5) * 255;
+        data[p + 2] = (inv * 0.5 + 0.5) * 255; data[p + 3] = 255;
+      }
+    }
+    return data;
+  }
+
+  function pixelCanvas(n, data) {
+    const [c, x] = canvas(n, n), img = x.createImageData(n, n);
+    img.data.set(data); x.putImageData(img, 0, 0); return c;
+  }
+
+  // rgb: 0..1 sRGB triplets; rough: 0..1; height: mm. Returns the canvas triplet the materials consume.
+  function surfaceCanvases(n, rgb, rough, height, px, py, strength) {
+    if (strength && strength !== 1) for (let i = 0; i < n * n; i++) height[i] *= strength;
+    const albedo = new Uint8ClampedArray(n * n * 4), r = new Uint8ClampedArray(n * n * 4);
+    for (let i = 0, p = 0; i < n * n; i++, p += 4) {
+      albedo[p] = rgb[i * 3] * 255; albedo[p + 1] = rgb[i * 3 + 1] * 255; albedo[p + 2] = rgb[i * 3 + 2] * 255; albedo[p + 3] = 255;
+      const v = rough[i]; r[p] = r[p + 1] = r[p + 2] = (v < 0.03 ? 0.03 : v > 1 ? 1 : v) * 255; r[p + 3] = 255;
+    }
+    return { albedo: pixelCanvas(n, albedo), normal: pixelCanvas(n, normalPixels(height, n, px, py)), roughness: pixelCanvas(n, r), size: n };
+  }
+
+  // Blackwater ward wall, one 3 m wide x 3.2 m tall face (image top = ceiling). Matte cream upper paint with an
+  // oxblood way-finding stripe, glossy teal enamel wainscot under the chair rail, a dark baseboard, rising damp,
+  // soot, ceiling leaks with tide marks, rust runs under pipes and brackets, peeling paint, cracks and trolley scuffs.
+  function wardWall(n, seed) {
+    const N = n * n, random = seeded(seed * 7919 + 17), at = y => 3.2 * (1 - (y + 0.5) / n);
+    const D = noiseField(n, seed + 1, [[48, 48, 0.3], [140, 140, 0.35], [360, 360, 0.35]]);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.42], [7, 7, 0.3], [17, 17, 0.17], [41, 41, 0.11]]), q, n);
+    const S = noiseField(n, seed + 3, [[40, 3, 0.55], [104, 5, 0.45]]);
+    const cracks = new Float32Array(N), rust = new Float32Array(N);
+    for (let i = 0; i < 5; i++) crack(n, random, cracks, random() * n, n * (0.1 + random() * 0.55), Math.PI * (0.3 + random() * 0.4), 9 + (random() * 9 | 0), n * 0.018, Math.max(0.6, n / 1100));
+    // Rust runs below the ceiling pipes and the chair-rail brackets (decorateWard puts them at 0.18/0.82 of a cell):
+    // tapered, streaky columns that fade as they run down.
+    const runs = [[0.18, 0.89, 0.22], [0.82, 0.89, 0.18], [0.12 + random() * 0.3, 2.96, 0.9], [0.55 + random() * 0.35, 2.96, 0.6]];
+    for (const [cx, from, len] of runs) {
+      const y0 = Math.round(n * (1 - from / 3.2)), y1 = Math.min(n - 1, Math.round(n * (1 - (from - len) / 3.2))), w0 = n * (0.006 + random() * 0.006);
+      for (let y = y0; y <= y1; y++) {
+        const t = (y - y0) / Math.max(1, y1 - y0), w = w0 * (1.15 - 0.75 * t) * (0.7 + 0.6 * S[y * n + (cx * n | 0)]);
+        const fade = Math.pow(1 - t, 0.8) * sat((y - y0) / (n * 0.01));
+        for (let x = Math.floor(cx * n - w * 3); x <= Math.ceil(cx * n + w * 3); x++) {
+          const k = y * n + ((x % n) + n) % n, dx = Math.abs(x - cx * n) / w;
+          const v = (dx < 1 ? 1 - dx * dx * 0.6 : dx < 3 ? 0.4 * (3 - dx) / 2 : 0) * fade * (0.45 + 0.55 * S[k]);
+          if (v > rust[k]) rust[k] = v;
+        }
+      }
+    }
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N);
+    const peelShift = (n * 0.37 | 0) + (n * 0.61 | 0) * n, stainShift = (n * 0.71 | 0) + (n * 0.19 | 0) * n;
+    for (let y = 0; y < n; y++) {
+      const hm = at(y), upper = hm >= 1.02, base = hm < 0.12;
+      const stripe = smoothstep(1.295, 1.3, hm) * (1 - smoothstep(1.375, 1.38, hm));
+      const soot = smoothstep(2.35, 3.2, hm), damp0 = 1 - smoothstep(0.12, 0.62, hm), leak = smoothstep(1.5, 3.1, hm);
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x, d = D[i], m = M[i], s = S[i];
+        const mp = M[(i + peelShift) % N], ms = M[(i + stainShift) % N];
+        let r, g, b, ro, h = (d - 0.5) * 1.4;
+        if (base) { r = 0.085; g = 0.095; b = 0.088; ro = 0.48; h += 1.2; }
+        else if (upper) { r = 0.62; g = 0.61; b = 0.54; ro = 0.86 + (d - 0.5) * 0.1; }
+        else { r = 0.19; g = 0.27; b = 0.25; ro = 0.3 + (d - 0.5) * 0.08; h += 0.7 - (d - 0.5) * 0.9; }
+        if (stripe > 0) { r += (0.34 - r) * stripe; g += (0.1 - g) * stripe; b += (0.085 - b) * stripe; ro += (0.55 - ro) * stripe; h += 0.35 * stripe - (d - 0.5) * 0.7 * stripe; }
+        const grain = 1 + (d - 0.5) * 0.16;
+        r *= grain; g *= grain; b *= grain;
+        // Peeling paint: exposed plaster with a raised, curled paint lip and a shadowed inner edge.
+        if (!base) {
+          const t = upper ? 0.64 - 0.1 * leak : 0.71, pv = mp * 0.82 + d * 0.18;
+          const inside = smoothstep(t, t + 0.006, pv), lip = bump(pv - t, 0.012), shade = bump(pv - t - 0.012, 0.012);
+          if (inside > 0 || lip > 0.01) {
+            const plaster = 0.5 + (d - 0.5) * 0.22;
+            r += (plaster * 1.03 - r) * inside; g += (plaster * 0.97 - g) * inside; b += (plaster * 0.85 - b) * inside;
+            ro += (0.95 - ro) * inside; h += -1.1 * inside + 0.7 * lip;
+            const dk = 0.3 * shade * inside + 0.12 * lip * (1 - inside);
+            r *= 1 - dk; g *= 1 - dk; b *= 1 - dk;
+          }
+        }
+        // Large-scale grime and soot from years of trolleys, hands and a failing boiler.
+        const grime = smoothstep(0.3, 0.78, m) * 0.34 + soot * (0.35 + 0.35 * mp);
+        r *= 1 - grime; g *= 1 - grime * 1.02; b *= 1 - grime * 1.08;
+        // Leaks from the ceiling: stain interior plus a hard tide line and a fainter older one.
+        const sv = ms + leak * 0.32 - 0.28 + (d - 0.5) * 0.05;
+        if (sv > 0.34) {
+          const inside = smoothstep(0.36, 0.42, sv), tide = bump(sv - 0.415, 0.016) + 0.45 * bump(sv - 0.5, 0.014);
+          r *= 1 - 0.16 * inside; g *= 1 - 0.22 * inside; b *= 1 - 0.36 * inside;
+          r *= 1 - 0.28 * tide; g *= 1 - 0.34 * tide; b *= 1 - 0.46 * tide;
+          ro -= 0.12 * inside; h -= 0.25 * tide;
+        }
+        // Drips run down from the leaks; fresh ones are still wet.
+        const drip = smoothstep(0.6, 0.8, s) * smoothstep(0.25, 0.6, ms + leak * 0.3) * (0.4 + 0.6 * leak);
+        if (drip > 0) { r *= 1 - 0.42 * drip; g *= 1 - 0.45 * drip; b *= 1 - 0.5 * drip; ro -= 0.4 * drip * (0.4 + 0.6 * smoothstep(0.5, 0.8, mp)); h += 0.2 * drip; }
+        // Chips and gurney scuffs through the wainscot enamel.
+        if (!upper && !base) {
+          // Trolley bumpers scrape a band at 0.4-0.65 m: pale abrasions and black rubber, both streaky.
+          const band = smoothstep(0.38, 0.45, hm) * (1 - smoothstep(0.6, 0.68, hm)), st = S[x * n + y];
+          const pale = smoothstep(0.66, 0.8, st) * band * (0.4 + 0.6 * m), rubber = smoothstep(0.7, 0.86, S[((x + (n >> 1)) % n) * n + y]) * band;
+          if (pale > 0) { r += (0.4 - r) * pale * 0.65; g += (0.4 - g) * pale * 0.65; b += (0.36 - b) * pale * 0.65; ro += (0.75 - ro) * pale; h -= 0.35 * pale; }
+          if (rubber > 0) { r *= 1 - 0.55 * rubber; g *= 1 - 0.55 * rubber; b *= 1 - 0.52 * rubber; ro += (0.55 - ro) * rubber; }
+          const chip = smoothstep(0.83, 0.86, D[(i + stainShift) % N] * 0.55 + s * 0.45 + (1.02 - hm) * 0.05);
+          if (chip > 0) { r += (0.58 - r) * chip; g += (0.55 - g) * chip; b += (0.48 - b) * chip; ro += (0.92 - ro) * chip; h -= 0.9 * chip; }
+        }
+        // Rising damp with a crust of salt at its wavy top edge.
+        const dampEdge = damp0 * (0.55 + 0.45 * m);
+        if (dampEdge > 0.01 && !base) {
+          const dmp = smoothstep(0.25, 0.6, dampEdge), salt = bump(dampEdge - 0.3, 0.06) * (0.5 + 0.5 * d);
+          r *= 1 - 0.38 * dmp; g *= 1 - 0.36 * dmp; b *= 1 - 0.32 * dmp; ro -= 0.25 * dmp * (upper ? 1 : 0.4);
+          r += (0.62 - r) * salt * 0.3; g += (0.61 - g) * salt * 0.3; b += (0.57 - b) * salt * 0.3; h += 0.4 * salt;
+        }
+        const ru = rust[i];
+        if (ru > 0) { const v = Math.min(1, ru) * 0.85; r += (0.3 - r) * v; g += (0.14 - g) * v; b += (0.065 - b) * v; ro += (0.9 - ro) * v; h += 0.25 * v; }
+        const c = cracks[i];
+        if (c > 0) { r *= 1 - 0.6 * c; g *= 1 - 0.62 * c; b *= 1 - 0.64 * c; ro += (0.95 - ro) * c; h -= 2.2 * c; }
+        rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b);
+        rough[i] = ro; height[i] = h;
+      }
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3200 / n, 1.6);
+  }
+
+  // One 3 m floor cell of 37.5 cm institutional tiles: muted cream / grey-green checker, terrazzo flecks, grimy
+  // grout, bevelled and slightly tilted tiles (so reflections break up), cracks, chipped corners, one missing tile,
+  // dried stains and broad standing water that turns tiles into dark glossy mirrors.
+  function wardFloor(n, seed) {
+    const N = n * n, T = 8, tile = n / T, random = seeded(seed * 104729 + 3);
+    const D = noiseField(n, seed + 1, [[64, 64, 0.25], [192, 192, 0.35], [n >> 1, n >> 1, 0.4]]);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.45], [6, 6, 0.3], [13, 13, 0.15], [29, 29, 0.1]]), q, n);
+    const cracks = new Float32Array(N);
+    const tiles = [];
+    const pitch = 3000 / n;
+    for (let i = 0; i < T * T; i++) tiles.push({ tone: (random() - 0.5) * 0.1, tx: (random() - 0.5) * 0.03 * pitch, ty: (random() - 0.5) * 0.03 * pitch,
+      chip: random() < 0.22 ? (random() * 4 | 0) : -1, missing: false, worn: random() });
+    tiles[(1 + random() * (T - 2) | 0) * T + (1 + random() * (T - 2) | 0)].missing = true;
+    for (let i = 0; i < 6; i++) {
+      const tx = random() * T | 0, ty = random() * T | 0;
+      crack(n, random, cracks, (tx + 0.1 + random() * 0.8) * tile, (ty + 0.1 + random() * 0.8) * tile, random() * Math.PI * 2, 5 + (random() * 5 | 0), tile * 0.16, Math.max(0.55, n / 1100));
+    }
+    const gw = Math.max(1.1, tile * 0.03), bevel = Math.max(1.5, tile * 0.05);
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N);
+    const wetShift = (n * 0.43 | 0) + (n * 0.29 | 0) * n, stainShift = (n * 0.13 | 0) + (n * 0.77 | 0) * n;
+    for (let y = 0; y < n; y++) {
+      const ty = Math.floor(y / tile), ly = y + 0.5 - ty * tile;
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x, tx = Math.floor(x / tile), lx = x + 0.5 - tx * tile, info = tiles[ty * T + tx];
+        const d = D[i], m = M[i], mw = M[(i + wetShift) % N], mst = M[(i + stainShift) % N];
+        const edge = Math.min(lx, tile - lx, ly, tile - ly);
+        const grout = 1 - smoothstep(gw * 0.5, gw * 0.5 + 1, edge);
+        let r, g, b, ro, h;
+        if (info.missing) {
+          // Bare screed with trowel ridges of old adhesive.
+          const ridge = 0.5 + 0.5 * Math.sin((lx + ly) * 0.9);
+          r = 0.26 + d * 0.08; g = 0.24 + d * 0.07; b = 0.2 + d * 0.06; ro = 0.93; h = -3 + ridge * 0.35 + (d - 0.5) * 0.4;
+          r *= 0.85 + ridge * 0.15; g *= 0.85 + ridge * 0.15; b *= 0.85 + ridge * 0.15;
+        } else {
+          const cream = (tx + ty) & 1, tone = 1 + info.tone + (d - 0.5) * 0.08;
+          r = (cream ? 0.6 : 0.29) * tone; g = (cream ? 0.58 : 0.325) * tone; b = (cream ? 0.51 : 0.305) * tone;
+          // Terrazzo flecks.
+          const fleck = D[(i * 7 + 13) % N];
+          if (fleck > 0.83) { const v = (fleck - 0.83) * 5; r += 0.18 * v; g += 0.17 * v; b += 0.15 * v; }
+          else if (fleck < 0.16) { const v = (0.16 - fleck) * 5; r *= 1 - 0.45 * v; g *= 1 - 0.45 * v; b *= 1 - 0.42 * v; }
+          ro = 0.44 + (d - 0.5) * 0.1 + info.worn * 0.12;
+          const bev = smoothstep(gw * 0.5, gw * 0.5 + bevel, edge);
+          h = -0.9 * (1 - bev) + (lx - tile / 2) * info.tx + (ly - tile / 2) * info.ty + (d - 0.5) * 0.12;
+          // Dirt packed along tile edges.
+          const rim = (1 - smoothstep(gw, gw + tile * 0.14, edge)) * (0.45 + 0.55 * m);
+          r *= 1 - 0.38 * rim; g *= 1 - 0.38 * rim; b *= 1 - 0.36 * rim; ro += 0.18 * rim;
+          if (info.chip >= 0) {
+            const cx = info.chip & 1 ? tile : 0, cy = info.chip & 2 ? tile : 0;
+            const chip = 1 - smoothstep(tile * 0.13, tile * 0.13 + 1.2, Math.hypot(lx - cx, ly - cy) + (d - 0.5) * tile * 0.08);
+            if (chip > 0) { r += (0.2 - r) * chip; g += (0.19 - g) * chip; b += (0.16 - b) * chip; ro += (0.95 - ro) * chip; h -= 1.6 * chip; }
+          }
+        }
+        if (grout > 0) { r += (0.12 - r) * grout; g += (0.115 - g) * grout; b += (0.1 - b) * grout; ro += (0.94 - ro) * grout; h += (-1.8 + (d - 0.5) * 0.3 - h) * grout; }
+        const grime = smoothstep(0.32, 0.8, m) * 0.36;
+        r *= 1 - grime; g *= 1 - grime; b *= 1 - grime * 1.06; ro += grime * 0.12;
+        // Dried stains: rust-brown and blackened blood.
+        const st = smoothstep(0.7, 0.735, mst + (d - 0.5) * 0.06) + smoothstep(0.86, 0.9, D[(i * 11 + 5) % N]) * smoothstep(0.6, 0.68, mst);
+        if (st > 0) { const v = Math.min(1, st) * 0.75; r += (0.16 - r) * v; g += (0.06 - g) * v; b += (0.045 - b) * v; ro += (0.62 - ro) * v; }
+        const c = cracks[i] * (info.missing ? 0 : 1);
+        if (c > 0) { r *= 1 - 0.65 * c; g *= 1 - 0.65 * c; b *= 1 - 0.65 * c; ro += (0.95 - ro) * c; h -= 1.1 * c; }
+        // Standing water: darker, near-mirror, and flat (it fills grout and cracks).
+        const wv = mw + (d - 0.5) * 0.035, wet = smoothstep(0.585, 0.64, wv);
+        if (wet > 0) {
+          const damp = smoothstep(0.52, 0.585, wv) * (1 - wet);
+          r *= 1 - 0.5 * wet - 0.18 * damp; g *= 1 - 0.48 * wet - 0.18 * damp; b *= 1 - 0.44 * wet - 0.16 * damp;
+          ro += (0.05 - ro) * wet; ro -= 0.15 * damp; h += (-0.9 - h) * wet * 0.92;
+        } else {
+          const damp = smoothstep(0.52, 0.585, wv);
+          r *= 1 - 0.18 * damp; g *= 1 - 0.18 * damp; b *= 1 - 0.16 * damp; ro -= 0.15 * damp;
+        }
+        rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b);
+        rough[i] = ro; height[i] = h;
+      }
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3000 / n, 1.4);
+  }
+
+  // One 3 m ceiling cell of 60 cm acoustic tiles in a rusting T-bar grid: fissured board, sagging and water-ringed
+  // tiles, black mould, a broken corner and one missing tile opening onto the dark void above.
+  function wardCeiling(n, seed) {
+    const N = n * n, T = 5, tile = n / T, random = seeded(seed * 15485863 + 7);
+    const D = noiseField(n, seed + 1, [[60, 60, 0.5], [150, 150, 0.5]]);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.45], [7, 7, 0.3], [15, 15, 0.15], [33, 33, 0.1]]), q, n);
+    const F = noiseField(n, seed + 3, [[24, 24, 0.6], [52, 52, 0.4]]);
+    const tiles = [];
+    for (let i = 0; i < T * T; i++) tiles.push({ sag: random() * random() * 5, tone: (random() - 0.5) * 0.12, missing: false, broken: random() < 0.12 });
+    tiles[(random() * T | 0) * T + (random() * T | 0)].missing = true;
+    const bar = Math.max(1.5, tile * 0.04);
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N);
+    const stainShift = (n * 0.33 | 0) + (n * 0.57 | 0) * n;
+    for (let y = 0; y < n; y++) {
+      const ty = Math.floor(y / tile), ly = y + 0.5 - ty * tile;
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x, tx = Math.floor(x / tile), lx = x + 0.5 - tx * tile, info = tiles[ty * T + tx];
+        const d = D[i], m = M[i], ms = M[(i + stainShift) % N];
+        const edge = Math.min(lx, tile - lx, ly, tile - ly), tbar = 1 - smoothstep(bar * 0.5, bar * 0.5 + 1, edge);
+        const u = lx / tile * 2 - 1, v = ly / tile * 2 - 1;
+        let r, g, b, ro, h;
+        const hole = info.missing || (info.broken && u + v > 1.15 + (d - 0.5) * 0.25);
+        if (hole) { r = 0.02; g = 0.018; b = 0.016; ro = 1; h = -22; }
+        else {
+          const fissure = (1 - smoothstep(0.006, 0.022, Math.abs(F[i] - 0.5))) * smoothstep(0.48, 0.62, D[(i * 13 + 29) % N]);
+          const base = 0.5 + info.tone + (d - 0.5) * 0.08;
+          r = base; g = base * 0.97; b = base * 0.88; ro = 0.95;
+          r *= 1 - 0.35 * fissure; g *= 1 - 0.35 * fissure; b *= 1 - 0.35 * fissure;
+          h = info.sag * (1 - u * u) * (1 - v * v) - 0.35 * fissure + (d - 0.5) * 0.12;
+          // Water rings and mould.
+          const sv = ms + info.sag * 0.03;
+          if (sv > 0.55) {
+            const inside = smoothstep(0.55, 0.6, sv), ring = bump(sv - 0.6, 0.02) + 0.6 * bump(sv - 0.68, 0.017);
+            r *= 1 - 0.16 * inside - 0.28 * ring; g *= 1 - 0.22 * inside - 0.34 * ring; b *= 1 - 0.34 * inside - 0.44 * ring;
+            const mould = smoothstep(0.74, 0.8, D[(i * 5 + 3) % N] * 0.45 + sv * 0.6) * 0.8;
+            r *= 1 - 0.8 * mould; g *= 1 - 0.76 * mould; b *= 1 - 0.8 * mould;
+          }
+        }
+        if (tbar > 0) {
+          const rustSpot = smoothstep(0.62, 0.75, m * 0.6 + d * 0.4);
+          r += (0.42 - r) * tbar; g += (0.41 - g) * tbar; b += (0.38 - b) * tbar; ro += (0.48 - ro) * tbar; h += (2.5 - h) * tbar;
+          r += (0.3 - r) * rustSpot * tbar; g += (0.15 - g) * rustSpot * tbar; b += (0.07 - b) * rustSpot * tbar; ro += 0.35 * rustSpot * tbar;
+        }
+        const grime = smoothstep(0.35, 0.85, m) * 0.4;
+        r *= 1 - grime; g *= 1 - grime; b *= 1 - grime;
+        rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b);
+        rough[i] = ro; height[i] = h;
+      }
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3000 / n, 1.8);
+  }
+
+  // Three independent smooth periodic fields (R standing water, G grime, B gloss) for world-space sampling: large-scale
+  // wear that never repeats with the 3 m surface maps. Returned as {map} (raw data, not colour).
+  function wardMacro(n, seed) {
+    const data = new Uint8ClampedArray(n * n * 4);
+    [[[3, 3, 0.45], [6, 6, 0.3], [13, 13, 0.17], [29, 29, 0.08]], [[2, 2, 0.4], [5, 5, 0.33], [11, 11, 0.17], [23, 23, 0.1]],
+      [[4, 4, 0.5], [9, 9, 0.3], [21, 21, 0.2]]].forEach((octaves, c) => {
+      const f = noiseField(n, seed + 11 + c, octaves);
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < f.length; i++) { if (f[i] < lo) lo = f[i]; if (f[i] > hi) hi = f[i]; }
+      for (let i = 0; i < f.length; i++) data[i * 4 + c] = (f[i] - lo) / (hi - lo || 1) * 255;
+    });
+    for (let i = 3; i < data.length; i += 4) data[i] = 255;
+    return { map: pixelCanvas(n, data), size: n };
+  }
+
+  // ---------- viewmodel finishes ----------
+  // One periodic tile spans 10 cm of a weapon (batch() box-projects UVs), so machining marks, stipple and grain read at
+  // arm's length. Albedo is a near-white modulation of the material colour; heights are millimetres.
+  function finish(n, fill) {
+    const N = n * n, rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N);
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const i = y * n + x, [v, ro, h] = fill(i, x, y);
+      rgb[i * 3] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = sat(v); rough[i] = ro; height[i] = h;
+    }
+    return surfaceCanvases(n, rgb, rough, height, 100 / n, 100 / n, 1);
+  }
+
+  // Parkerized steel: phosphate speckle, machining lines along the bore axis, polished wear and bright scratches.
+  function gunMetal(n, seed) {
+    const random = seeded(seed * 2654435761 + 1), scratch = new Float32Array(n * n);
+    const D = noiseField(n, seed + 1, [[64, 64, 0.45], [n >> 1, n >> 1, 0.55]]);
+    const M = noiseField(n, seed + 2, [[3, 3, 0.5], [7, 7, 0.3], [15, 15, 0.2]]);
+    const L = noiseField(n, seed + 3, [[2, n >> 1, 0.6], [3, n >> 2, 0.4]]);
+    for (let i = 0; i < 46; i++) {
+      const x = random() * n, y = random() * n, a = random() * Math.PI, len = n * (0.04 + random() * 0.18);
+      stroke(n, x, y, x + Math.cos(a) * len, y + Math.sin(a) * len, 0.35 + random() * 0.4, (k, c, t) => {
+        const v = c * (0.35 + 0.65 * Math.sin(t * Math.PI)); if (v > scratch[k]) scratch[k] = v;
+      });
+    }
+    return finish(n, i => {
+      const d = D[i], l = L[i], wear = smoothstep(0.6, 0.8, M[i]), s = scratch[i];
+      let v = 0.8 + (d - 0.5) * 0.16 + (l - 0.5) * 0.08, ro = 0.52 + (d - 0.5) * 0.24 + (l - 0.5) * 0.12;
+      v += (0.97 - v) * wear * 0.55; ro += (0.3 - ro) * wear * 0.8;
+      v += (1 - v) * s; ro += (0.16 - ro) * s;
+      return [v, ro, (d - 0.5) * 0.07 + (l - 0.5) * 0.06 - s * 0.09];
+    });
+  }
+
+  // Stippled grip polymer, worn smooth and slightly glossy where hands rub it.
+  function gunPolymer(n, seed) {
+    const S = noiseField(n, seed + 1, [[48, 48, 0.35], [96, 96, 0.4], [n >> 1, n >> 1, 0.25]]);
+    const M = noiseField(n, seed + 2, [[3, 3, 0.5], [8, 8, 0.3], [17, 17, 0.2]]);
+    return finish(n, i => {
+      const st = S[i], scuff = smoothstep(0.62, 0.82, M[i]);
+      return [0.8 + (st - 0.5) * 0.2 + scuff * 0.1, 0.74 + (st - 0.5) * 0.22 - scuff * 0.26, (st - 0.5) * 0.6 * (1 - scuff * 0.7)];
+    });
+  }
+
+  // Varnished walnut: thin late-wood lines, fibres and fine open pores along the stock, rubbed dull on the high spots.
+  function gunWood(n, seed) {
+    const G = noiseField(n, seed + 1, [[2, 24, 0.5], [3, 56, 0.3], [5, 120, 0.2]]);
+    const F = noiseField(n, seed + 2, [[4, n >> 1, 0.6], [8, n >> 1, 0.4]]), P = noiseField(n, seed + 3, [[n >> 2, n >> 1, 1]]);
+    const M = noiseField(n, seed + 4, [[3, 3, 0.6], [7, 7, 0.4]]);
+    return finish(n, (i, x, y) => {
+      const g = G[i], late = smoothstep(0.72, 1, 0.5 + 0.5 * Math.sin((y / n * 9 + g * 2.2) * TAU));
+      const pore = smoothstep(0.76, 0.9, P[i]), fibre = F[i] - 0.5, rub = smoothstep(0.62, 0.8, M[i]);
+      return [0.86 - late * 0.3 - pore * 0.22 + fibre * 0.12 + (g - 0.5) * 0.08, 0.38 + late * 0.08 + pore * 0.3 + rub * 0.2,
+        fibre * 0.05 - late * 0.03 - pore * 0.08];
+    });
+  }
+
+  function gunRubber(n, seed) {
+    const D = noiseField(n, seed + 1, [[32, 32, 0.4], [n >> 1, n >> 1, 0.6]]);
+    return finish(n, i => { const d = D[i]; return [0.85 + (d - 0.5) * 0.12, 0.88 + (d - 0.5) * 0.12, (d - 0.5) * 0.05]; });
+  }
+
+  // Basket-woven glove and sleeve fabric, 64 threads per 10 cm.
+  function gunFabric(n, seed) {
+    const D = noiseField(n, seed + 1, [[16, 16, 0.5], [n >> 1, n >> 1, 0.5]]), k = 64;
+    return finish(n, (i, x, y) => {
+      const u = x / n * k, v = y / n * k, fu = u - Math.floor(u), fv = v - Math.floor(v);
+      const h = (Math.floor(u) + Math.floor(v)) & 1 ? Math.sin(fv * Math.PI) : Math.sin(fu * Math.PI), d = D[i];
+      return [0.78 + h * 0.12 + (d - 0.5) * 0.14, 0.92 + (d - 0.5) * 0.08, h * 0.12 + (d - 0.5) * 0.04];
+    });
+  }
+
+  const SURFACES = {
+    'ward-wall': [wardWall, [512, 1024, 1024]], 'ward-floor': [wardFloor, [512, 1024, 1024]],
+    'ward-ceiling': [wardCeiling, [256, 512, 512]], 'ward-macro': [wardMacro, [256, 256, 256]],
+    'gun-metal': [gunMetal, [256, 256, 256]], 'gun-polymer': [gunPolymer, [256, 256, 256]], 'gun-wood': [gunWood, [256, 256, 256]],
+    'gun-rubber': [gunRubber, [128, 128, 128]], 'gun-fabric': [gunFabric, [256, 256, 256]]
+  };
+
+  // Cached canvases {albedo, normal, roughness, size} for a ward surface, sized by the configured detail tier.
+  function surface(kind, options) {
+    const opts = options || {}, spec = SURFACES[kind];
+    if (!spec) throw new Error('Unknown surface ' + kind);
+    const size = opts.size || spec[1][detail], seed = Number.isFinite(opts.seed) ? opts.seed : 7, key = kind + ':' + size + ':' + seed;
+    if (!surfaces.has(key)) surfaces.set(key, spec[0](size, seed));
+    return surfaces.get(key);
+  }
+
+  // Normal and roughness canvases for an existing painted albedo (the manor's wallpaper, carpet, gilt and marble):
+  // relief follows luminance, so gilding and inlays emboss and polished areas catch the chandelier.
+  function deriveMaps(source, options) {
+    const opts = options || {}, w = source.width, h = source.height;
+    const pixels = source.getContext('2d').getImageData(0, 0, w, h).data;
+    const lum = new Float32Array(w * h), rough = new Uint8ClampedArray(w * h * 4);
+    const roughOf = opts.roughness || ((r, g, b, l) => 0.6 + (1 - l) * 0.3);
+    for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+      const r = pixels[p] / 255, g = pixels[p + 1] / 255, b = pixels[p + 2] / 255, l = r * 0.2126 + g * 0.7152 + b * 0.0722;
+      lum[i] = l; rough[p] = rough[p + 1] = rough[p + 2] = clamp(roughOf(r, g, b, l), 0.03, 1) * 255; rough[p + 3] = 255;
+    }
+    // Soften single-pixel paint noise before differentiating, then emboss.
+    const soft = new Float32Array(w * h), depth = opts.depth == null ? 1.6 : opts.depth;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let k = -1; k <= 1; k++) sum += lum[((y + k + h) % h) * w + x] * 2 + lum[((y + k + h) % h) * w + (x + w - 1) % w] + lum[((y + k + h) % h) * w + (x + 1) % w];
+      soft[y * w + x] = sum / 12 * depth * (opts.invert ? -1 : 1);
+    }
+    const normal = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const dx = -(soft[y * w + (x + 1) % w] - soft[y * w + (x + w - 1) % w]) * 0.5, dy = (soft[((y + 1) % h) * w + x] - soft[((y + h - 1) % h) * w + x]) * 0.5;
+      const inv = 1 / Math.sqrt(dx * dx + dy * dy + 1), p = (y * w + x) * 4;
+      normal[p] = (dx * inv * 0.5 + 0.5) * 255; normal[p + 1] = (dy * inv * 0.5 + 0.5) * 255; normal[p + 2] = (inv * 0.5 + 0.5) * 255; normal[p + 3] = 255;
+    }
+    const make = data => { const [c, x] = canvas(w, h), img = x.createImageData(w, h); img.data.set(data); x.putImageData(img, 0, 0); return c; };
+    return { normal: make(normal), roughness: make(rough) };
+  }
+
+  function configure(options) {
+    const opts = options || {};
+    if (Object.prototype.hasOwnProperty.call(DETAIL, opts.quality)) detail = DETAIL[opts.quality];
+    return { quality: Object.keys(DETAIL)[detail] };
+  }
+
   function materialMaps(THREE, requestedKind) {
     const allowed = ['wall', 'floor', 'metal', 'skin', 'fabric', 'concrete', 'wood'];
     const kind = allowed.includes(requestedKind) ? requestedKind : 'concrete';
@@ -176,6 +649,50 @@
       if (!THREE.ColorManagement || !THREE.ColorManagement.enabled) m.color.convertSRGBToLinear();
       if (kind) { m.map = materialMaps(THREE, kind).albedo; enhanceMaterial(THREE, m, { kind }); }
       m.userData.hollowShared = true; m.userData.hollowSurface = kind; cache.set(key, m);
+    }
+    return cache.get(key);
+  }
+
+  // Viewmodel reflections: a dark ward with long overhead tubes and a warm low bounce, so steel reads as steel without
+  // lighting the world. Equirectangular; node materials prefilter it once (PMREM) on first use.
+  function viewEnvironment(THREE) {
+    const res = store(THREE);
+    if (res.viewEnvironment) return res.viewEnvironment;
+    const [c, x] = canvas(512, 256), sky = x.createLinearGradient(0, 0, 0, 256);
+    sky.addColorStop(0, '#2f383c'); sky.addColorStop(0.42, '#171c1e'); sky.addColorStop(0.56, '#0f1213'); sky.addColorStop(1, '#060707');
+    x.fillStyle = sky; x.fillRect(0, 0, 512, 256);
+    for (const [cx, w, y, rgb, alpha] of [[128, 150, 36, '214,226,230', 0.95], [384, 120, 42, '196,212,218', 0.8], [256, 56, 20, '232,238,240', 0.7]]) {
+      const glow = x.createRadialGradient(cx, y, 2, cx, y, w * 0.6);
+      glow.addColorStop(0, `rgba(${rgb},${alpha * 0.35})`); glow.addColorStop(1, `rgba(${rgb},0)`);
+      x.fillStyle = glow; x.fillRect(cx - w, 0, w * 2, y * 2 + w * 0.3);
+      x.fillStyle = `rgba(${rgb},${alpha})`; x.fillRect(cx - w / 2, y - 3, w, 6);
+    }
+    const warm = x.createLinearGradient(0, 118, 0, 176);
+    warm.addColorStop(0, 'rgba(150,104,62,0)'); warm.addColorStop(0.5, 'rgba(150,104,62,.45)'); warm.addColorStop(1, 'rgba(150,104,62,0)');
+    x.fillStyle = warm; x.fillRect(20, 118, 150, 58);
+    const t = texture(THREE, c, true); t.mapping = THREE.EquirectangularReflectionMapping; t.anisotropy = 1;
+    res.viewEnvironment = t; return t;
+  }
+
+  function finishMaps(THREE, kind) {
+    const cache = store(THREE).maps, id = 'finish:' + kind;
+    if (!cache.has(id)) {
+      const s = surface(kind);
+      cache.set(id, { albedo: texture(THREE, s.albedo, true), normal: texture(THREE, s.normal, false), roughness: texture(THREE, s.roughness, false) });
+    }
+    return cache.get(id);
+  }
+
+  // Weapon and flashlight finishes: tiled finish maps (box-projected UVs), their own reflections, and a roughness
+  // factor over the finish's roughness map.
+  function gunMaterial(THREE, key, color, metalness, finishKind, roughness) {
+    const cache = store(THREE).materials;
+    if (!cache.has(key)) {
+      const maps = finishMaps(THREE, finishKind);
+      const m = new THREE.MeshStandardMaterial({ color, roughness: roughness == null ? 1 : roughness, metalness,
+        map: maps.albedo, normalMap: maps.normal, roughnessMap: maps.roughness, envMap: viewEnvironment(THREE) });
+      if (!THREE.ColorManagement || !THREE.ColorManagement.enabled) m.color.convertSRGBToLinear();
+      m.userData.hollowShared = true; m.userData.hollowSurface = finishKind; cache.set(key, m);
     }
     return cache.get(key);
   }
@@ -313,10 +830,30 @@
     const g = new THREE.Group(); g.name = name; g.position.set(x, y, z); parent.add(g); return g;
   }
 
+  // Box-projected UVs (scale: UV units per metre) from each triangle's dominant axis; u follows the length (z) axis
+  // where it can, so wood grain and machining marks run along a weapon.
+  function boxUV(THREE, g, scale) {
+    const p = g.attributes.position.array, uv = new Float32Array(p.length / 3 * 2);
+    for (let i = 0; i + 8 < p.length; i += 9) {
+      const ax = p[i + 3] - p[i], ay = p[i + 4] - p[i + 1], az = p[i + 5] - p[i + 2];
+      const bx = p[i + 6] - p[i], by = p[i + 7] - p[i + 1], bz = p[i + 8] - p[i + 2];
+      const nx = Math.abs(ay * bz - az * by), ny = Math.abs(az * bx - ax * bz), nz = Math.abs(ax * by - ay * bx);
+      for (let k = 0; k < 3; k++) {
+        const x = p[i + k * 3], y = p[i + k * 3 + 1], z = p[i + k * 3 + 2], o = (i / 3 + k) * 2;
+        if (nx >= ny && nx >= nz) { uv[o] = z * scale; uv[o + 1] = y * scale; }
+        else if (ny >= nz) { uv[o] = z * scale; uv[o + 1] = x * scale; }
+        else { uv[o] = x * scale; uv[o + 1] = y * scale; }
+      }
+    }
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  }
+
   // Static batching without requiring BufferGeometryUtils or another dependency.
   // Groups/animated joints remain intact. Invisible/dynamic meshes are not merged.
-  function batch(THREE, root) {
-    for (const child of root.children.slice()) if (child.isGroup) batch(THREE, child);
+  // options.boxUV re-projects UVs in the parent's space (single meshes are then rebuilt too).
+  function batch(THREE, root, options) {
+    const projected = options && options.boxUV;
+    for (const child of root.children.slice()) if (child.isGroup) batch(THREE, child, options);
     const bins = new Map();
     for (const child of root.children) {
       if (!child.isMesh || !child.visible || child.userData.dynamic || Array.isArray(child.material)) continue;
@@ -324,20 +861,21 @@
       bins.get(child.material).push(child);
     }
     for (const [material, meshes] of bins) {
-      if (meshes.length < 2) continue;
-      const chunks = [], counts = { position: 0, normal: 0, uv: 0, color: 0 };
+      if (meshes.length < (projected ? 1 : 2)) continue;
+      const chunks = [];
       for (const mesh of meshes) {
         mesh.updateMatrix();
         const g = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
-        g.applyMatrix4(mesh.matrix); chunks.push(g);
-        for (const key of Object.keys(counts)) if (g.attributes[key]) counts[key] += g.attributes[key].array.length;
+        g.applyMatrix4(mesh.matrix); if (projected) boxUV(THREE, g, projected); chunks.push(g);
       }
+      // Every float attribute all chunks share (position, normal, uv, color and per-vertex surface data such as wet).
       const merged = new THREE.BufferGeometry();
-      for (const key of ['position', 'normal', 'uv', 'color']) {
-        if (chunks.some(g => !g.attributes[key])) continue;
-        const values = new Float32Array(counts[key]); let offset = 0;
+      for (const key of Object.keys(chunks[0].attributes)) {
+        const size = chunks[0].attributes[key].itemSize;
+        if (chunks.some(g => !g.attributes[key] || g.attributes[key].itemSize !== size || g.attributes[key].normalized || !(g.attributes[key].array instanceof Float32Array))) continue;
+        const values = new Float32Array(chunks.reduce((sum, g) => sum + g.attributes[key].array.length, 0)); let offset = 0;
         for (const g of chunks) { values.set(g.attributes[key].array, offset); offset += g.attributes[key].array.length; }
-        merged.setAttribute(key, new THREE.BufferAttribute(values, key === 'uv' ? 2 : 3));
+        merged.setAttribute(key, new THREE.BufferAttribute(values, size));
       }
       merged.computeBoundingSphere();
       const m = new THREE.Mesh(merged, material);
@@ -352,23 +890,85 @@
     return root;
   }
 
-  function consolidateOrganicMaterials(THREE, root, palette) {
-    const material = standard(THREE, 'creature:organic-batch', 0xffffff, 0.91, 0, 'skin');
-    material.vertexColors = true; material.flatShading = true;
-    // Garment folds/wrap seams are geometry; vertex tinting keeps even dressed
-    // articulated limbs at one draw per joint without a material-array draw penalty.
-    material.side = THREE.DoubleSide;
+  // Smooth deterministic 3D value noise in [0, 1] for per-vertex tints.
+  function noise3(x, y, z) {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z), tx = x - xi, ty = y - yi, tz = z - zi;
+    const h = (a, b, c) => {
+      let v = (Math.imul(a, 374761393) + Math.imul(b, 668265263) + Math.imul(c, 1274126177)) | 0;
+      v = Math.imul(v ^ (v >>> 13), 1103515245); return ((v ^ (v >>> 16)) >>> 0) / 4294967296;
+    };
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty), sz = tz * tz * (3 - 2 * tz);
+    const plane = c => {
+      const a = h(xi, yi, c) + (h(xi + 1, yi, c) - h(xi, yi, c)) * sx, b = h(xi, yi + 1, c) + (h(xi + 1, yi + 1, c) - h(xi, yi + 1, c)) * sx;
+      return a + (b - a) * sy;
+    };
+    const near = plane(zi); return near + (plane(zi + 1) - near) * sz;
+  }
+
+  // One organic material for every creature: vertex tints carry the anatomy, and a per-vertex `wet` value lets the
+  // node renderer keep skin, tendon and mouths clammy (tight torch highlights) while gowns and wraps stay dry.
+  function organicMaterial(THREE) {
+    const cache = store(THREE).materials, key = 'creature:organic-batch';
+    if (cache.has(key)) return cache.get(key);
+    const TSL = global.TSL;
+    if (!THREE.MeshStandardNodeMaterial || !TSL) {
+      const plain = standard(THREE, key, 0xffffff, 0.91, 0, 'skin');
+      plain.vertexColors = true; plain.flatShading = true; plain.side = THREE.DoubleSide;
+      return plain;
+    }
+    const maps = materialMaps(THREE, 'skin');
+    const m = new THREE.MeshStandardNodeMaterial({ color: 0xffffff, roughness: 0.91, metalness: 0, map: maps.albedo,
+      normalMap: maps.normal, roughnessMap: maps.roughness, vertexColors: true, flatShading: true, side: THREE.DoubleSide });
+    m.normalScale.set(0.18, 0.18);
+    m.roughnessNode = TSL.mix(TSL.float(0.95), TSL.float(0.4), TSL.attribute('wet', 'float')).mul(TSL.texture(maps.roughness).g.mul(0.4).add(0.64));
+    m.userData.hollowShared = true; m.userData.hollowSurface = 'skin'; cache.set(key, m);
+    return m;
+  }
+
+  // Garment folds/wrap seams are geometry; vertex tinting keeps even dressed articulated limbs at one draw per joint
+  // without a material-array draw penalty. Tints: mottled, bruised skin; stained gowns; floor grime on whatever touches
+  // the floor; blood darkening the lips and jaw (mouth: {front, eyeY} in head space).
+  function consolidateOrganicMaterials(THREE, root, palette, seed, mouth) {
+    const material = organicMaterial(THREE);
     const mergeable = new Set([palette.skin, palette.bone, palette.dark, palette.tendon, palette.cloth, palette.bandage]);
+    const wetness = new Map([[palette.skin, 0.8], [palette.tendon, 1], [palette.dark, 1], [palette.bone, 0.55], [palette.cloth, 0.2], [palette.bandage, 0.1]]);
+    const point = new THREE.Vector3(), local = new THREE.Vector3(), s = seed * 7.31;
+    root.updateMatrixWorld(true);
     root.traverse(o => {
       if (!o.isMesh || !mergeable.has(o.material)) return;
-      const geom = o.geometry.clone(), color = o.material.color;
+      const geom = o.geometry.clone(), color = o.material.color, positions = geom.attributes.position;
       // r128 aliases userData when cloning; never relabel the cached source as owned.
       geom.userData = Object.assign({}, geom.userData, { hollowShared: false });
-      const values = new Float32Array(geom.attributes.position.count * 3);
-      for (let i = 0; i < values.length; i += 3) {
-        values[i] = color.r; values[i + 1] = color.g; values[i + 2] = color.b;
+      const skin = o.material === palette.skin || o.material === palette.tendon;
+      const cloth = o.material === palette.cloth || o.material === palette.bandage, dark = o.material === palette.dark;
+      const jaw = o.parent && o.parent.name === 'jaw', head = o.parent && o.parent.name === 'head';
+      const values = new Float32Array(positions.count * 3), wet = new Float32Array(positions.count);
+      for (let i = 0; i < positions.count; i++) {
+        local.fromBufferAttribute(positions, i).applyMatrix4(o.matrix);
+        point.fromBufferAttribute(positions, i).applyMatrix4(o.matrixWorld);
+        let r = color.r, g = color.g, b = color.b, w = wetness.get(o.material);
+        if (!dark) {
+          const mottle = noise3(point.x * 9 + s, point.y * 9, point.z * 9), patch = noise3(point.x * 3.1 - s, point.y * 3.1 + 5, point.z * 3.1);
+          if (skin) {
+            const k = 0.76 + 0.36 * mottle, bruise = smoothstep(0.58, 0.78, patch);
+            r *= k * (1 - 0.22 * bruise); g *= k * (1 - 0.4 * bruise); b *= k * (1 - 0.26 * bruise);
+          } else if (cloth) {
+            const stain = smoothstep(0.52, 0.74, patch), blood = smoothstep(0.7, 0.86, mottle) * 0.75;
+            r *= 1 - 0.28 * stain; g *= 1 - 0.36 * stain; b *= 1 - 0.55 * stain;
+            r += (0.13 - r) * blood; g += (0.018 - g) * blood; b += (0.015 - b) * blood; w += 0.6 * blood;
+          } else { const k = 0.82 + 0.26 * mottle; r *= k; g *= k; b *= k * 0.95; }
+          const grime = 1 - smoothstep(0.03, 0.34, point.y);
+          r *= 1 - 0.5 * grime; g *= 1 - 0.52 * grime; b *= 1 - 0.55 * grime;
+          // Lips, chin and the jaw's inner face are crusted with old blood.
+          let blood = 0;
+          if (mouth && jaw) blood = smoothstep(mouth.front * 0.4, mouth.front * 1.1, local.z) * 0.85;
+          else if (mouth && head) blood = smoothstep(mouth.eyeY - 0.03, mouth.eyeY - 0.13, local.y) * smoothstep(mouth.front * 0.55, mouth.front * 1.05, local.z) * 0.7;
+          if (blood > 0) { r += (0.15 - r) * blood; g += (0.02 - g) * blood; b += (0.018 - b) * blood; w = Math.max(w, blood); }
+        }
+        values[i * 3] = r; values[i * 3 + 1] = g; values[i * 3 + 2] = b; wet[i] = Math.min(1, w);
       }
       geom.setAttribute('color', new THREE.BufferAttribute(values, 3));
+      geom.setAttribute('wet', new THREE.BufferAttribute(wet, 1));
       o.geometry = geom; o.material = material;
     });
   }
@@ -673,7 +1273,7 @@
     for (const part of [legL, legR, armL, armR, neck, head, ...knees, ...elbows, ...(jaw ? [jaw] : [])]) {
       restPose[part.name] = Object.freeze({ x: part.rotation.x, y: part.rotation.y, z: part.rotation.z });
     }
-    consolidateOrganicMaterials(THREE, g, p);
+    consolidateOrganicMaterials(THREE, g, p, { warden: 1, stalker: 2, crawler: 3, shrieker: 4 }[kind], { front, eyeY });
     batch(THREE, g);
     const glow = { intensity: 0 }; // Compatibility handle only; never drives light or emission.
     g.userData = {
@@ -718,17 +1318,80 @@
     m.userData.hollowShared = true; cache.set('muzzle', m); return m;
   }
 
+  // ---------- gloved hands ----------
+  // A finger is a chain of rounded phalanges (cached 8-sided open cylinders) with a knuckle at every joint.
+  function digit(THREE, parent, mat, points, r) {
+    const up = new THREE.Vector3(0, 1, 0), unit = geometry(THREE, 'gun:phalanx', () => new THREE.CylinderGeometry(1, 1, 1, 8, 1, true));
+    oval(THREE, parent, mat, points[0][0], points[0][1], points[0][2], r * 1.12, r * 1.12, r * 1.12);
+    for (let i = 1; i < points.length; i++) {
+      const a = new THREE.Vector3(...points[i - 1]), b = new THREE.Vector3(...points[i]), delta = b.clone().sub(a), radius = r * (1 - i * 0.06);
+      const m = add(THREE, parent, unit, mat, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2, radius, delta.length(), radius);
+      m.quaternion.setFromUnitVectors(up, delta.normalize());
+      oval(THREE, parent, mat, b.x, b.y, b.z, radius * 1.02, radius * 1.02, radius * 1.02);
+    }
+  }
+
+  // Sleeve from the wrist out of view along dir (weapon space), with a ribbed glove cuff.
+  function forearm(THREE, parent, mats, wrist, dir, radius) {
+    const d = new THREE.Vector3(...dir).normalize(), length = 0.34, up = new THREE.Vector3(0, 1, 0);
+    const cuff = add(THREE, parent, geometry(THREE, 'gun:cuff', () => new THREE.CylinderGeometry(1, 1.06, 1, 12, 1, true)), mats.glove,
+      wrist[0] + d.x * 0.02, wrist[1] + d.y * 0.02, wrist[2] + d.z * 0.02, radius, 0.05, radius);
+    cuff.quaternion.setFromUnitVectors(up, d);
+    const sleeve = add(THREE, parent, geometry(THREE, 'gun:sleeve', () => new THREE.CylinderGeometry(1, 1.22, 1, 12, 3, true)), mats.sleeve,
+      wrist[0] + d.x * (0.04 + length / 2), wrist[1] + d.y * (0.04 + length / 2), wrist[2] + d.z * (0.04 + length / 2), radius * 1.18, length, radius * 1.12);
+    sleeve.quaternion.setFromUnitVectors(up, d);
+  }
+
+  // Right hand closed on a grip. Grip frame: centre c, tilted about x; hw/hd are the grip's half width/depth and top the
+  // height of the index finger. Palm on the outer face, three fingers wrapped round the front, the index on the trigger,
+  // the thumb over the back strap, then cuff and sleeve along arm.
+  function gripHand(THREE, g, mats, c, tilt, hw, hd, top, arm) {
+    const cos = Math.cos(tilt), sin = Math.sin(tilt), r = 0.0098, glove = mats.glove;
+    const at = (x, y, z) => [c[0] + x, c[1] + y * cos - z * sin, c[2] + y * sin + z * cos];
+    const palm = at(hw + 0.012, top - 0.04, hd * 0.25);
+    oval(THREE, g, glove, palm[0], palm[1], palm[2], 0.019, 0.052, hd + 0.014, tilt);
+    digit(THREE, g, glove, [at(hw + r * 0.7, top, -hd * 0.2), at(hw * 0.7, top + 0.004, -(hd + r * 1.1)), at(hw * 0.05, top + 0.003, -(hd + r * 2))], r);
+    for (let i = 1; i < 4; i++) {
+      const y = top - 0.008 - i * 0.023, k = 1 - i * 0.045;
+      digit(THREE, g, glove, [at(hw + r * 0.7, y, -hd * 0.3), at(hw * 0.45, y, -(hd + r * 0.95)), at(-hw * 0.55, y - 0.002, -(hd + r * 0.85)),
+        at(-(hw + r * 0.55), y - 0.004, -hd * 0.3)], r * k);
+    }
+    digit(THREE, g, glove, [at(hw + 0.005, top - 0.016, hd * 0.75), at(hw * 0.2, top + 0.006, hd + 0.009), at(-(hw + 0.003), top + 0.002, hd * 0.2)], r * 1.12);
+    forearm(THREE, g, mats, at(hw * 0.6, top - 0.1, hd * 0.9), arm, 0.034);
+  }
+
+  // Left hand cradling a handguard or pump from below (c: centre, hw/hh: half width/height): palm under, fingers curled
+  // up the far side, thumb along the near side.
+  function supportHand(THREE, g, mats, c, hw, hh, arm) {
+    const r = 0.0094, glove = mats.glove, [x, y, z] = c;
+    oval(THREE, g, glove, x - 0.004, y - hh - 0.013, z + 0.004, 0.036, 0.016, 0.048);
+    for (let i = 0; i < 4; i++) {
+      const fz = z + 0.031 - i * 0.021, k = 1 - Math.abs(i - 1.2) * 0.06;
+      digit(THREE, g, glove, [[x + hw * 0.35, y - hh - 0.007, fz], [x + hw + r * 0.7, y - hh * 0.45, fz], [x + hw + r * 0.6, y + hh * 0.3, fz - 0.002],
+        [x + hw * 0.55, y + hh * 0.8, fz - 0.004]], r * k);
+    }
+    digit(THREE, g, glove, [[x - hw * 0.55, y - hh - 0.006, z + 0.05], [x - hw - r * 0.8, y - hh * 0.3, z + 0.022], [x - hw - r * 0.5, y + hh * 0.45, z - 0.018]], r * 1.1);
+    forearm(THREE, g, mats, [x - hw * 0.35, y - hh - 0.028, z + 0.075], arm, 0.032);
+  }
+
+  // Parkerized steel, bare-steel edges, black oxide, stippled polymer, walnut, brass, rubber and a woven glove.
+  function gunPalette(THREE) {
+    return {
+      steel: gunMaterial(THREE, 'gun:steel', 0x5f676b, 0.85, 'gun-metal'),
+      edge: gunMaterial(THREE, 'gun:edge', 0xb3b9bc, 0.95, 'gun-metal', 0.55),
+      black: gunMaterial(THREE, 'gun:black', 0x2c3234, 0.7, 'gun-metal'),
+      polymer: gunMaterial(THREE, 'gun:polymer', 0x2b3133, 0, 'gun-polymer'),
+      wood: gunMaterial(THREE, 'gun:wood', 0x6c4831, 0, 'gun-wood'),
+      brass: gunMaterial(THREE, 'gun:brass', 0xc29a55, 0.9, 'gun-metal', 0.6),
+      rubber: gunMaterial(THREE, 'gun:rubber', 0x17191a, 0, 'gun-rubber'),
+      glove: gunMaterial(THREE, 'gun:glove', 0x4b554e, 0, 'gun-fabric')
+    };
+  }
+
   function makeWeapon(THREE, requestedKind) {
     const kind = ['rifle', 'pistol', 'shotgun'].includes(requestedKind) ? requestedKind : 'rifle';
     const g = new THREE.Group(); g.name = kind;
-    const steel = standard(THREE, 'gun:steel', 0x737f86, 0.42, 0.88, 'metal');
-    const edge = standard(THREE, 'gun:edge', 0xadb4b7, 0.32, 0.93, 'metal');
-    const black = standard(THREE, 'gun:black', 0x3d464a, 0.64, 0.58, 'metal');
-    const polymer = standard(THREE, 'gun:polymer', 0x343e40, 0.94, 0, 'fabric');
-    const wood = standard(THREE, 'gun:wood', 0x745039, 0.7, 0, 'wood');
-    const brass = standard(THREE, 'gun:brass', 0xbd9552, 0.29, 0.85, 'metal');
-    const rubber = standard(THREE, 'gun:rubber', 0x14191a, 0.96, 0, 'fabric');
-    const glove = standard(THREE, 'gun:glove', 0x5d6963, 0.96, 0, 'fabric');
+    const { steel, edge, black, polymer, wood, brass, rubber, glove } = gunPalette(THREE);
     const sight = basic(THREE, 'gun:sight', 0x97d3b1);
     const magazine = joint(THREE, g, 'magazine', 0, 0, 0);
     const bolt = joint(THREE, g, 'bolt', 0, 0, 0);
@@ -808,7 +1471,7 @@
       oval(THREE, g, brass, 0, 0.069, -0.792, 0.006, 0.006, 0.006);
       bevel(THREE, g, black, -0.039, 0.006, -0.051, 0.005, 0.045, 0.096, 0.005);
       bevel(THREE, g, edge, -0.042, 0.006, -0.048, 0.007, 0.034, 0.062, 0.005);
-      const shell = standard(THREE, 'gun:shell', 0x884d35, 0.62, 0.12, 'metal');
+      const shell = gunMaterial(THREE, 'gun:shell', 0x8a3b2b, 0, 'gun-polymer', 0.7);
       for (let i = 0; i < 4; i++) {
         cyl(THREE, g, shell, -0.053, -0.021, 0.029 - i * 0.038, 0.011, 0.011, 0.064);
         cyl(THREE, g, brass, -0.053, 0.014, 0.029 - i * 0.038, 0.012, 0.012, 0.01);
@@ -820,32 +1483,31 @@
     const bore = add(THREE, g, geometry(THREE, 'bore', () => new THREE.CircleGeometry(1, 16)), rubber,
       muzzle.x, muzzle.y, muzzle.z + 0.011, kind === 'shotgun' ? 0.016 : 0.011, kind === 'shotgun' ? 0.016 : 0.011, 1, 0, Math.PI);
     bore.castShadow = false;
-    const gripY = kind === 'shotgun' ? -0.105 : -0.136, gripZ = kind === 'shotgun' ? 0.12 : 0.073;
-    oval(THREE, g, glove, 0.02, gripY, gripZ, 0.064, 0.077, 0.068, -0.2);
-    for (let i = 0; i < 3; i++) oval(THREE, g, rubber, -0.024, gripY - 0.004 + i * 0.027, gripZ - 0.038,
-      0.032, 0.011, 0.022, 0.03);
-    if (kind !== 'pistol') {
-      oval(THREE, g, glove, -0.028, -0.088, kind === 'rifle' ? -0.294 : -0.382, 0.063, 0.045, 0.080);
-      for (let i = 0; i < 4; i++) oval(THREE, g, rubber, -0.045, -0.034, (kind === 'rifle' ? -0.259 : -0.347) - i * 0.024, 0.016, 0.034, 0.011);
+    const hands = { glove, rubber, sleeve: gunMaterial(THREE, 'flashlight:sleeve', 0x29343a, 0, 'gun-fabric') };
+    if (kind === 'rifle') {
+      gripHand(THREE, g, hands, [0, -0.118, 0.066], -0.27, 0.0225, 0.033, 0.05, [0.36, -0.5, 0.79]);
+      supportHand(THREE, g, hands, [0, 0.003, -0.31], 0.037, 0.0425, [-0.42, -0.46, 0.78]);
+    } else if (kind === 'pistol') {
+      gripHand(THREE, g, hands, [0, -0.102, 0.042], -0.29, 0.026, 0.0435, 0.062, [0.34, -0.52, 0.78]);
+    } else {
+      gripHand(THREE, g, hands, [0, -0.074, 0.13], -0.95, 0.034, 0.03, 0.03, [0.38, -0.36, 0.85]);
+      supportHand(THREE, g, hands, [0, -0.026, -0.385], 0.0425, 0.045, [-0.42, -0.46, 0.78]);
     }
     for (const z of [-0.1, 0.062]) {
       cyl(THREE, g, edge, -0.036, 0.006, z, 0.0045, 0.0045, 0.003, 0, 0, Math.PI / 2, 6);
     }
-    batch(THREE, g);
+    batch(THREE, g, { boxUV: 10 });
     const muzzleFlash = new THREE.Mesh(geometry(THREE, 'flashPlane', () => new THREE.PlaneGeometry(0.27, 0.27)), flashMaterial(THREE));
     muzzleFlash.position.copy(muzzle); muzzleFlash.visible = false; muzzleFlash.userData.dynamic = true; g.add(muzzleFlash);
+    bolt.userData.restZ = bolt.position.z;
     g.userData = { kind, magazine, muzzleFlash, muzzlePosition: muzzle, bolt, run: 0 };
     return g;
   }
 
   function makeFlashlight(THREE) {
     const g = new THREE.Group(); g.name = 'field flashlight';
-    const steel = standard(THREE, 'gun:steel', 0x737f86, 0.42, 0.88, 'metal');
-    const edge = standard(THREE, 'gun:edge', 0xadb4b7, 0.32, 0.93, 'metal');
-    const black = standard(THREE, 'gun:black', 0x3d464a, 0.64, 0.58, 'metal');
-    const rubber = standard(THREE, 'gun:rubber', 0x14191a, 0.96, 0, 'fabric');
-    const glove = standard(THREE, 'gun:glove', 0x5d6963, 0.96, 0, 'fabric');
-    const sleeve = standard(THREE, 'flashlight:sleeve', 0x2b373b, 0.96, 0, 'fabric');
+    const { steel, edge, black, rubber, glove } = gunPalette(THREE);
+    const sleeve = gunMaterial(THREE, 'flashlight:sleeve', 0x29343a, 0, 'gun-fabric');
     cyl(THREE, g, black, 0, 0, 0, 0.027, 0.027, 0.236, Math.PI / 2, 0, 0, 16);
     cyl(THREE, g, steel, 0, 0, -0.134, 0.03, 0.045, 0.073, Math.PI / 2, 0, 0, 18);
     cyl(THREE, g, black, 0, 0, -0.172, 0.047, 0.047, 0.018, Math.PI / 2, 0, 0, 18);
@@ -883,7 +1545,7 @@
     const opticsMap = texture(THREE, c, true); opticsMap.userData.hollowShared = false;
     const lensMaterial = new THREE.MeshBasicMaterial({ color: 0x221c14, map: opticsMap, toneMapped: false });
     lensMaterial.userData.hollowOwnedMaps = [opticsMap];
-    batch(THREE, g);
+    batch(THREE, g, { boxUV: 10 });
     const lens = add(THREE, g, geometry(THREE, 'flashlight:lens', () => new THREE.CircleGeometry(0.038, 24)), lensMaterial,
       0, 0, -0.184, 1, 1, 1, 0, Math.PI);
     lens.castShadow = false; lens.receiveShadow = false;
@@ -1348,5 +2010,5 @@
     if (group.parent) group.parent.remove(group);
   }
 
-  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup });
+  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, deriveMaps });
 })(window);

@@ -174,29 +174,14 @@ function marbleC(){
   noiseFill(x,256,256,10);return c;
 }
 // --- otherworld ---
-function hellWallC(){
-  const [c,x]=cv(512,512);x.fillStyle='#929084';x.fillRect(0,0,512,512);
-  // Faded two-tone hospital paint over plaster, not repeating metal panels.
-  x.fillStyle='#536760';x.fillRect(0,240,512,272);x.fillStyle='#afb09b';x.fillRect(0,232,512,7);
-  for(let i=0;i<65;i++)blot(x,rnd(0,512),rnd(0,512),rnd(12,110),i%3?'rgba(30,34,27,.13)':'rgba(140,119,73,.16)');
-  for(let i=0;i<32;i++){const dx=rnd(0,512),len=rnd(35,260);const g=x.createLinearGradient(0,0,0,len);g.addColorStop(0,'rgba(35,39,28,.38)');g.addColorStop(1,'rgba(35,39,28,0)');x.fillStyle=g;x.fillRect(dx,0,rnd(2,10),len);}
-  x.strokeStyle='rgba(35,34,28,.42)';x.lineWidth=.8;
-  for(let i=0;i<8;i++){let px=rnd(0,512),py=rnd(0,512);x.beginPath();x.moveTo(px,py);for(let j=0;j<5;j++){px+=rnd(-11,11);py+=rnd(4,17);x.lineTo(px,py);}x.stroke();}
-  for(let i=0;i<90;i++){x.fillStyle=i%2?'rgba(182,175,151,.28)':'rgba(34,43,37,.23)';x.fillRect(rnd(0,512),rnd(245,495),rnd(1,12),rnd(1,4));}
-  const damp=x.createLinearGradient(0,430,0,512);damp.addColorStop(0,'rgba(12,19,15,0)');damp.addColorStop(1,'rgba(12,19,15,.62)');x.fillStyle=damp;x.fillRect(0,430,512,82);
-  noiseFill(x,512,512,10);return c;
-}
-function hellFloorC(){
-  const [c,x]=cv(512,512);x.fillStyle='#272d29';x.fillRect(0,0,512,512);
-  for(let row=0;row<4;row++)for(let col=0;col<4;col++){
-    const shade=Math.floor(rnd(-7,7));x.fillStyle=`rgb(${80+shade},${86+shade},${77+shade})`;x.fillRect(col*128+2,row*128+2,124,124);
-    x.strokeStyle='rgba(175,179,151,.12)';x.strokeRect(col*128+3,row*128+3,122,122);
-  }
-  for(let i=0;i<48;i++)blot(x,rnd(0,512),rnd(0,512),rnd(10,70),'rgba(13,23,20,.22)');
-  x.strokeStyle='rgba(21,29,25,.4)';x.lineWidth=3;for(let i=0;i<12;i++){const a=rnd(0,480),b=rnd(0,512);x.beginPath();x.moveTo(a,b);x.lineTo(a+rnd(15,90),b+rnd(-8,8));x.stroke();}
-  noiseFill(x,512,512,12);return c;
-}
-function hellCeilC(){const [c,x]=cv(256,256);x.fillStyle='#22150f';x.fillRect(0,0,256,256);for(let i=0;i<24;i++)blot(x,rnd(0,256),rnd(0,256),rnd(10,70),'rgba(0,0,0,.55)');noiseFill(x,256,256,26);return c;}
+// The Blackwater ward is a set of coherent procedural PBR surfaces from visuals.js (albedo + height-derived normal +
+// roughness: grout, cracks, peeling paint and puddles light correctly under the torch). Sizes follow the boot quality.
+HollowVisuals.configure({quality:qualityLevel});
+const wardWallS=HollowVisuals.surface('ward-wall'),wardFloorS=HollowVisuals.surface('ward-floor'),wardCeilS=HollowVisuals.surface('ward-ceiling');
+function hellWallC(){return wardWallS.albedo;}
+function hellFloorC(){return wardFloorS.albedo;}
+function hellCeilC(){return wardCeilS.albedo;}
+function hellPedC(){const [c,x]=cv(256,256);x.fillStyle='#22150f';x.fillRect(0,0,256,256);for(let i=0;i<24;i++)blot(x,rnd(0,256),rnd(0,256),rnd(10,70),'rgba(0,0,0,.55)');noiseFill(x,256,256,26);return c;}
 function hellRunnerC(){const [c,x]=cv(256,128);x.fillStyle='#2a0a08';x.fillRect(0,0,256,128);for(let i=0;i<16;i++)blot(x,rnd(0,256),rnd(0,128),rnd(10,40),Math.random()<.5?'rgba(0,0,0,.7)':'rgba(90,10,6,.6)');noiseFill(x,256,128,30);return c;}
 function hellDoorC(){
   const [c,x]=cv(256,512);x.fillStyle='#3a2a22';x.fillRect(0,0,256,512);
@@ -278,40 +263,102 @@ function paintingC(hell){
 }
 
 /* ---------- transformation material (peels like a burning page) ---------- */
-// TSL uniforms keep the old `U.progress.value=` API. The colour graph writes the burning rim into burnEdge,
-// which the emissive graph of the same fragment reads; the end states sample a single albedo.
+// TSL uniforms keep the old `U.progress.value=` API. The colour graph samples each map set once and writes the
+// burning rim (burnEdge), the tangent-space normal (surfN) and the roughness (surfR) into properties that the
+// emissive, normal and roughness graphs of the same fragment read; the end states sample a single map set.
 const U={progress:uniform(0),ember:uniform(0)};
 const noiseTex=tex(noiseC(),null,false);
-const burnEdge=property('float','burnEdge');
-function morphMat(luxC,hellC,rep,opts){
-  const a=tex(luxC,rep),b=tex(hellC,rep);
-  const m=new THREE.MeshStandardNodeMaterial(Object.assign({map:a,roughness:0.8,metalness:0},opts||{}));
-  m.userData.transitionMap=b;
+const burnEdge=property('float','burnEdge'),surfN=property('vec3','surfN'),surfR=property('float','surfR');
+const {uv:uvAttr,dFdx,dFdy,dot,fract,normalMap,normalWorldGeometry}=TSL;
+// Medium/high: a world-space layer of standing water, grime and gloss, so wear never repeats with the 3 m maps.
+const macroTex=qualityLevel==='low'?null:tex(HollowVisuals.surface('ward-macro').map,null,false);
+const hash12=Fn(([p])=>{const q=fract(p.xyx.mul(.1031)).toVar();q.addAssign(dot(q,q.yzx.add(33.33)));return fract(q.x.add(q.y).mul(q.z));});
+// Ward maps vary per cell with a mirror and a tile-aligned shift (grout stays on the grid, the floor keeps its checker
+// parity), so corridors never repeat in lockstep. Gradients come from the continuous UV: no mip seams at cell edges.
+function cellUV(kind){
+  if(kind==='wall'){
+    // One box face per cell; a mirror keeps the bracket rust runs (0.18 / 0.82) under their brackets.
+    const p=uvAttr(),nw=normalWorldGeometry.xz,cell=positionWorld.xz.sub(nw.mul(.5)).div(S).floor().add(nw.mul(3.7));
+    const mx=step(.5,hash12(cell)),s=vec2(mx.mul(-2).add(1),1);
+    return {uv:vec2(mix(p.x,p.x.oneMinus(),mx),p.y),gx:dFdx(p).mul(s),gy:dFdy(p).mul(s),s};
+  }
+  const p=uvAttr().mul(W),cell=p.floor(),f=p.sub(cell),tiles=kind==='floor'?8:5;
+  const h=vec2(hash12(cell),hash12(cell.add(vec2(7.31,3.17))));
+  const mir=vec2(step(.5,fract(h.x.mul(8.13))),step(.5,fract(h.y.mul(8.13)))),s=mir.mul(-2).add(1);
+  const shift=kind==='floor'?h.mul(4).floor().mul(2).add(mir):h.mul(tiles).floor();
+  return {uv:mix(f,f.oneMinus(),mir).add(shift.div(tiles)),gx:dFdx(p).mul(s),gy:dFdy(p).mul(s),s};
+}
+// Specular anti-aliasing (Toksvig): mips of a busy normal map shorten the averaged normal; widen the lobe to match.
+function specAA(r,n){const len=n.mul(2).sub(1).length().max(.25),v=len.oneMinus().sub(.012).max(0).div(len).mul(2);return r.mul(r).mul(r.mul(r)).add(v).sqrt().sqrt().min(1);}
+// World-space wear on the end-state ward (medium/high): broad puddles that mirror the torch, grime and gloss drift.
+function wardMacro(kind,color){
+  const p=positionWorld;
+  if(kind==='floor'){
+    const mc=texture(macroTex,p.xz.div(9)),wet=smoothstep(.6,.68,mc.r),damp=smoothstep(.5,.6,mc.r).mul(wet.oneMinus());
+    color.assign(vec4(color.rgb.mul(mc.g.mul(.3).add(.85)).mul(wet.mul(-.45).sub(damp.mul(.15)).add(1)),color.a));
+    surfR.assign(mix(surfR.mul(damp.mul(-.35).add(1)).mul(mc.b.mul(.25).add(.9)),.045,wet));
+    surfN.assign(mix(surfN,vec3(.5,.5,1),wet.mul(.85)));
+  }else if(kind==='wall'){
+    const mc=texture(macroTex,vec2(p.x.add(p.z),p.y.mul(1.4)).div(11));
+    color.assign(vec4(color.rgb.mul(mc.g.mul(.3).add(.84)),color.a));surfR.assign(surfR.mul(mc.b.mul(.3).add(.85)).min(1));
+  }else{
+    const mc=texture(macroTex,p.xz.div(13));color.assign(vec4(color.rgb.mul(mc.g.mul(.42).add(.72)),color.a));
+  }
+}
+// surf: {lux:{normal,roughness}, hell:{normal,roughness}} canvases, plus optional cells/macro ('wall'|'floor'|'ceiling')
+// and hellRep. Every material carries real normal and roughness maps (the hell set on normalMap/roughnessMap).
+function morphMat(luxC,hellC,rep,opts,surf){
+  const s=surf,hrep=s.hellRep||rep,a=tex(luxC,rep),b=tex(hellC,hrep);
+  const ln=tex(s.lux.normal,rep,false),lr=tex(s.lux.roughness,rep,false),hn=tex(s.hell.normal,hrep,false),hr=tex(s.hell.roughness,hrep,false);
+  const m=new THREE.MeshStandardNodeMaterial(Object.assign({map:a,normalMap:hn,roughnessMap:hr,roughness:1,metalness:0},opts||{}));
+  m.userData.transitionMap=b;m.userData.luxMaps={normal:ln,roughness:lr};
+  const lux=()=>{const n=texture(ln).xyz;return {c:texture(a),n,r:specAA(texture(lr).g,n)};};
+  const hell=()=>{
+    if(!s.cells){const n=texture(hn).xyz;return {c:texture(b),n,r:specAA(texture(hr).g,n)};}
+    const v=cellUV(s.cells),n=texture(hn,v.uv).grad(v.gx,v.gy).xyz;
+    return {c:texture(b,v.uv).grad(v.gx,v.gy),n:vec3(n.xy.sub(.5).mul(v.s).add(.5),n.z),r:specAA(texture(hr,v.uv).grad(v.gx,v.gy).g,n)};
+  };
   m.colorNode=Fn(()=>{
     const color=vec4(0).toVar();burnEdge.assign(0);
-    If(U.progress.greaterThan(.999),()=>{color.assign(texture(b));}).ElseIf(U.progress.lessThan(.001),()=>{color.assign(texture(a));}).Else(()=>{
+    If(U.progress.greaterThan(.999),()=>{
+      const h=hell();color.assign(h.c);surfN.assign(h.n);surfR.assign(h.r);
+      if(macroTex&&s.macro)wardMacro(s.macro,color);
+    }).ElseIf(U.progress.lessThan(.001),()=>{
+      const l=lux();color.assign(l.c);surfN.assign(l.n);surfR.assign(l.r);
+    }).Else(()=>{
       const p=positionWorld,nuv=vec2(p.x.add(p.z.mul(.71)),p.y.mul(1.3).add(p.z.mul(.37))).mul(.11);
       const n=texture(noiseTex,nuv).r.mul(.7).add(texture(noiseTex,nuv.mul(3.1)).r.mul(.3));
       const front=U.progress.mul(1.2).sub(.05),keep=step(front,n);
       burnEdge.assign(smoothstep(0,.06,n.sub(front)).oneMinus().mul(keep).mul(U.progress.mul(25).clamp(0,1)));
-      const c=mix(texture(b),texture(a),keep);
+      const h=hell(),l=lux(),c=mix(h.c,l.c,keep);
+      surfN.assign(mix(h.n,l.n,keep));surfR.assign(mix(h.r,l.r,keep).add(burnEdge.mul(.6)).min(1));
       color.assign(vec4(mix(c.rgb,vec3(.02,.01,.008),burnEdge.mul(.9)),c.a));
     });
     return color;
   })();
+  m.roughnessNode=surfR;
+  m.normalNode=normalMap(surfN);
   m.emissiveNode=materialEmissive.add(vec3(1,.32,.06).mul(burnEdge.pow(3)).mul(U.ember));
   return m;
 }
-const wallMat=morphMat(luxWallC(),hellWallC(),null,{roughness:0.85});
-const floorMat=morphMat(luxFloorC(),hellFloorC(),[W,W],{roughness:0.9});
-const ceilMat=morphMat(luxCeilC(),hellCeilC(),[W/1.5,W/1.5],{roughness:0.95});
-const runnerMat=morphMat(runnerC(),hellRunnerC(),[7,1],{roughness:0.95});
-const doorMat=morphMat(luxDoorC(),hellDoorC(),null,{roughness:0.45,metalness:0.1});
-const pedMat=morphMat(marbleC(),hellCeilC(),null,{roughness:0.3});
+// The manor's painted canvases get relief from luminance (gilt, inlays and panel mouldings emboss) and roughness from
+// their paint: gilt and polished stone catch the chandelier, wallpaper and carpet stay matte.
+const gilt=(r,g,b)=>r>.45&&g>.3&&b<g*.85&&r-b>.2;
+function painted(c,rough,depth){return Object.assign({albedo:c},HollowVisuals.deriveMaps(c,{roughness:rough,depth}));}
+const luxWall=painted(luxWallC(),(r,g,b)=>gilt(r,g,b)?.3:r>g*4?.66:.48,2.2);
+const luxFloor=painted(luxFloorC(),(r,g,b)=>gilt(r,g,b)?.3:.2,1.2);
+const luxCeil=painted(luxCeilC(),(r,g,b)=>gilt(r,g,b)?.35:.74,2.4);
+const luxRunner=painted(runnerC(),(r,g,b)=>gilt(r,g,b)?.6:.95,1.5);
+const luxDoor=painted(luxDoorC(),(r,g,b)=>gilt(r,g,b)?.25:.5,2.5);
+const luxPed=painted(marbleC(),(r,g,b,l)=>.12+(1-l)*.1,.6);
+const hellRunner=painted(hellRunnerC(),()=>.9,2),hellDoor=painted(hellDoorC(),(r,g,b,l)=>.82-l*.3,3),hellPed=painted(hellPedC(),()=>.8,2);
+const wallMat=morphMat(luxWall.albedo,hellWallC(),null,{},{lux:luxWall,hell:wardWallS,cells:'wall',macro:'wall'});
+const floorMat=morphMat(luxFloor.albedo,hellFloorC(),[W,W],{},{lux:luxFloor,hell:wardFloorS,cells:'floor',macro:'floor'});
+const ceilMat=morphMat(luxCeil.albedo,hellCeilC(),[W/1.5,W/1.5],{},{lux:luxCeil,hell:wardCeilS,cells:'ceiling',macro:'ceiling',hellRep:[W,W]});
+const runnerMat=morphMat(luxRunner.albedo,hellRunner.albedo,[7,1],{},{lux:luxRunner,hell:hellRunner});
+const doorMat=morphMat(luxDoor.albedo,hellDoor.albedo,null,{metalness:0.1},{lux:luxDoor,hell:hellDoor});
+const pedMat=morphMat(luxPed.albedo,hellPed.albedo,null,{},{lux:luxPed,hell:hellPed});
 if(window.HollowVisuals){
-  HollowVisuals.enhanceMaterial(THREE,wallMat,{kind:'wall'});
-  HollowVisuals.enhanceMaterial(THREE,floorMat,{kind:'floor'});
-  HollowVisuals.enhanceMaterial(THREE,doorMat,{kind:'metal'});
   scene.environment=HollowVisuals.createEnvironment(THREE,renderer);
 }
 
@@ -585,17 +632,22 @@ function worldLabel(text,color,width){
   const texture=new THREE.CanvasTexture(c);texture.colorSpace=THREE.SRGBColorSpace;
   const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width||2,.5),new THREE.MeshBasicMaterial({map:texture}));mesh.userData.own=true;return mesh;
 }
+// One painted panel and its relief/roughness maps per session; buildRooms disposes each door's own albedo texture.
+let isolationDoorMaps=null;
 function isolationDoorMaterial(){
-  const [surface,c]=cv(512,512);c.fillStyle='#496267';c.fillRect(0,0,512,512);
-  for(let i=0;i<30;i++)blot(c,rnd(0,512),rnd(0,512),rnd(12,95),i%3?'rgba(10,18,18,.16)':'rgba(133,88,45,.2)');
-  c.strokeStyle='#1a292d';c.lineWidth=5;c.strokeRect(18,18,476,476);c.lineWidth=2;c.strokeRect(32,32,448,448);
-  c.fillStyle='#1a252b';c.fillRect(62,100,388,95);c.strokeStyle='#617277';c.lineWidth=3;
-  for(let y=112;y<190;y+=15){c.beginPath();c.moveTo(75,y);c.lineTo(437,y);c.stroke();}
-  for(const x of [27,485])for(const y of [28,120,390,484]){c.fillStyle='#9ca6a0';c.beginPath();c.arc(x,y,4,0,Math.PI*2);c.fill();c.strokeStyle='#283330';c.lineWidth=1;c.beginPath();c.moveTo(x-3,y+1);c.lineTo(x+3,y-1);c.stroke();}
-  c.save();c.beginPath();c.rect(36,450,440,28);c.clip();c.fillStyle='#242a29';c.fillRect(36,450,440,28);c.fillStyle='#b1a05c';for(let x=0;x<560;x+=52){c.beginPath();c.moveTo(x,445);c.lineTo(x+25,445);c.lineTo(x-9,485);c.lineTo(x-34,485);c.fill();}c.restore();
-  noiseFill(c,512,512,12);
-  const material=new THREE.MeshStandardMaterial({map:tex(surface),metalness:.38,roughness:.64});
-  return HollowVisuals.enhanceMaterial(THREE,material,{kind:'metal'});
+  if(!isolationDoorMaps){
+    const [surface,c]=cv(512,512);c.fillStyle='#496267';c.fillRect(0,0,512,512);
+    for(let i=0;i<30;i++)blot(c,rnd(0,512),rnd(0,512),rnd(12,95),i%3?'rgba(10,18,18,.16)':'rgba(133,88,45,.2)');
+    c.strokeStyle='#1a292d';c.lineWidth=5;c.strokeRect(18,18,476,476);c.lineWidth=2;c.strokeRect(32,32,448,448);
+    c.fillStyle='#1a252b';c.fillRect(62,100,388,95);c.strokeStyle='#617277';c.lineWidth=3;
+    for(let y=112;y<190;y+=15){c.beginPath();c.moveTo(75,y);c.lineTo(437,y);c.stroke();}
+    for(const x of [27,485])for(const y of [28,120,390,484]){c.fillStyle='#9ca6a0';c.beginPath();c.arc(x,y,4,0,Math.PI*2);c.fill();c.strokeStyle='#283330';c.lineWidth=1;c.beginPath();c.moveTo(x-3,y+1);c.lineTo(x+3,y-1);c.stroke();}
+    c.save();c.beginPath();c.rect(36,450,440,28);c.clip();c.fillStyle='#242a29';c.fillRect(36,450,440,28);c.fillStyle='#b1a05c';for(let x=0;x<560;x+=52){c.beginPath();c.moveTo(x,445);c.lineTo(x+25,445);c.lineTo(x-9,485);c.lineTo(x-34,485);c.fill();}c.restore();
+    noiseFill(c,512,512,12);
+    const maps=HollowVisuals.deriveMaps(surface,{depth:2.6,roughness:(r,g,b,l)=>r>g*1.12&&r>b*1.35&&l<.4?.82:l>.5?.34:l<.15?.72:.52});
+    isolationDoorMaps={surface,normal:tex(maps.normal,null,false),roughness:tex(maps.roughness,null,false)};
+  }
+  return new THREE.MeshStandardMaterial({map:tex(isolationDoorMaps.surface),normalMap:isolationDoorMaps.normal,roughnessMap:isolationDoorMaps.roughness,metalness:.2,roughness:1});
 }
 function buildRooms(){
   const oldDecorations=[];dynamicWorld.traverse(o=>{if(o.userData.decoration)oldDecorations.push(o);});
