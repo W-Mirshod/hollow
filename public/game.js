@@ -2228,7 +2228,7 @@ const STEP_LEVEL={warden:1,stalker:.85,crawler:.85,shrieker:.85};
 const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
 const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,crouching:false,danger:0,chase:false,health:100,effects:true,hidden:false};
 // A threat call ducks the player's body bus (breathing, heartbeat, chase music): [max distance m, gain, hold s].
-const DUCK={scream:[30,.5,1.4],notice:[20,.65,.9],laugh:[12,.7,1],whisper:[10,.7,1.2]};
+const DUCK={scream:[30,.4,1.4],notice:[20,.65,.9],laugh:[12,.7,1],whisper:[10,.7,1.2]};
 let reloadEmpty=false,audioChase=false,chaseStingT=0,audioFault=false,audioSeq=0,bodyBus=null,duckFree=0,duckDepth=1,duckEnd=0;
 // Master safety limiter: a fast high-ratio compressor (its automatic makeup gain trimmed back out), then a soft
 // ceiling at -0.63 dBFS, so a pile-up of shots, screams and stingers never clips. Returns the chain's input.
