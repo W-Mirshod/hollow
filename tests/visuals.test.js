@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const THREE = require('three');
 const Systems = require('../public/systems.js');
 
-// Geometry/material contracts use shipping Three r128. Pixel buffers are real;
+// Geometry/material contracts use shipping Three r187. Pixel buffers are real;
 // canvas paths/text and GPU shading are not rasterized by this unit-test harness.
 function drawingContext() {
   const image = (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) });
@@ -111,17 +111,31 @@ test('weapon models have independent moving magazines, bolts, and correctly orie
   assert.ok(muzzle.shotgun > muzzle.rifle && muzzle.rifle > muzzle.pistol);
 });
 
-test('procedural surface enhancement preserves world transition shader hooks and albedo', () => {
-  const albedo = new THREE.Texture(), material = new THREE.MeshStandardMaterial({ map: albedo });
-  const hook = () => {};
-  material.onBeforeCompile = hook;
+test('procedural surface enhancement preserves the world transition node graph, albedo and its tiling', async () => {
+  const { MeshStandardNodeMaterial } = await import('three/webgpu');
+  const TSL = await import('three/tsl');
+  const albedo = new THREE.Texture(), material = new MeshStandardNodeMaterial({ map: albedo });
+  albedo.repeat.set(7, 3);
+  const colorNode = TSL.texture(albedo), emissiveNode = TSL.vec3(1, 0.32, 0.06).mul(TSL.uniform(0));
+  material.colorNode = colorNode; material.emissiveNode = emissiveNode;
   const output = V.enhanceMaterial(THREE, material, { kind: 'wall' });
   assert.equal(output, material);
   assert.equal(material.map, albedo);
-  assert.equal(material.onBeforeCompile, hook);
+  assert.equal(material.colorNode, colorNode);
+  assert.equal(material.emissiveNode, emissiveNode);
   assert.ok(material.normalMap.isTexture && material.roughnessMap.isTexture);
   assert.ok(material.normalScale.x > 0 && material.normalScale.x < 1);
-  material.dispose(); albedo.dispose();
+  // Surface detail tiles with the albedo (as r128's shared uvTransform did) without altering the cached maps.
+  const plain = V.enhanceMaterial(THREE, new THREE.MeshStandardMaterial(), { kind: 'wall' });
+  for (const [map, cached] of [[material.normalMap, plain.normalMap], [material.roughnessMap, plain.roughnessMap]]) {
+    assert.deepEqual(map.repeat.toArray(), [7, 3]);
+    assert.deepEqual(cached.repeat.toArray(), [1, 1]);
+    assert.equal(map.image, cached.image);
+    assert.equal(map.colorSpace, cached.colorSpace);
+    assert.equal(cached.userData.hollowShared, true);
+    assert.ok(material.userData.hollowOwnedMaps.includes(map));
+  }
+  material.dispose(); plain.dispose(); albedo.dispose();
 });
 
 test('rooms batch static geometry and keep both central navigation axes clear', () => {
@@ -401,14 +415,14 @@ function pixels(map) {
 }
 
 test('procedural PBR pixels vary deterministically with cached linear normal/roughness maps', () => {
-  assert.equal(THREE.REVISION, '128');
+  assert.equal(THREE.REVISION, '187');
   for (const kind of ['wall', 'floor', 'metal', 'skin', 'fabric', 'concrete', 'wood']) {
     const first = V.enhanceMaterial(THREE, new THREE.MeshStandardMaterial(), { kind });
     const second = V.enhanceMaterial(THREE, new THREE.MeshStandardMaterial(), { kind });
     assert.equal(first.normalMap, second.normalMap);
     assert.equal(first.roughnessMap, second.roughnessMap);
     for (const map of [first.normalMap, first.roughnessMap]) {
-      assert.equal(map.encoding, THREE.LinearEncoding);
+      assert.equal(map.colorSpace, THREE.NoColorSpace);
       assert.equal(map.wrapS, THREE.RepeatWrapping);
       assert.equal(map.wrapT, THREE.RepeatWrapping);
       assert.equal(map.userData.hollowShared, true);
@@ -448,7 +462,7 @@ test('ward fabrics carry colored stains and signs identify the facility below th
       if (data[i] - data[i + 2] > 5) stained++;
     }
     assert.ok(levels.size > 40 && stained > 1000, 'fabric should have uneven ochre/grey soiling');
-    assert.equal(o.material.map.encoding, THREE.sRGBEncoding);
+    assert.equal(o.material.map.colorSpace, THREE.SRGBColorSpace);
   });
   assert.ok(foundFabric);
   assert.ok(lines.includes('BLACKWATER WARD / BELOW MANOR'));

@@ -32,12 +32,15 @@
     const t = new THREE.CanvasTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.anisotropy = 4;
-    if (color) {
-      if ('colorSpace' in t && THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
-      else t.encoding = THREE.sRGBEncoding;
-    }
+    if (color) t.colorSpace = THREE.SRGBColorSpace;
     t.userData = Object.assign(t.userData || {}, { hollowShared: true });
     return t;
+  }
+
+  function maxAnisotropy(renderer) {
+    if (renderer && typeof renderer.getMaxAnisotropy === 'function') return renderer.getMaxAnisotropy();
+    const capabilities = renderer && renderer.capabilities;
+    return capabilities && typeof capabilities.getMaxAnisotropy === 'function' ? capabilities.getMaxAnisotropy() : 1;
   }
 
   // Periodic multi-octave height field: adjacent tiles have matching edges.
@@ -138,13 +141,25 @@
     return maps;
   }
 
+  // Surface maps follow the albedo's UV transform (r128 shared one uvTransform; newer Three
+  // transforms each map). A tiled albedo gets a material-owned clone of the cached map.
+  function followAlbedo(map, material) {
+    const albedo = material.map;
+    if (!albedo || !albedo.isTexture || (albedo.repeat.equals(map.repeat) && albedo.offset.equals(map.offset) &&
+      albedo.center.equals(map.center) && albedo.rotation === map.rotation)) return map;
+    const t = map.clone();
+    t.repeat.copy(albedo.repeat); t.offset.copy(albedo.offset); t.center.copy(albedo.center); t.rotation = albedo.rotation;
+    t.userData = Object.assign({}, map.userData, { hollowShared: false });
+    material.userData.hollowOwnedMaps = (material.userData.hollowOwnedMaps || []).concat(t);
+    return t;
+  }
+
   function enhanceMaterial(THREE, material, options) {
     if (!material || !material.isMeshStandardMaterial) return material;
     const opts = options || {}, kind = opts.kind || 'concrete', maps = materialMaps(THREE, kind);
-    // All standard surface maps share the existing albedo's UV transform in r128.
-    // Leave custom shader hooks untouched (including the world's burn transition).
-    if (!material.normalMap || opts.replace) material.normalMap = maps.normal;
-    if (!material.roughnessMap || opts.replace) material.roughnessMap = maps.roughness;
+    // Leave custom shading untouched (including the world's burn transition node graph).
+    if (!material.normalMap || opts.replace) material.normalMap = followAlbedo(maps.normal, material);
+    if (!material.roughnessMap || opts.replace) material.roughnessMap = followAlbedo(maps.roughness, material);
     const strength = opts.strength == null ? ({ wall: 0.3, floor: 0.4, metal: 0.22, skin: 0.18, fabric: 0.2, wood: 0.32 }[kind] || 0.36) : opts.strength;
     material.normalScale.set(strength, strength);
     material.needsUpdate = true;
@@ -1291,8 +1306,9 @@
     doorway.addColorStop(0, 'rgba(110,76,46,0)'); doorway.addColorStop(0.5, 'rgba(154,118,73,.65)'); doorway.addColorStop(1, 'rgba(110,76,46,0)');
     x.fillStyle = doorway; x.fillRect(340, 91, 43, 82);
     const source = texture(THREE, c, true); source.mapping = THREE.EquirectangularReflectionMapping;
-    let target;
-    try {
+    let target = { texture: source, dispose: () => source.dispose() };
+    // Node materials (WebGPURenderer) prefilter an equirectangular environment on first use.
+    if (renderer.isWebGPURenderer !== true) try {
       const pmrem = new THREE.PMREMGenerator(renderer);
       try { pmrem.compileEquirectangularShader(); target = pmrem.fromEquirectangular(source); }
       finally { pmrem.dispose(); }
@@ -1302,8 +1318,8 @@
     }
     target.texture.userData = Object.assign(target.texture.userData || {}, { hollowShared: true });
     res.environments.set(renderer, target); res.environmentTargets.add(target);
-    const maxAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-    for (const maps of res.maps.values()) for (const t of Object.values(maps)) t.anisotropy = maxAnisotropy;
+    const anisotropy = Math.min(8, maxAnisotropy(renderer));
+    for (const maps of res.maps.values()) for (const t of Object.values(maps)) t.anisotropy = anisotropy;
     return target.texture;
   }
 

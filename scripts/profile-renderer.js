@@ -22,16 +22,17 @@ const OPTIMIZED = 'optimized';
 const DISABLED = 'render-optimizations-disabled';
 
 function parseArgs(argv) {
-  const opts = { frames: 30, warmup: 12, rounds: 2, seed: 44102, timeout: 180000,
+  const opts = { frames: 30, warmup: 12, rounds: 2, seed: 44102, timeout: 180000, backend: 'webgpu',
     output: path.join(ROOT, 'artifacts/performance.json'), chrome: process.env.CHROME_PATH };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') { opts.help = true; continue; }
     const key = { '--frames': 'frames', '--warmup': 'warmup', '--rounds': 'rounds', '--seed': 'seed',
-      '--timeout': 'timeout', '--output': 'output', '--chrome': 'chrome' }[arg];
+      '--timeout': 'timeout', '--output': 'output', '--chrome': 'chrome', '--backend': 'backend' }[arg];
     if (!key || !argv[i + 1]) throw new Error(`Unknown or incomplete option: ${arg}`);
-    const value = argv[++i]; opts[key] = ['output', 'chrome'].includes(key) ? value : Number(value);
+    const value = argv[++i]; opts[key] = ['output', 'chrome', 'backend'].includes(key) ? value : Number(value);
   }
+  if (!['webgpu', 'webgl'].includes(opts.backend)) throw new Error('backend must be webgpu or webgl');
   for (const [key, min, max] of [['frames', 5, 500], ['warmup', 0, 300], ['rounds', 1, 8], ['seed', 1, 2147483647], ['timeout', 30000, 600000]]) {
     if (!Number.isInteger(opts[key]) || opts[key] < min || opts[key] > max) throw new Error(`${key} must be an integer in ${min}..${max}`);
   }
@@ -48,13 +49,9 @@ function replaceOnce(source, before, after, description) {
 function rollbackRendererOptimizations(input) {
   let source = input;
   const changes = [];
-  const fastPrefix = '        if(uProg>0.999){\n' +
-    '          vec4 finalTex=texture2D(mapB,vUv);finalTex.rgb=pow(finalTex.rgb,vec3(2.2));diffuseColor*=finalTex;\n' +
-    '        }else if(uProg<0.001){\n' +
-    '          diffuseColor*=mapTexelToLinear(texture2D(map,vUv));\n' +
-    '        }else{\n';
-  source = replaceOnce(source, fastPrefix, '', 'morph shader steady-state fast paths');
-  source = replaceOnce(source, '        diffuseColor*=mC;\n        }', '        diffuseColor*=mC;', 'morph shader fast-path closing brace');
+  // The TSL morph graph keeps its branches; out-of-range thresholds make every fragment take the blending path.
+  source = replaceOnce(source, 'If(U.progress.greaterThan(.999),()=>{color.assign(texture(b));}).ElseIf(U.progress.lessThan(.001),',
+    'If(U.progress.greaterThan(2),()=>{color.assign(texture(b));}).ElseIf(U.progress.lessThan(-1),', 'morph shader steady-state fast paths');
   changes.push({ optimization: 'Steady-state morph shader branch', replacements: 1,
     disabledBehavior: 'Always sample both surface maps and both transition-noise lookups; at progress=1 the resulting surface is still the final map.' });
 
@@ -104,14 +101,15 @@ window.__HollowRenderProfile=Object.freeze({
       });
       world.traverseVisible(o=>{if(o.isMesh)visibleMeshNodes++;if(o.isLight)visibleLights.push({type:o.type,intensity:o.intensity,color:o.color.getHex(),position:o.matrixWorld.elements.slice(12,15),castShadow:o.castShadow});});
     }
-    const gl=renderer.getContext(),ext=gl.getExtension('WEBGL_debug_renderer_info');
+    const backend=renderer.backend,gl=backend.gl,ext=gl&&gl.getExtension('WEBGL_debug_renderer_info'),adapter=backend.device&&backend.device.adapterInfo;
     return {
       camera:{position:camera.position.toArray(),quaternion:camera.quaternion.toArray(),fov:camera.fov,aspect:camera.aspect},
       framebuffer:{width:renderer.domElement.width,height:renderer.domElement.height},
       inventory:{nodes,meshNodes,frozenNodes,visibleMeshNodes,geometryBuffers:seen.size,vertices,indices,geometryHash:hash.toString(16)},
       anisotropy:[...new Set([...maps].map(map=>map.anisotropy))].sort((a,b)=>a-b),
       visibleLights,exteriorVisible:exterior.visible,visibleRooms:specialRooms.filter(r=>r.group.visible).length,
-      gl:{vendor:gl.getParameter(ext?ext.UNMASKED_VENDOR_WEBGL:gl.VENDOR),renderer:gl.getParameter(ext?ext.UNMASKED_RENDERER_WEBGL:gl.RENDERER),version:gl.getParameter(gl.VERSION),shadingLanguage:gl.getParameter(gl.SHADING_LANGUAGE_VERSION)}
+      gpu:gl?{backend:window.HollowBackend,vendor:gl.getParameter(ext?ext.UNMASKED_VENDOR_WEBGL:gl.VENDOR),renderer:gl.getParameter(ext?ext.UNMASKED_RENDERER_WEBGL:gl.RENDERER),version:gl.getParameter(gl.VERSION),shadingLanguage:gl.getParameter(gl.SHADING_LANGUAGE_VERSION)}:
+        {backend:window.HollowBackend,vendor:adapter?adapter.vendor:'',renderer:adapter?[adapter.architecture,adapter.description].filter(Boolean).join(' ')||adapter.vendor:'WebGPU adapter'}
     };
   }
 });
@@ -137,20 +135,27 @@ function summarize(values) {
 
 function captureAssets() {
   const assets = new Map(), publicRoot = path.join(ROOT, 'public');
+  const threeBuild = path.dirname(require.resolve('three/webgpu'));
   const html = fs.readFileSync(path.join(publicRoot, 'index.html'));
   assets.set('/index.html', html);
-  // Discover local script/style references, including newly added engine modules.
-  // Freeze these bytes for both variants even if the worktree changes mid-run.
-  const references = [...html.toString('utf8').matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)=["']([^"']+)["']/gi)];
-  for (const [, reference] of references) {
+  // Discover local script/style/module-preload references, the import map's three builds and the classic
+  // scripts that boot.mjs loads. Freeze these bytes for both variants even if the worktree changes mid-run.
+  const text = html.toString('utf8');
+  const references = [...text.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)=["']([^"']+)["']/gi)].map(match => match[1]);
+  const importMap = text.match(/<script type="importmap">([\s\S]*?)<\/script>/);
+  if (importMap) references.push(...Object.values(JSON.parse(importMap[1]).imports).filter(target => /\.m?js$/.test(target)));
+  const boot = fs.readFileSync(path.join(publicRoot, 'boot.mjs'), 'utf8').match(/BOOT_ORDER\s*=\s*\[([^\]]*)\]/);
+  if (!boot) throw new Error('boot.mjs no longer declares BOOT_ORDER; review this profiler before rerunning.');
+  references.push(...[...boot[1].matchAll(/'([^']+)'/g)].map(match => match[1]));
+  for (const reference of references) {
     const url = new URL(reference, 'http://hollow-profile.invalid/');
-    if (url.origin !== 'http://hollow-profile.invalid' || !/\.(?:js|css)$/.test(url.pathname)) continue;
-    if (url.pathname === '/vendor/three.min.js') continue;
-    const file = path.resolve(publicRoot, '.' + decodeURIComponent(url.pathname));
-    if (!file.startsWith(publicRoot + path.sep)) throw new Error('Refusing an asset reference outside public/.');
+    if (url.origin !== 'http://hollow-profile.invalid' || !/\.(?:m?js|css)$/.test(url.pathname)) continue;
+    const vendor = url.pathname.match(/^\/vendor\/three\/build\/(three\.(?:webgpu|tsl|core)\.js)$/);
+    const file = vendor ? path.join(threeBuild, vendor[1]) : path.resolve(publicRoot, '.' + decodeURIComponent(url.pathname));
+    if (!vendor && !file.startsWith(publicRoot + path.sep)) throw new Error('Refusing an asset reference outside public/.');
     assets.set(url.pathname, fs.readFileSync(file));
   }
-  assets.set('/vendor/three.min.js', fs.readFileSync(require.resolve('three/build/three.min.js')));
+  if (!assets.has('/game.js')) throw new Error('game.js was not discovered from boot.mjs; review this profiler before rerunning.');
   return assets;
 }
 
@@ -167,7 +172,7 @@ async function sampleRun(browser, origin, source, assets, options, id, variant, 
       const pathname = url.pathname === '/' ? '/index.html' : url.pathname;
       if (url.origin !== origin || !assets.has(pathname)) return route.continue();
       const body = pathname === '/game.js' ? source : assets.get(pathname);
-      const contentType = pathname.endsWith('.js') ? 'application/javascript; charset=utf-8' :
+      const contentType = /\.m?js$/.test(pathname) ? 'text/javascript; charset=utf-8' :
         pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8';
       return route.fulfill({ status: 200, contentType, body });
     });
@@ -178,7 +183,7 @@ async function sampleRun(browser, origin, source, assets, options, id, variant, 
       localStorage.setItem('hollow.playerName', 'Render profile');
       localStorage.setItem('hollow.settings', JSON.stringify({ quality: 'low', motion: false, volume: 0, sensitivity: 1 }));
     }, options.seed);
-    await page.goto(origin + '/?qa=1', { waitUntil: 'domcontentloaded', timeout: options.timeout });
+    await page.goto(origin + '/?qa=1' + (options.backend === 'webgl' ? '&renderer=webgl' : ''), { waitUntil: 'domcontentloaded', timeout: options.timeout });
     await page.waitForFunction(() => !!window.HollowTest && !!window.__HollowRenderProfile, null, { timeout: options.timeout });
     await page.evaluate(seed => {
       // QA setup leaves the actual gameplay/render loop running. Never pause.
@@ -265,7 +270,7 @@ function formatReport(report, output) {
   return `# Controlled renderer A/B\n\n` +
     `This compares the captured current engine with a transient variant that disables only the rendering work-saving changes listed below. It is **not** a comparison with the original game and is **not** a hardware FPS claim.\n\n` +
     `Seed ${report.configuration.seed}; stationary play-state camera; 640 × 400 CSS viewport; ${report.runs[0].after.framebuffer.width} × ${report.runs[0].after.framebuffer.height} framebuffer; low quality; DPR 1; motion off; enemies hidden; normal HUD active during measurement.\n\n` +
-    `Adapter: ${report.environment.gl.renderer}. Chromium ${report.environment.browserVersion}.\n\n` +
+    `Backend: ${report.environment.gpu.backend}. Adapter: ${report.environment.gpu.renderer}. Chromium ${report.environment.browserVersion}.\n\n` +
     `| Renderer | Samples | Median frame interval | p95 frame interval | Median draw calls | Median triangles |\n|---|---:|---:|---:|---:|---:|\n` +
     `| Current optimized | ${a.intervalsMs.samples} | ${a.intervalsMs.median} ms | ${a.intervalsMs.p95} ms | ${a.drawCalls.median} | ${a.triangles.median} |\n` +
     `| Render optimizations disabled | ${b.intervalsMs.samples} | ${b.intervalsMs.median} ms | ${b.intervalsMs.p95} ms | ${b.drawCalls.median} | ${b.triangles.median} |\n\n` +
@@ -279,7 +284,7 @@ function formatReport(report, output) {
 async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) {
-    process.stdout.write('Controlled renderer A/B (no game edits).\nOptions: --frames 30 --warmup 12 --rounds 2 --seed 44102 --timeout 180000 --output artifacts/performance.json --chrome /path/to/chromium\n');
+    process.stdout.write('Controlled renderer A/B (no game edits).\nOptions: --frames 30 --warmup 12 --rounds 2 --seed 44102 --timeout 180000 --backend webgpu|webgl --output artifacts/performance.json --chrome /path/to/chromium\n');
     return;
   }
   const assets = captureAssets(), capturedSource = assets.get('/game.js').toString('utf8');
@@ -313,7 +318,9 @@ async function main(argv = process.argv.slice(2)) {
     // our temporary server/data directory can be closed and removed.
     browser = await chromium.launch({ executablePath, headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
       args: ['--no-sandbox', '--enable-unsafe-swiftshader',
-      '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
+      '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
+      // Headless WebGPU (SwiftShader) presents only with Vulkan compositing; see playwright.config.js.
+      '--enable-unsafe-webgpu', '--use-angle=vulkan', '--use-vulkan=swiftshader', '--enable-features=Vulkan,CDPScreenshotNewSurface'] });
     if (interrupted) { await browser.close(); throw new Error('Renderer profile interrupted during browser launch.'); }
     const order = [];
     for (let roundIndex = 0; roundIndex < options.rounds; roundIndex++) order.push(...(roundIndex % 2 ? [DISABLED, OPTIMIZED] : [OPTIMIZED, DISABLED]));
@@ -342,13 +349,13 @@ async function main(argv = process.argv.slice(2)) {
     const report = {
       schemaVersion: 1, generatedAt: new Date().toISOString(),
       kind: 'controlled-render-optimization-ab-not-original-version-or-hardware-benchmark',
-      configuration: { seed: options.seed, viewport: { width: 640, height: 400 }, deviceScaleFactor: 1, quality: 'low',
+      configuration: { seed: options.seed, backend: options.backend, viewport: { width: 640, height: 400 }, deviceScaleFactor: 1, quality: 'low',
         motion: false, framesPerRun: options.frames, warmupFrames: options.warmup, runOrder: order,
         position: { x: 25.5, y: 0, z: 16.8 }, yaw: 0, pitch: 0.04, fov: 72, state: 'play', enemies: 'hidden with existing QA control' },
       sourceAssets: Object.fromEntries([...assets].map(([file, body]) => [file, { sha256: sha256(body), bytes: body.length }])),
       sourceOverrides: rollback.changes, commonProbeSha256: sha256(PROBE),
       environment: { browserVersion: browser.version(), executablePath: executablePath || 'Playwright-managed Chromium',
-        gl: first.after.gl, platform: process.platform, architecture: process.arch, cpu: os.cpus()[0]?.model,
+        gpu: first.after.gpu, platform: process.platform, architecture: process.arch, cpu: os.cpus()[0]?.model,
         isolation: 'Temporary local server and score directory; fresh browser context each run; captured static assets routed identically.' },
       equivalence: { geometryBuffers: true, maze: true, gameplayInvariants: true, actualCamera: true, activeLighting: true, textureFiltering: true, images },
       aggregate, comparison: { medianIntervalReductionPercent: round((b.intervalsMs.median - a.intervalsMs.median) / b.intervalsMs.median * 100),

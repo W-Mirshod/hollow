@@ -242,13 +242,99 @@ test('four monster archetypes include a slow Warden that survives more than twen
     assert.equal(Object.isFrozen(monster), true);
     assert.ok(monster.hp > 0 && monster.radius > 0 && monster.damage > 0);
     assert.ok(monster.chase >= monster.walk && monster.head <= monster.height);
+    assert.ok(monster.walk < monster.search && monster.search < monster.chase, `${kind}: search is a brisk patrol between walk and chase`);
     if (kind !== 'warden') {
       assert.ok(monster.hp < warden.hp);
+      assert.ok(monster.damage < warden.damage);
       assert.ok(monster.walk > warden.walk);
+      assert.ok(monster.search > warden.search);
       assert.ok(monster.chase > warden.chase);
     }
   }
   assert.ok(rules.MONSTERS.crawler.height < 1);
+});
+
+test('monster visual contract and senses are unchanged by the speed overhaul', () => {
+  // visuals.test.js checks meshes against height/radius/head; game.spec.js checks the 68/32 damage values.
+  const expected = {
+    warden: [28, 68, .58, 2.8, 2.35, 17, 12], stalker: [7, 32, .34, 2.65, 2.12, 11, 11],
+    crawler: [4, 19, .43, .9, .55, 8, 8], shrieker: [6, 24, .34, 2.3, 1.9, 15, 16]
+  };
+  for (const [kind, values] of Object.entries(expected)) {
+    const m = rules.MONSTERS[kind];
+    assert.deepEqual([m.hp, m.damage, m.radius, m.height, m.head, m.hearing, m.vision], values, kind);
+  }
+});
+
+test('shared design speeds: faster monsters, a realistic sprinting player and an escapable chase', () => {
+  const { PLAYER: player, MONSTERS: monsters } = rules;
+  const design = { warden: [1.2, 3.2], stalker: [1.6, 5.5], crawler: [1.9, 6.2], shrieker: [1.4, 4.4] };
+  for (const [kind, [walk, chase]] of Object.entries(design)) {
+    assert.equal(monsters[kind].walk, walk, `${kind} walk`);
+    assert.equal(monsters[kind].chase, chase, `${kind} chase`);
+  }
+  assert.deepEqual([player.walk, player.run, player.crouch, player.aimWalk], [3, 6.8, 1.5, 2.1]);
+  const exhaustedWalk = player.walk * player.exhaustedSpeed;
+  for (const [kind, m] of Object.entries(monsters)) {
+    assert.ok(player.run > m.chase, `${kind}: a fresh sprint must outrun the sustained chase (escape is possible)`);
+    assert.ok(exhaustedWalk < m.chase, `${kind}: an exhausted player must not outwalk a chase (exhaustion is deadly)`);
+    assert.ok(player.walk > m.walk, `${kind}: wandering monsters are slower than a walking player`);
+    // Linear acceleration from walk to sprint, then a full stamina bar of sprinting.
+    const sprint = 1 / player.staminaDrain;
+    const lead = player.run * sprint - (player.run - player.walk) * player.sprintAccel / 2 - m.chase * sprint;
+    assert.ok(lead > 3, `${kind}: a full stamina bar buys a real lead (${lead.toFixed(2)} m)`);
+  }
+  const fastest = Math.max(...Object.values(monsters).map(m => m.chase));
+  assert.equal(fastest, monsters.crawler.chase);
+  for (const key of ['walk', 'search', 'chase']) {
+    assert.equal(Math.min(...Object.values(monsters).map(m => m[key])), monsters.warden[key], `warden is slowest at ${key}`);
+  }
+  for (const key of ['hp', 'damage']) {
+    assert.equal(Math.max(...Object.values(monsters).map(m => m[key])), monsters.warden[key], `warden has the most ${key}`);
+  }
+});
+
+test('lunges are short, bounded bursts that threaten walkers without making a fresh sprint futile', () => {
+  const { PLAYER: player, MONSTERS: monsters } = rules;
+  for (const [kind, m] of Object.entries(monsters)) {
+    for (const key of ['lungeRange', 'lungeSpeed', 'lungeTime', 'lungeCooldown']) {
+      assert.ok(Number.isFinite(m[key]) && m[key] > 0, `${kind}.${key}`);
+    }
+    assert.ok(m.lungeRange >= 2 && m.lungeRange <= 5, `${kind}: lunges start only at close range`);
+    assert.ok(m.lungeSpeed >= 1.35 && m.lungeSpeed <= 1.6, `${kind}: lunge multiplier`);
+    assert.ok(m.lungeTime >= .35 && m.lungeTime <= .5, `${kind}: lunge duration`);
+    assert.ok(m.lungeCooldown >= 2.5 && m.lungeCooldown >= 5 * m.lungeTime, `${kind}: lunges are occasional`);
+    assert.ok(m.lungeRange > m.radius + .32 + .35, `${kind}: a lunge starts beyond contact reach`);
+    assert.ok(m.chase * m.lungeSpeed * m.lungeTime < m.lungeRange, `${kind}: one lunge cannot overshoot its trigger range`);
+    assert.ok(m.chase * m.lungeSpeed > player.walk, `${kind}: lunges close on a walking player`);
+    // Even lunging at the maximum allowed rate, average pursuit stays below a fresh sprint.
+    const duty = m.lungeTime / (m.lungeTime + m.lungeCooldown);
+    const sustained = m.chase * (1 + (m.lungeSpeed - 1) * duty);
+    assert.ok(sustained < player.run, `${kind}: lunging pursuit ${sustained.toFixed(2)} m/s must stay below ${player.run}`);
+  }
+  assert.ok(monsters.crawler.chase * monsters.crawler.lungeSpeed > player.run, 'a crawler pounce out-paces a sprint for an instant');
+  assert.ok(monsters.warden.chase * monsters.warden.lungeSpeed < player.run, 'the warden cannot lunge down a sprinter');
+});
+
+test('player movement constants are frozen, finite and describe a coherent stamina loop', () => {
+  const player = rules.PLAYER;
+  assert.equal(Object.isFrozen(player), true);
+  const keys = ['walk', 'run', 'crouch', 'aimWalk', 'sprintAccel', 'staminaDrain', 'staminaRegenIdle', 'staminaRegenMove',
+    'exhaustedRecover', 'exhaustedSpeed', 'jumpCost', 'slideCost', 'slideSpeed', 'slideTime'];
+  assert.deepEqual(Object.keys(player).sort(), [...keys].sort());
+  for (const key of keys) assert.ok(Number.isFinite(player[key]) && player[key] > 0, key);
+  assert.ok(player.crouch < player.aimWalk && player.aimWalk < player.walk && player.walk < player.run);
+  assert.ok(player.sprintAccel >= .3 && player.sprintAccel <= .6, 'sprint builds up in about half a second');
+  assert.ok(Math.abs(1 / player.staminaDrain - 7) < .01, 'a full bar sprints for about seven seconds');
+  assert.ok(Math.abs(1 / player.staminaRegenIdle - 5) < .01, 'standing still refills in about five seconds');
+  assert.ok(Math.abs(1 / player.staminaRegenMove - 8) < .01, 'walking refills in about eight seconds');
+  assert.ok(player.staminaRegenIdle > player.staminaRegenMove);
+  assert.equal(player.exhaustedRecover, .35);
+  assert.equal(player.exhaustedSpeed, .85);
+  assert.ok(player.exhaustedRecover / player.staminaRegenMove < 3, 'exhaustion is a few seconds, not a stall');
+  assert.ok(player.jumpCost < player.slideCost && player.slideCost < player.exhaustedRecover);
+  assert.ok(Math.abs(player.slideSpeed / player.run - 1.1) < .02, 'a slide is a short burst above sprint');
+  assert.ok(player.slideTime > .3 && player.slideTime < 1);
 });
 
 test('body contact blocks crossing without pushing and permits escape from overlaps', () => {

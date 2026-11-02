@@ -8,7 +8,7 @@ test.beforeEach(({page})=>{
   page.on('pageerror',error=>runtimeErrors.push(error.message));
   page.on('console',message=>{
     const text=message.text();
-    if((message.type()==='error'&&/WebGL|shader|GL_INVALID|Startup failed/i.test(text))||/GL_INVALID_(?:OPERATION|VALUE|ENUM|FRAMEBUFFER)/.test(text))runtimeErrors.push(text);
+    if((message.type()==='error'&&/WebGL|WebGPU|WGSL|shader|GL_INVALID|Startup failed/i.test(text))||/GL_INVALID_(?:OPERATION|VALUE|ENUM|FRAMEBUFFER)| - While (?:calling|validating|encoding|finishing|creating)|\[Invalid [A-Z]/.test(text))runtimeErrors.push(text);
   });
 });
 test.afterEach(()=>expect(runtimeErrors,'No uncaught gameplay or shader errors').toEqual([]));

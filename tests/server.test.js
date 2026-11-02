@@ -6,7 +6,6 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
-const vm = require('node:vm');
 const { once } = require('node:events');
 const { WebSocket } = require('ws');
 const { createGameServer } = require('../server');
@@ -121,14 +120,26 @@ test('serves local HTML, JS, CSS, nested assets and the pinned Three.js runtime'
     assert.equal(response.headers['x-content-type-options'], 'nosniff');
     assert.ok(response.body.includes(text));
   }
-  const vendor = await f.request('/vendor/three.min.js');
-  assert.equal(vendor.status, 200);
-  assert.match(vendor.headers['content-type'], /^text\/javascript/);
-  const vendorContext = {};
-  vm.runInNewContext(vendor.body, vendorContext, { timeout: 1000 });
-  assert.equal(vendorContext.THREE.REVISION, '128');
-  assert.ok(vendor.body.length > 500000);
-  assert.equal(vendor.headers['cache-control'], 'public, max-age=86400');
+  for (const [pathname, text] of [
+    ['/vendor/three/build/three.webgpu.js', "from './three.core.js'"],
+    ['/vendor/three/build/three.tsl.js', "from './three.core.js'"],
+    ['/vendor/three/build/three.core.js', "const REVISION = '187'"],
+    ['/vendor/three/addons/tsl/display/BloomNode.js', "from 'three/webgpu'"]
+  ]) {
+    const vendor = await f.request(pathname);
+    assert.equal(vendor.status, 200, pathname);
+    assert.match(vendor.headers['content-type'], /^text\/javascript/, pathname);
+    assert.equal(vendor.headers['cache-control'], 'public, max-age=86400', pathname);
+    assert.equal(vendor.headers['x-content-type-options'], 'nosniff', pathname);
+    assert.ok(vendor.body.includes(text), pathname);
+  }
+  const core = await f.request('/vendor/three/build/three.core.js');
+  assert.ok(core.body.length > 500000);
+  const coreModule = await import('data:text/javascript;base64,' + Buffer.from(core.body).toString('base64'));
+  assert.equal(coreModule.REVISION, '187');
+  const revalidated = await f.request('/vendor/three/build/three.core.js', { headers: { 'If-None-Match': core.headers.etag } });
+  assert.equal(revalidated.status, 304);
+  assert.equal((await f.request('/vendor/three.min.js')).status, 404);
   assert.equal((await f.request('/vendor/ws/index.js')).status, 404);
   assert.equal((await f.request('/favicon.ico')).status, 204);
 });
@@ -166,6 +177,30 @@ test('rejects traversal, escaping symlinks, hidden files and malformed URLs with
   assert.equal((await f.request('/package.json')).status, 404);
   assert.equal((await f.request('/missing')).status, 404);
   assert.equal((await f.request('/health')).status, 200);
+  assert.deepEqual(f.errors, []);
+});
+
+test('vendor routes expose only the pinned Three.js modules and reject traversal', async t => {
+  const f = await fixture(t);
+  for (const pathname of [
+    '/vendor/three/build/three.cjs', '/vendor/three/build/three.module.js', '/vendor/three/build/nested/three.core.js',
+    '/vendor/three/build', '/vendor/three/package.json', '/vendor/three/src/Three.js', '/vendor/three/addons/Addons',
+    '/vendor/three/addons/tsl/display/BloomNode.mjs', '/vendor/three/addons/.hidden.js', '/vendor/three/addons/tsl/./display/BloomNode.js',
+    '/vendor/three/addons/tsl//display/BloomNode.js', '/vendor/three/addons/tsl/display/Missing.js'
+  ]) {
+    const response = await f.request(pathname);
+    assert.equal(response.status, 404, pathname);
+    assert.ok(!response.body.includes('three'), pathname);
+  }
+  for (const pathname of [
+    '/vendor/three/addons/../../package.json', '/vendor/three/addons/%2e%2e/%2e%2e/package.json',
+    '/vendor/three/addons/..%2f..%2f..%2f..%2fserver.js', '/vendor/three/build/../package.json'
+  ]) {
+    const response = await f.request(pathname);
+    assert.equal(response.status, 403, pathname);
+    assert.ok(!response.body.includes('"version"') && !response.body.includes('createGameServer'), pathname);
+  }
+  assert.equal((await f.request('/vendor/three/addons/tsl/display/BloomNode.js', { method: 'HEAD' })).status, 200);
   assert.deepEqual(f.errors, []);
 });
 

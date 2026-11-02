@@ -14,7 +14,7 @@ async function ready(page,name='Survival QA'){
   page.on('pageerror',error=>page.hollowErrors.push(error.message));
   page.on('console',message=>{
     const text=message.text();
-    if((message.type()==='error'&&/WebGL|shader|GL_INVALID|Startup failed/i.test(text))||/GL_INVALID_(?:OPERATION|VALUE|ENUM|FRAMEBUFFER)/.test(text))page.hollowErrors.push(text);
+    if((message.type()==='error'&&/WebGL|WebGPU|WGSL|shader|GL_INVALID|Startup failed/i.test(text))||/GL_INVALID_(?:OPERATION|VALUE|ENUM|FRAMEBUFFER)| - While (?:calling|validating|encoding|finishing|creating)|\[Invalid [A-Z]/.test(text))page.hollowErrors.push(text);
   });
   await page.addInitScript(name=>{
     localStorage.setItem('hollow.playerName',name);

@@ -10,6 +10,8 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const ROOM_RE = /^[a-z0-9][a-z0-9_.-]{0,47}$/;
 const UID_RE = /^[A-Za-z0-9_-]{8,40}$/;
+const THREE_BUILD = new Set(['three.webgpu.js', 'three.tsl.js', 'three.core.js']);
+const THREE_ADDON_RE = /^\/vendor\/three\/addons\/((?:[A-Za-z0-9_-]+\/){0,8}[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.js)$/;
 const MAX_KILLS = 12;
 const MIME = Object.freeze({
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -87,7 +89,8 @@ function createGameServer(options = {}) {
   const publicDir = path.resolve(options.publicDir || path.join(__dirname, 'public'));
   const dataDir = path.resolve(options.dataDir || process.env.DATA_DIR || path.join(__dirname, 'data'));
   const scoresFile = path.join(dataDir, 'scores.json');
-  const vendorFile = require.resolve('three/build/three.min.js');
+  const threeBuildDir = path.dirname(require.resolve('three/webgpu'));
+  const threeAddonDir = path.join(threeBuildDir, '..', 'examples', 'jsm');
   const scoreCooldownMs = options.scoreCooldownMs ?? 3000;
   const trustProxy = options.trustProxy ?? process.env.TRUST_PROXY === '1';
   const maxRoomsPerConnection = options.maxRoomsPerConnection ?? 2;
@@ -160,21 +163,33 @@ function createGameServer(options = {}) {
     return trustProxy && isIP(forwarded) ? forwarded : (req.socket.remoteAddress || 'unknown');
   }
 
+  // Only the pinned Three.js ES module build and its addons are exposed from node_modules.
+  function vendorAsset(pathname) {
+    if (pathname.startsWith('/vendor/three/build/')) {
+      const name = pathname.slice('/vendor/three/build/'.length);
+      return THREE_BUILD.has(name) ? { file: path.join(threeBuildDir, name), root: threeBuildDir } : null;
+    }
+    const addon = THREE_ADDON_RE.exec(pathname);
+    return addon ? { file: path.join(threeAddonDir, addon[1]), root: threeAddonDir } : null;
+  }
+
   async function serveAsset(req, res, pathname) {
-    const isVendor = pathname === '/vendor/three.min.js';
+    const isVendor = pathname.startsWith('/vendor/three/');
+    const vendor = isVendor ? vendorAsset(pathname) : null;
+    if (isVendor && !vendor) throw new RequestError(404, 'not found');
     const relative = pathname === '/' ? '/index.html' : pathname;
     if (!isVendor && relative.split('/').some(segment => segment.startsWith('.'))) {
       throw new RequestError(403, 'forbidden');
     }
-    const candidate = isVendor ? vendorFile : path.resolve(publicDir, '.' + relative);
+    const candidate = isVendor ? vendor.file : path.resolve(publicDir, '.' + relative);
     if (!isVendor && !candidate.startsWith(publicDir + path.sep)) throw new RequestError(403, 'forbidden');
     let filename;
     let stats;
     try {
       filename = await fs.promises.realpath(candidate);
-      // Public symlinks are permitted only when their destination stays public.
-      const allowedRoot = await fs.promises.realpath(isVendor ? path.dirname(vendorFile) : publicDir);
-      if (!filename.startsWith(allowedRoot + path.sep)) throw new RequestError(403, 'forbidden');
+      // Public symlinks are permitted only when their destination stays public; vendor files never leave their root.
+      const allowedRoot = await fs.promises.realpath(isVendor ? vendor.root : publicDir);
+      if (!filename.startsWith(allowedRoot + path.sep)) throw isVendor ? new RequestError(404, 'not found') : new RequestError(403, 'forbidden');
       stats = await fs.promises.stat(filename);
       if (!stats.isFile()) throw new RequestError(404, 'not found');
     } catch (error) {

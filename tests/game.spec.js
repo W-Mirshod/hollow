@@ -6,7 +6,7 @@ test.afterEach(()=>{expect(diagnosticPages.flatMap(page=>page.hollowErrors||[]),
 async function ready(page,name='QA Explorer'){
   page.hollowErrors=[];diagnosticPages.push(page);
   page.on('pageerror',error=>page.hollowErrors.push(error.message));
-  page.on('console',message=>{if(message.type()==='error'&&/WebGL|shader|GL_INVALID|Startup failed/.test(message.text()))page.hollowErrors.push(message.text());});
+  page.on('console',message=>{const text=message.text();if((message.type()==='error'&&/WebGL|WebGPU|WGSL|shader|GL_INVALID|Startup failed/.test(text))||/ - While (?:calling|validating|encoding|finishing|creating)|\[Invalid [A-Z]/.test(text))page.hollowErrors.push(text);});
   await page.addInitScript(name=>{
     localStorage.setItem('hollow.playerName',name);
     localStorage.setItem('hollow.settings',JSON.stringify({quality:'low',motion:false,sensitivity:1,volume:0}));

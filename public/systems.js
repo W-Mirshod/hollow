@@ -12,11 +12,20 @@
     Object.freeze({id:'pistol', name:'M9 · Sidearm', capacity:12, reserve:12, damage:1.35, pellets:1, interval:.29, reload:1.45, spread:.005, recoil:.025, noise:18, automatic:false}),
     Object.freeze({id:'shotgun', name:'SG-8 · Breacher', capacity:6, reserve:2, damage:.78, pellets:8, interval:.88, reload:2.85, spread:.059, recoil:.068, noise:45, automatic:false})
   ]);
+  // Speeds in m/s. A lunge multiplies chase speed by lungeSpeed for lungeTime seconds when the
+  // target is within lungeRange metres, then waits lungeCooldown seconds before the next one.
   const MONSTERS = Object.freeze({
-    warden: Object.freeze({name:'Warden',hp:28,walk:.95,chase:1.65,search:1.3,damage:68,radius:.58,height:2.8,head:2.35,hearing:17,vision:12}),
-    stalker: Object.freeze({name:'Stalker',hp:7,walk:1.3,chase:3.65,search:2,damage:32,radius:.34,height:2.65,head:2.12,hearing:11,vision:11}),
-    crawler: Object.freeze({name:'Crawler',hp:4,walk:1.6,chase:4.25,search:2.5,damage:19,radius:.43,height:.9,head:.55,hearing:8,vision:8}),
-    shrieker: Object.freeze({name:'Shrieker',hp:6,walk:1.15,chase:2.8,search:1.8,damage:24,radius:.34,height:2.3,head:1.9,hearing:15,vision:16})
+    warden: Object.freeze({name:'Warden',hp:28,walk:1.2,chase:3.2,search:2.2,damage:68,radius:.58,height:2.8,head:2.35,hearing:17,vision:12,lungeRange:2.6,lungeSpeed:1.35,lungeTime:.5,lungeCooldown:3.4}),
+    stalker: Object.freeze({name:'Stalker',hp:7,walk:1.6,chase:5.5,search:2.75,damage:32,radius:.34,height:2.65,head:2.12,hearing:11,vision:11,lungeRange:4.4,lungeSpeed:1.5,lungeTime:.42,lungeCooldown:2.6}),
+    crawler: Object.freeze({name:'Crawler',hp:4,walk:1.9,chase:6.2,search:3.35,damage:19,radius:.43,height:.9,head:.55,hearing:8,vision:8,lungeRange:3.6,lungeSpeed:1.6,lungeTime:.35,lungeCooldown:2.8}),
+    shrieker: Object.freeze({name:'Shrieker',hp:6,walk:1.4,chase:4.4,search:2.6,damage:24,radius:.34,height:2.3,head:1.9,hearing:15,vision:16,lungeRange:3.2,lungeSpeed:1.45,lungeTime:.4,lungeCooldown:2.8})
+  });
+  // Player movement (m/s) and stamina (0..1 per second). Sprinting reaches full speed over
+  // sprintAccel seconds; at zero stamina the player is exhausted until exhaustedRecover.
+  const PLAYER = Object.freeze({
+    walk:3, run:6.8, crouch:1.5, aimWalk:2.1, sprintAccel:.45,
+    staminaDrain:1/7, staminaRegenIdle:1/5, staminaRegenMove:1/8,
+    exhaustedRecover:.35, exhaustedSpeed:.85, jumpCost:.08, slideCost:.16, slideSpeed:7.5, slideTime:.65
   });
   function seeded(seed) {
     return function () {
@@ -123,5 +132,5 @@
     const falloff=kind==='shotgun'?Math.max(.22,1-Math.max(0,distance-7)/25):kind==='pistol'?Math.max(.6,1-Math.max(0,distance-18)/70):1;
     return w.damage*falloff*(headshot?(monsterKind==='warden'?1.1:1.85):1);
   }
-  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,MONSTERS,seeded,generateMaze,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage};
+  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,MONSTERS,PLAYER,seeded,generateMaze,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage};
 });
