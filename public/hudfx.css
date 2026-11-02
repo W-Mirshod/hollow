@@ -1,0 +1,123 @@
+/* HUD dopamine layer (hudfx.js). Lives inside #hud (fixed, z 3) so touch controls and menus stay above.
+   Static rules only: hudfx.js animates transform/opacity; the transitions below are its no-WAAPI fallback. */
+.hfx-layer {
+  --hfx-bone: #f3ede0; --hfx-blood: #e3463b; --hfx-ember: #e2c596; --hfx-ash: #aeb5aa;
+  --hfx-tick: 13px; --hfx-tick-length: 10px; --hfx-tick-width: 2px;
+  --hfx-pop-x: 30px; --hfx-pop-y: 13px; --hfx-pop-size: 19px;
+  --hfx-label-top: 33%; --hfx-label-size: 40px;
+  --hfx-banner-top: max(19.5%, 120px); --hfx-banner-size: 28px; --hfx-banner-width: min(700px, 82vw);
+  --hfx-arc: 110px;
+  --hfx-score-top: calc(var(--safe-top, 24px) + 20px); --hfx-score-right: var(--safe-right, 24px);
+  position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; contain: layout paint style;
+}
+.hfx-fx { position: absolute; inset: 0; }
+.hfx-layer, .hfx-layer * { pointer-events: none; }
+.hfx-hit, .hfx-pop, .hfx-label, .hfx-dmg, .hfx-banner { position: absolute; opacity: 0; }
+.hfx-show { opacity: 1; }
+.hfx-hit { transition: opacity .08s linear; }
+.hfx-pop, .hfx-label, .hfx-banner { transition: opacity .4s ease-out; }
+.hfx-dmg { transition: opacity .6s ease-out; }
+html.hfx-active #reticleHit { visibility: hidden; }
+
+/* Hit marker: four diagonal ticks that point at the reticle. */
+.hfx-hit { left: 50%; top: 50%; width: 0; height: 0; }
+.hfx-hit > i { position: absolute; left: 0; top: 0; width: var(--hfx-tick-length); height: var(--hfx-tick-width); margin: calc(var(--hfx-tick-width) / -2) 0 0 calc(var(--hfx-tick-length) / -2); border-radius: 1px; background: var(--hfx-bone); box-shadow: 0 0 0 1px rgba(10, 7, 6, .55), 0 0 6px rgba(0, 0, 0, .6); }
+.hfx-hit > i:nth-child(1) { transform: rotate(-45deg) translateX(var(--hfx-tick)); }
+.hfx-hit > i:nth-child(2) { transform: rotate(45deg) translateX(var(--hfx-tick)); }
+.hfx-hit > i:nth-child(3) { transform: rotate(135deg) translateX(var(--hfx-tick)); }
+.hfx-hit > i:nth-child(4) { transform: rotate(-135deg) translateX(var(--hfx-tick)); }
+.hfx-hit.hfx-head { transform: scale(1.3); }
+.hfx-hit.hfx-head > i { background: #fffaf1; box-shadow: 0 0 0 1px rgba(10, 7, 6, .5), 0 0 8px rgba(255, 228, 190, .75); }
+.hfx-hit.hfx-kill > i { background: var(--hfx-blood); box-shadow: 0 0 0 1px rgba(36, 2, 2, .6), 0 0 9px rgba(227, 70, 59, .8); }
+.hfx-hit.hfx-armor > i { background: #8e918a; box-shadow: 0 0 0 1px rgba(0, 0, 0, .5); }
+
+/* Points: mono, ember-white, just right of and below the reticle. */
+.hfx-pop { left: calc(50% + var(--hfx-pop-x)); top: calc(50% + var(--hfx-pop-y)); display: flex; flex-direction: column; align-items: flex-start; gap: 3px; white-space: nowrap; transform-origin: 0 50%; }
+.hfx-pop-value { font: 700 var(--hfx-pop-size)/1 var(--font-mono, monospace); letter-spacing: .01em; font-variant-numeric: tabular-nums; color: #f6e7cb; text-shadow: 0 1px 2px #000, 0 0 10px rgba(214, 150, 80, .5); }
+.hfx-pop-tag { font: 8px/1.2 var(--font-mono, monospace); letter-spacing: .2em; text-transform: uppercase; color: rgba(226, 197, 150, .9); text-shadow: 0 1px 2px #000; }
+
+/* Streak label: bold italic display face, tracked, with a short red smear behind it. */
+.hfx-label { --hfx-em: calc(var(--hfx-label-size) * var(--hfx-tier, 1)); left: 0; right: 0; top: var(--hfx-label-top); display: flex; flex-direction: column; align-items: center; gap: 7px; text-align: center; }
+.hfx-label-title { position: relative; display: block; }
+.hfx-label-text, .hfx-label-ghost { display: block; padding-left: .12em; font: italic 700 var(--hfx-em)/1 var(--font-display, Georgia, serif); letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
+.hfx-label-text { color: var(--hfx-bone); text-shadow: 0 2px 3px rgba(0, 0, 0, .9), 0 0 18px rgba(196, 30, 22, .5); }
+.hfx-label-ghost { position: absolute; inset: 0; opacity: 0; color: transparent; text-shadow: 0 0 9px rgba(255, 240, 225, .95), 0 0 24px rgba(226, 52, 40, .75); }
+.hfx-label-title::after { content: ""; display: block; height: 1px; margin: 9px auto 0; width: 72%; background: linear-gradient(90deg, transparent, rgba(227, 70, 59, .9), transparent); }
+.hfx-label-bar { position: absolute; left: 50%; top: 0; width: calc(var(--hfx-em) * 12); height: calc(var(--hfx-em) * 1.8); margin: calc(var(--hfx-em) * -.42) 0 0 calc(var(--hfx-em) * -6); opacity: 0; background: radial-gradient(closest-side, rgba(178, 20, 14, .68), rgba(120, 8, 6, .3) 58%, transparent); }
+.hfx-label-sub { font: 10px/1 var(--font-mono, monospace); letter-spacing: .3em; padding-left: .3em; color: var(--hfx-ember); text-shadow: 0 1px 2px #000; }
+.hfx-label-sub:empty { display: none; }
+.hfx-label.hfx-tier-1 .hfx-label-text { text-shadow: 0 2px 3px rgba(0, 0, 0, .9), 0 0 16px rgba(214, 150, 80, .45); }
+.hfx-label.hfx-tier-3 { --hfx-tier: 1.08; }
+.hfx-label.hfx-tier-4 .hfx-label-text { color: #ffe1d6; text-shadow: 0 2px 3px rgba(0, 0, 0, .9), 0 0 14px rgba(227, 52, 40, .8), 0 0 34px rgba(170, 16, 10, .55); }
+.hfx-label.hfx-tier-4, .hfx-label.hfx-warden { --hfx-tier: 1.14; }
+.hfx-label.hfx-warden .hfx-label-text { color: #f0d39f; text-shadow: 0 2px 3px rgba(0, 0, 0, .9), 0 0 16px rgba(214, 150, 80, .55), 0 0 36px rgba(170, 16, 10, .5); }
+.hfx-label.hfx-warden .hfx-label-title::after { height: 2px; background: linear-gradient(90deg, transparent, rgba(227, 197, 150, .9), transparent); }
+
+/* Directional damage: a ~60° crescent at radius --hfx-arc (bright rim, bleeding inward), rotated toward the source. */
+.hfx-dmg { left: 50%; top: 50%; width: 0; height: 0; }
+.hfx-dmg-arc { position: absolute; left: calc(var(--hfx-arc) * -1); top: calc(var(--hfx-arc) * -1); width: calc(var(--hfx-arc) * 2); height: calc(var(--hfx-arc) * 2); border-radius: 50%;
+  background: radial-gradient(closest-side, transparent calc(100% - 26px), rgba(150, 12, 8, .22) calc(100% - 15px), rgba(205, 30, 20, .62) calc(100% - 5px), rgba(240, 66, 50, .98) calc(100% - 2px), transparent);
+  -webkit-mask-image: conic-gradient(from -29deg, transparent, #000 14deg, #000 44deg, transparent 58deg, transparent); mask-image: conic-gradient(from -29deg, transparent, #000 14deg, #000 44deg, transparent 58deg, transparent); }
+.hfx-calm .hfx-dmg-arc { background: radial-gradient(closest-side, transparent calc(100% - 16px), rgba(170, 52, 44, .4) calc(100% - 5px), rgba(200, 74, 62, .9) calc(100% - 2px), transparent); }
+
+/* Alert banner: dark band, tracked serif headline, mono kicker. */
+.hfx-banner { left: 0; right: 0; top: var(--hfx-banner-top); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0 10px; text-align: center; }
+.hfx-banner-band { position: absolute; top: 0; bottom: 0; left: 50%; width: var(--hfx-banner-width); transform: translateX(-50%); background: linear-gradient(90deg, transparent, rgba(7, 12, 10, .82) 20%, rgba(7, 12, 10, .82) 80%, transparent); }
+.hfx-banner-band::before, .hfx-banner-band::after { content: ""; position: absolute; left: 10%; right: 10%; height: 1px; background: linear-gradient(90deg, transparent, rgba(215, 189, 148, .6), transparent); }
+.hfx-banner-band::before { top: 0; }
+.hfx-banner-band::after { bottom: 0; }
+.hfx-banner-kicker { position: relative; font: 9px/1 var(--font-mono, monospace); letter-spacing: .34em; padding-left: .34em; text-transform: uppercase; color: var(--hfx-ash); }
+.hfx-banner-kicker:empty { display: none; }
+.hfx-banner-title { position: relative; display: block; }
+.hfx-banner-text, .hfx-banner-ghost { display: block; padding-left: .2em; font: 700 var(--hfx-banner-size)/1.05 var(--font-display, Georgia, serif); letter-spacing: .2em; text-transform: uppercase; white-space: nowrap; }
+.hfx-banner-text { color: var(--hfx-bone); text-shadow: 0 2px 4px #000; }
+.hfx-banner-ghost { position: absolute; inset: 0; opacity: 0; }
+.hfx-ghost-a { color: rgba(227, 52, 40, .9); }
+.hfx-ghost-b { color: rgba(243, 237, 224, .7); }
+.hfx-danger .hfx-banner-band { background: linear-gradient(90deg, transparent, rgba(44, 5, 5, .86) 20%, rgba(44, 5, 5, .86) 80%, transparent); }
+.hfx-danger .hfx-banner-band::before, .hfx-danger .hfx-banner-band::after { background: linear-gradient(90deg, transparent, rgba(227, 70, 59, .75), transparent); }
+.hfx-danger .hfx-banner-kicker { color: #ea8f80; }
+.hfx-danger .hfx-banner-text { color: #f05a4b; text-shadow: 0 2px 4px #000, 0 0 22px rgba(205, 30, 20, .6); }
+.hfx-objective .hfx-banner-kicker { color: var(--mint, #afc2ac); }
+.hfx-objective .hfx-banner-text { color: #efd6a8; text-shadow: 0 2px 4px #000, 0 0 18px rgba(214, 150, 80, .35); }
+.hfx-calm .hfx-banner-ghost, .hfx-calm .hfx-label-bar { display: none; }
+.hfx-calm .hfx-label-ghost { text-shadow: 0 0 9px rgba(243, 237, 224, .7); }
+
+/* Running score: sits under the telemetry line on desktop. */
+.hfx-score { position: absolute; top: var(--hfx-score-top); right: var(--hfx-score-right); display: flex; align-items: center; gap: 9px; color: var(--hfx-bone); text-shadow: 0 1px 3px #000; }
+.hfx-score::before { content: ""; width: 17px; height: 1px; background: var(--ember, #d7bd94); }
+.hfx-score-cap { font: 8px/1 var(--font-mono, monospace); letter-spacing: .16em; text-transform: uppercase; color: var(--hfx-ash); }
+.hfx-score-value { display: inline-block; min-width: 4ch; font: 400 17px/1 var(--font-mono, monospace); letter-spacing: -.02em; font-variant-numeric: tabular-nums; text-align: right; transform-origin: 100% 50%; }
+.hfx-score.hfx-counting .hfx-score-value { color: #f6dcae; text-shadow: 0 1px 3px #000, 0 0 12px rgba(214, 150, 80, .6); }
+
+/* Touch and small screens: smaller type, tighter arcs; slots step around the relocated touch HUD. */
+body.touch-mode .hfx-layer, .hfx-layer.hfx-touch {
+  --hfx-tick: 11px; --hfx-tick-length: 9px; --hfx-pop-x: 26px; --hfx-pop-size: 16px;
+  --hfx-label-size: 30px; --hfx-banner-size: 24px; --hfx-arc: 96px;
+  --hfx-score-top: calc(var(--safe-top, 24px) + 182px); --hfx-score-right: calc(var(--safe-right, 24px) + 5px);
+}
+@media (max-width: 680px) {
+  .hfx-layer { --hfx-label-size: 28px; --hfx-banner-size: 22px; --hfx-arc: 92px; --hfx-banner-width: 96vw; }
+}
+@media (max-width: 680px) and (orientation: portrait) {
+  body.touch-mode .hfx-layer, .hfx-layer.hfx-touch {
+    --hfx-label-size: 25px; --hfx-banner-size: 20px; --hfx-arc: 90px;
+    --hfx-score-top: calc(var(--safe-top, 16px) + 222px); --hfx-score-right: var(--safe-right, 18px);
+    --hfx-banner-top: max(31%, calc(var(--safe-top, 16px) + 244px)); --hfx-label-top: max(38.5%, calc(var(--safe-top, 16px) + 308px));
+  }
+}
+@media (max-height: 520px) and (orientation: landscape) {
+  .hfx-layer { --hfx-label-size: 26px; --hfx-banner-size: 20px; --hfx-arc: 90px; --hfx-banner-top: max(19%, 104px); --hfx-label-top: max(34%, 162px); }
+  /* Phone landscape: banner under the map, label under the banner, points right of and above the reticle
+     (the feedback stack sits on the reticle line here). */
+  body.touch-mode .hfx-layer, .hfx-layer.hfx-touch {
+    --hfx-label-size: 22px; --hfx-banner-size: 19px; --hfx-arc: 90px; --hfx-tick: 10px; --hfx-tick-length: 8px;
+    --hfx-banner-top: calc(var(--safe-top, 12px) + 76px); --hfx-label-top: calc(var(--safe-top, 12px) + 120px);
+    --hfx-banner-width: min(340px, calc(100vw - 520px));
+    --hfx-pop-x: 30px; --hfx-pop-y: -26px; --hfx-pop-size: 15px; --hfx-score-top: calc(var(--safe-top, 12px) + 146px);
+  }
+  body.touch-mode .hfx-label-sub, .hfx-touch .hfx-label-sub { display: none; }
+  body.touch-mode .hfx-banner, .hfx-touch .hfx-banner { gap: 4px; padding: 6px 0 7px; }
+  body.touch-mode .hfx-banner-kicker, .hfx-touch .hfx-banner-kicker { font-size: 8px; }
+  body.touch-mode .hfx-label-title::after, .hfx-touch .hfx-label-title::after { margin-top: 6px; }
+}
