@@ -310,6 +310,34 @@ function wardMacro(kind,color){
     const mc=texture(macroTex,p.xz.div(13));color.assign(vec4(color.rgb.mul(mc.g.mul(.42).add(.72)),color.a));
   }
 }
+// Medium/high: contact shadow from the maze grid itself (one texel per cell, re-uploaded when a new maze replaces `grid`).
+// Floors and ceilings darken toward walls and into corners; walls darken toward the floor, the ceiling and inner corners.
+const aoTex=qualityLevel==='low'?null:new THREE.DataTexture(new Uint8Array(W*W*4),W,W);
+let aoGrid=null;
+if(aoTex){aoTex.magFilter=aoTex.minFilter=THREE.NearestFilter;aoTex.generateMipmaps=false;aoTex.wrapS=aoTex.wrapT=THREE.ClampToEdgeWrapping;aoTex.needsUpdate=true;}
+const aoSync=uniform(0).onFrameUpdate(()=>{
+  if(!aoTex||aoGrid===grid||grid.length!==W)return;
+  aoGrid=grid;const d=aoTex.image.data;
+  for(let z=0;z<W;z++)for(let x=0;x<W;x++){const v=grid[z][x]===1?255:0,i=(z*W+x)*4;d[i]=d[i+1]=d[i+2]=v;d[i+3]=255;}
+  aoTex.needsUpdate=true;
+});
+const aoFall=d=>d.div(.7).clamp(0,1).oneMinus().pow(2);
+function gridAO(kind){
+  const p=positionWorld,solid=c=>texture(aoTex,c.add(.5).div(W)).level(0).r;
+  if(kind==='wall'){
+    // The open cell in front of the face, the face tangent, and the inner corners at either end of it.
+    const n=normalWorldGeometry.xz,o=p.xz.add(n.mul(S*.5)).div(S).floor(),t=vec2(n.y.negate(),n.x);
+    const u=dot(p.xz.div(S).sub(o).sub(.5),t);
+    const side=solid(o.add(t)).mul(aoFall(u.oneMinus().sub(.5).mul(S))).max(solid(o.sub(t)).mul(aoFall(u.add(.5).mul(S))));
+    return side.max(aoFall(p.y)).max(aoFall(float(H).sub(p.y)).mul(.7)).mul(.45).add(aoSync).oneMinus();
+  }
+  const c=p.xz.div(S),cell=c.floor(),f=c.sub(cell),dE=f.x.oneMinus().mul(S),dW=f.x.mul(S),dN=f.y.mul(S),dS=f.y.oneMinus().mul(S);
+  const at=(x,z)=>solid(cell.add(vec2(x,z)));
+  const occ=at(1,0).mul(aoFall(dE)).max(at(-1,0).mul(aoFall(dW))).max(at(0,-1).mul(aoFall(dN))).max(at(0,1).mul(aoFall(dS)))
+    .max(at(1,-1).mul(aoFall(vec2(dE,dN).length()))).max(at(-1,-1).mul(aoFall(vec2(dW,dN).length())))
+    .max(at(1,1).mul(aoFall(vec2(dE,dS).length()))).max(at(-1,1).mul(aoFall(vec2(dW,dS).length())));
+  return occ.mul(kind==='floor'?.5:.4).add(aoSync).oneMinus();
+}
 // surf: {lux:{normal,roughness}, hell:{normal,roughness}} canvases, plus optional cells/macro ('wall'|'floor'|'ceiling')
 // and hellRep. Every material carries real normal and roughness maps (the hell set on normalMap/roughnessMap).
 function morphMat(luxC,hellC,rep,opts,surf){
@@ -328,6 +356,7 @@ function morphMat(luxC,hellC,rep,opts,surf){
     If(U.progress.greaterThan(.999),()=>{
       const h=hell();color.assign(h.c);surfN.assign(h.n);surfR.assign(h.r);
       if(macroTex&&s.macro)wardMacro(s.macro,color);
+      if(aoTex&&s.cells)color.assign(vec4(color.rgb.mul(gridAO(s.cells)),color.a));
     }).ElseIf(U.progress.lessThan(.001),()=>{
       const l=lux();color.assign(l.c);surfN.assign(l.n);surfR.assign(l.r);
     }).Else(()=>{
