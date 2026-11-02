@@ -4,7 +4,7 @@ import * as TSL from 'three/tsl';
 
 // Classic scripts share globals and run in this order; `.mjs` entries are imported as ES modules in place.
 // game.js stays last: it requires every global above it.
-const BOOT_ORDER = ['systems.js', 'horror.js', 'audio.js', 'navigation.js', 'visuals.js', 'controls.js', 'game.js'];
+const BOOT_ORDER = ['systems.js', 'locomotion.js', 'camerafx.js', 'horror.js', 'audio.js', 'navigation.js', 'visuals.js', 'controls.js', 'game.js'];
 
 const query = new URLSearchParams(location.search);
 const IS_TOUCH = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 1;
@@ -58,6 +58,9 @@ try {
   window.HollowRenderer = renderer;
   window.HollowBackend = renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2';
   window.HollowCreateRenderer = createRenderer;
+  // Optional effect modules: a failure only disables that layer, never the game.
+  try { await import('./postfx.mjs'); } catch (e) { console.warn('[The Hollow] post-processing disabled:', e); }
+  try { await import('./atmosphere.mjs'); } catch (e) { console.warn('[The Hollow] atmosphere disabled:', e); }
   for (const entry of BOOT_ORDER) await (entry.endsWith('.mjs') ? import('./' + entry) : loadScript(entry));
 } catch (error) {
   startupFailed(error);
