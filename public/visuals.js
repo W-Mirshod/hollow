@@ -414,6 +414,187 @@
     return { map: pixelCanvas(n, data), size: n };
   }
 
+  // Corridor decals: one alpha-tested atlas of 4 x 2 square tiles, t px each (see DECAL). Alpha is coverage, so the
+  // decals draw in the opaque pass without sorting; heights (mm) emboss blood and paint and sink the claw gouges.
+  // Image up = up on walls and forward on floors.
+  const DECAL = { smear: 0, hands: 1, splatter: 2, trail: 3, hazard: 4, pool: 5, claws: 6, steps: 7 };
+  function wardDecals(t, seed) {
+    const w = t * 4, h = t * 2, N = w * h, random = seeded(seed * 48271 + 11);
+    const A = new Float32Array(N), C = new Float32Array(N * 3), R = new Float32Array(N).fill(1), Hm = new Float32Array(N);
+    const E = noiseField(t, seed + 1, [[5, 5, 0.4], [11, 11, 0.3], [27, 27, 0.3]]);
+    const S = noiseField(t, seed + 2, [[3, 30, 0.6], [6, 60, 0.4]]), V = noiseField(t, seed + 3, [[30, 3, 0.6], [60, 6, 0.4]]);
+    const edge = (d, e, soft) => smoothstep(1 + soft, 1 - soft, d + (e - 0.5) * 0.55);
+    // Ellipse distance (1 on the outline); c/s rotate it.
+    const ell = (u, v, cx, cy, rx, ry, c, s) => {
+      const x = u - cx, y = v - cy, p = (x * c + y * s) / rx, q = (y * c - x * s) / ry;
+      return Math.sqrt(p * p + q * q);
+    };
+    // Capsule distance (1 on the outline).
+    const seg = (u, v, x0, y0, dx, dy, l2, r) => {
+      let k = ((u - x0) * dx + (v - y0) * dy) / l2; k = k < 0 ? 0 : k > 1 ? 1 : k;
+      const px = x0 + dx * k - u, py = y0 + dy * k - v;
+      return Math.sqrt(px * px + py * py) / r;
+    };
+    const capsule = (x0, y0, x1, y1, r) => [x0, y0, x1 - x0, y1 - y0, (x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) || 1e-9, r];
+    // o = [alpha, r, g, b, roughness, height]. Fresh blood is dark, glossy and raised; dried blood is browner and matte.
+    const o = new Float32Array(6);
+    const blood = (a, fresh, e) => {
+      const k = sat(fresh + (e - 0.5) * 0.4);
+      o[0] = a; o[1] = 0.16 + 0.15 * k; o[2] = 0.035 - 0.012 * k; o[3] = 0.03 - 0.008 * k; o[4] = 0.6 - 0.44 * k; o[5] = 0.1 + 0.25 * k * a;
+      return a;
+    };
+    const paint = (tile, fn) => {
+      const ox = (tile & 3) * t, oy = (tile >> 2) * t, sx = tile * 37 % t, sy = tile * 61 % t;
+      for (let y = 0; y < t; y++) for (let x = 0; x < t; x++) {
+        const l = ((y + sy) % t) * t + (x + sx) % t;
+        if (!(fn((x + 0.5) / t, (y + 0.5) / t, E[l], S[l], V[l]) > 0.02)) continue;
+        const i = (oy + y) * w + ox + x;
+        A[i] = o[0]; C[i * 3] = o[1]; C[i * 3 + 1] = o[2]; C[i * 3 + 2] = o[3]; R[i] = o[4]; Hm[i] = o[5];
+      }
+    };
+    // Runs: [x, top, length, radius] -> a tapering line with a bead at its end.
+    const drips = list => (u, v, e) => {
+      let a = 0;
+      for (let j = 0; j < list.length; j++) {
+        const [x, y0, len, r] = list[j];
+        if (v < y0 || v > y0 + len + r * 2 || Math.abs(u - x) > r * 2) continue;
+        const k = (v - y0) / len, wid = r * (1 - 0.45 * (k < 1 ? k : 1)) * (0.85 + 0.3 * e);
+        if (k <= 1) a = Math.max(a, smoothstep(wid + 0.004, wid - 0.002, Math.abs(u - x)));
+        a = Math.max(a, smoothstep(1.15, 0.85, ell(u, v, x, y0 + len, r * 1.25, r * 1.6, 1, 0)));
+      }
+      return a;
+    };
+    // 0: a hand wiped along the wall, thinning into streaks, with runs below.
+    const smearDrips = drips(Array.from({ length: 4 }, (_, i) => {
+      const x = 0.14 + i * 0.17 + random() * 0.08;
+      return [x, 0.42 + x * 0.08 + Math.sin(x * 5) * 0.02 + 0.15 * (1 - 0.5 * x) * 0.5, 0.06 + random() * random() * 0.34, 0.0045 + random() * 0.004];
+    }));
+    const c3 = Math.cos(0.3), s3 = Math.sin(0.3);
+    paint(DECAL.smear, (u, v, e, s) => {
+      const cy = 0.42 + u * 0.08 + Math.sin(u * 5) * 0.02, hw = 0.15 * (1 - 0.5 * u);
+      const band = smoothstep(hw + 0.03, hw - 0.02, Math.abs(v - cy) + (e - 0.5) * 0.05) * smoothstep(0.04, 0.12, u) * smoothstep(0.97, 0.82, u);
+      const streak = band > 0 ? smoothstep(0.22 + 0.5 * u, 0.3 + 0.5 * u, s * 0.8 + e * 0.2) : 0;
+      const start = u < 0.32 ? edge(ell(u, v, 0.15, 0.42, 0.1, 0.13, c3, s3), e, 0.12) : 0;
+      return blood(Math.max(band * streak, start, smearDrips(u, v, e)), 0.75 - u * 0.5, e);
+    });
+    // 1: three hands slapped against the wall; the lowest one slid down.
+    const hand = [capsule(-0.06, -0.02, -0.06 + Math.sin(-0.2) * 0.13, -0.02 - Math.cos(-0.2) * 0.13, 0.021),
+      capsule(-0.02, -0.02, -0.02 + Math.sin(-0.06) * 0.155, -0.02 - Math.cos(-0.06) * 0.155, 0.021),
+      capsule(0.02, -0.02, 0.02 + Math.sin(0.06) * 0.145, -0.02 - Math.cos(0.06) * 0.145, 0.021),
+      capsule(0.06, -0.02, 0.06 + Math.sin(0.2) * 0.11, -0.02 - Math.cos(0.2) * 0.11, 0.021), capsule(-0.075, 0.07, -0.16, -0.01, 0.025)];
+    const prints = [[0.27, 0.33, -0.25, 0.95], [0.66, 0.24, 0.3, 1.05], [0.5, 0.6, -0.08, 0.9]].map(([x, y, a, sc]) => [x, y, Math.cos(a) / sc, Math.sin(a) / sc]);
+    const slide = capsule(0.5, 0.62, 0.53, 0.97, 1);
+    paint(DECAL.hands, (u, v, e, s, vs) => {
+      let a = 0;
+      for (let j = 0; j < 3; j++) {
+        const [hx, hy, c, sn] = prints[j], x = (u - hx) * c + (v - hy) * sn, y = (v - hy) * c - (u - hx) * sn;
+        if (x < -0.3 || x > 0.3 || y < -0.3 || y > 0.3) continue;
+        let d = ell(x, y, 0, 0.05, 0.085, 0.1, 1, 0);
+        for (let f = 0; f < 5; f++) { const q = hand[f]; d = Math.min(d, seg(x, y, q[0], q[1], q[2], q[3], q[4], q[5])); }
+        a = Math.max(a, edge(d, e, 0.1) * smoothstep(0.3, 0.46, e * 0.5 + vs * 0.5 + (d > 0.65 ? 0.1 : 0)));
+      }
+      if (v > 0.55 && u > 0.38 && u < 0.65) {
+        const d = seg(u, v, slide[0], slide[1], slide[2], slide[3], slide[4], 0.07 * (1.15 - v));
+        a = Math.max(a, smoothstep(1.1, 0.8, d) * smoothstep(0.35, 0.5, vs * 0.7 + e * 0.3) * smoothstep(0.98, 0.85, v));
+      }
+      return blood(a, 0.55, e);
+    });
+    // 2: an impact spray: an uneven core, radial droplets and runs.
+    const drops = Array.from({ length: 48 }, () => {
+      const a = random() * TAU, r = 0.13 + Math.pow(random(), 1.5) * 0.34, s = 0.003 + random() * random() * 0.014, rx = s * (1.4 + random() * 1.6);
+      return [0.47 + Math.cos(a) * r, 0.4 + Math.sin(a) * r, rx, s, Math.cos(a), Math.sin(a)];
+    });
+    const sprayDrips = drips(Array.from({ length: 5 }, (_, i) => [0.36 + i * 0.055 + random() * 0.02, 0.45, 0.2 + random() * 0.32, 0.007 + random() * 0.006]));
+    const c4 = Math.cos(0.4), s4 = Math.sin(0.4);
+    paint(DECAL.splatter, (u, v, e) => {
+      let a = edge(ell(u, v, 0.47, 0.4, 0.12, 0.1, c4, s4), e, 0.1);
+      for (let j = 0; j < drops.length; j++) {
+        const q = drops[j];
+        if (Math.abs(u - q[0]) < q[2] * 1.2 && Math.abs(v - q[1]) < q[2] * 1.2) a = Math.max(a, smoothstep(1.1, 0.9, ell(u, v, q[0], q[1], q[2], q[3], q[4], q[5])));
+      }
+      return blood(Math.max(a, sprayDrips(u, v, e)), 0.8, e);
+    });
+    // 3: a body dragged along the floor (u = direction of travel): two streaky bands and a thin one out of a pool.
+    const c1 = Math.cos(0.1), s1 = Math.sin(0.1);
+    paint(DECAL.trail, (u, v, e, s) => {
+      let a = 0;
+      for (let j = 0; j < 3; j++) {
+        const cy = j ? (j === 1 ? 0.6 : 0.49) : 0.38, hw = j ? (j === 1 ? 0.09 : 0.035) : 0.075, yy = cy + Math.sin(u * 6 + cy * 9) * 0.025;
+        if (Math.abs(v - yy) > hw + 0.02) continue;
+        a = Math.max(a, smoothstep(hw + 0.02, hw - 0.015, Math.abs(v - yy)) * smoothstep(0.3 + 0.45 * u, 0.38 + 0.45 * u, s * 0.75 + e * 0.25) * smoothstep(0.03, 0.12, u) * smoothstep(0.99, 0.88, u));
+      }
+      const pool = u < 0.3 ? edge(ell(u, v, 0.13, 0.5, 0.09, 0.17, c1, s1), e, 0.15) : 0;
+      return blood(Math.max(a * (1 - u * 0.55), pool), 0.45 - u * 0.3, e);
+    });
+    // 4: worn diagonal yellow-black hazard paint (tiles seamlessly with itself, unmirrored).
+    paint(DECAL.hazard, (u, v, e, s) => {
+      const yellow = (Math.floor((u + v) * 4) & 1) === 0, wear = smoothstep(0.66, 0.74, e * 0.65 + s * 0.35), grime = smoothstep(0.35, 0.85, e) * 0.35;
+      o[0] = 1 - wear; o[1] = (yellow ? 0.8 : 0.07) * (1 - grime); o[2] = (yellow ? 0.6 : 0.07) * (1 - grime); o[3] = (yellow ? 0.08 : 0.065) * (1 - grime);
+      o[4] = 0.6 + grime * 0.3; o[5] = 0.06 - wear * 0.1;
+      return o[0];
+    });
+    // 5: an old pool: dried brown rim, still-wet black centre.
+    const spots = Array.from({ length: 14 }, () => { const a = random() * TAU, r = 0.36 + random() * 0.1; return [0.5 + Math.cos(a) * r, 0.5 + Math.sin(a) * r, 0.01 + random() * 0.025]; });
+    const c5 = Math.cos(0.5), s5 = Math.sin(0.5);
+    paint(DECAL.pool, (u, v, e) => {
+      const d = ell(u, v, 0.5, 0.5, 0.33, 0.27, c5, s5) + (e - 0.5) * 0.5;
+      let a = smoothstep(1.06, 0.96, d);
+      for (let j = 0; j < spots.length; j++) {
+        const q = spots[j];
+        if (Math.abs(u - q[0]) < q[2] * 1.2 && Math.abs(v - q[1]) < q[2] * 1.2) a = Math.max(a, smoothstep(1.15, 0.85, ell(u, v, q[0], q[1], q[2], q[2], 1, 0)));
+      }
+      if (!(blood(a, 0.15 + smoothstep(0.85, 0.55, d) * 0.85, e) > 0.02)) return 0;
+      const wet = smoothstep(0.85, 0.55, d);
+      o[1] *= 1 - 0.45 * wet; o[2] *= 1 - 0.45 * wet; o[4] = 0.62 - 0.52 * wet; o[5] = 0.1 + 0.35 * wet;
+      return a;
+    });
+    // 6: four claw gouges through paint into plaster, ragged dark rims.
+    paint(DECAL.claws, (u, v, e) => {
+      let a = 0, inside = 0;
+      for (let i = 0; i < 4; i++) {
+        const k = (v - 0.1 - i * 0.03) / 0.78;
+        if (k < 0 || k > 1) continue;
+        const x = 0.24 + i * 0.13 + k * 0.14 + Math.sin(k * Math.PI) * 0.035, wid = 0.004 + 0.02 * Math.sqrt(Math.sin(k * Math.PI));
+        const d = Math.abs(u - x) / wid + (e - 0.5) * 0.6;
+        inside = Math.max(inside, smoothstep(0.85, 0.6, d)); a = Math.max(a, smoothstep(1.7, 1.4, d));
+      }
+      const rim = a * (1 - inside);
+      o[0] = a; o[1] = 0.58 * inside + 0.07 * rim; o[2] = 0.54 * inside + 0.065 * rim; o[3] = 0.46 * inside + 0.06 * rim; o[4] = 0.95; o[5] = -1.4 * inside + 0.15 * rim;
+      return a;
+    });
+    // 7: bloody shoe prints walking out along u, fading step by step (authored for a 1.5 m x 0.5 m quad).
+    const cs = Math.cos(0.08), ss = Math.sin(0.08);
+    paint(DECAL.steps, (u, v, e, s, vs) => {
+      let a = 0;
+      for (let i = 0; i < 4; i++) {
+        const x = 0.14 + i * 0.235, y = 0.5 + (i & 1 ? 0.17 : -0.17), sn = i & 1 ? ss : -ss;
+        if (Math.abs(u - x) > 0.11 || Math.abs(v - y) > 0.12) continue;
+        const d = Math.min(ell(u, v, x + 0.02, y, 0.067, 0.09, cs, sn), ell(u, v, x - 0.062, y, 0.027, 0.075, cs, sn));
+        a = Math.max(a, edge(d, e, 0.1) * smoothstep(0.22 + i * 0.09, 0.34 + i * 0.09, e * 0.6 + vs * 0.4));
+      }
+      return blood(a, 0.3, e);
+    });
+    const albedo = new Uint8ClampedArray(N * 4), rough = new Uint8ClampedArray(N * 4), normal = new Uint8ClampedArray(N * 4);
+    for (let i = 0, p = 0; i < N; i++, p += 4) {
+      albedo[p] = sat(C[i * 3]) * 255; albedo[p + 1] = sat(C[i * 3 + 1]) * 255; albedo[p + 2] = sat(C[i * 3 + 2]) * 255; albedo[p + 3] = sat(A[i]) * 255;
+      rough[p] = rough[p + 1] = rough[p + 2] = (R[i] < 0.03 ? 0.03 : R[i] > 1 ? 1 : R[i]) * 255; rough[p + 3] = 255;
+    }
+    // Relief within each tile (clamped at tile borders), as if a tile spans one metre.
+    const mm = 1000 / t;
+    for (let y = 0; y < h; y++) {
+      const ty = y - y % t, yu = Math.max(ty, y - 1), yd = Math.min(ty + t - 1, y + 1);
+      for (let x = 0; x < w; x++) {
+        const tx = x - x % t, i = y * w + x, p = i * 4, xl = Math.max(tx, x - 1), xr = Math.min(tx + t - 1, x + 1);
+        const dx = -(Hm[y * w + xr] * A[y * w + xr] - Hm[y * w + xl] * A[y * w + xl]) / ((xr - xl || 1) * mm);
+        const dy = (Hm[yd * w + x] * A[yd * w + x] - Hm[yu * w + x] * A[yu * w + x]) / ((yd - yu || 1) * mm);
+        const inv = 1 / Math.sqrt(dx * dx + dy * dy + 1);
+        normal[p] = (dx * inv * 0.5 + 0.5) * 255; normal[p + 1] = (dy * inv * 0.5 + 0.5) * 255; normal[p + 2] = (inv * 0.5 + 0.5) * 255; normal[p + 3] = 255;
+      }
+    }
+    const make = data => { const [c, x] = canvas(w, h), img = x.createImageData(w, h); img.data.set(data); x.putImageData(img, 0, 0); return c; };
+    return { albedo: make(albedo), normal: make(normal), roughness: make(rough), size: t };
+  }
+
   // ---------- viewmodel finishes ----------
   // One periodic tile spans 10 cm of a weapon (batch() box-projects UVs), so machining marks, stipple and grain read at
   // arm's length. Albedo is a near-white modulation of the material colour; heights are millimetres.
@@ -487,7 +668,7 @@
 
   const SURFACES = {
     'ward-wall': [wardWall, [512, 1024, 1024]], 'ward-floor': [wardFloor, [512, 1024, 1024]],
-    'ward-ceiling': [wardCeiling, [256, 512, 512]], 'ward-macro': [wardMacro, [256, 256, 256]],
+    'ward-ceiling': [wardCeiling, [256, 512, 512]], 'ward-macro': [wardMacro, [256, 256, 256]], 'ward-decals': [wardDecals, [128, 256, 256]],
     'gun-metal': [gunMetal, [256, 256, 256]], 'gun-polymer': [gunPolymer, [256, 256, 256]], 'gun-wood': [gunWood, [256, 256, 256]],
     'gun-rubber': [gunRubber, [128, 128, 128]], 'gun-fabric': [gunFabric, [256, 256, 256]]
   };
@@ -659,8 +840,12 @@
     const res = store(THREE);
     if (res.viewEnvironment) return res.viewEnvironment;
     const [c, x] = canvas(512, 256), sky = x.createLinearGradient(0, 0, 0, 256);
-    sky.addColorStop(0, '#2f383c'); sky.addColorStop(0.42, '#171c1e'); sky.addColorStop(0.56, '#0f1213'); sky.addColorStop(1, '#060707');
+    sky.addColorStop(0, '#3f4a4f'); sky.addColorStop(0.42, '#1f2528'); sky.addColorStop(0.56, '#121617'); sky.addColorStop(1, '#070808');
     x.fillStyle = sky; x.fillRect(0, 0, 512, 256);
+    // A broad soft panel up and to the left (equirect x 0..128 = -x..-z) puts a long sheen along the weapon's visible flank.
+    const panel = x.createRadialGradient(70, 92, 4, 70, 92, 70);
+    panel.addColorStop(0, 'rgba(176,192,198,.75)'); panel.addColorStop(0.55, 'rgba(120,138,146,.35)'); panel.addColorStop(1, 'rgba(90,104,110,0)');
+    x.fillStyle = panel; x.fillRect(0, 22, 140, 140);
     for (const [cx, w, y, rgb, alpha] of [[128, 150, 36, '214,226,230', 0.95], [384, 120, 42, '196,212,218', 0.8], [256, 56, 20, '232,238,240', 0.7]]) {
       const glow = x.createRadialGradient(cx, y, 2, cx, y, w * 0.6);
       glow.addColorStop(0, `rgba(${rgb},${alpha * 0.35})`); glow.addColorStop(1, `rgba(${rgb},0)`);
@@ -690,7 +875,7 @@
     if (!cache.has(key)) {
       const maps = finishMaps(THREE, finishKind);
       const m = new THREE.MeshStandardMaterial({ color, roughness: roughness == null ? 1 : roughness, metalness,
-        map: maps.albedo, normalMap: maps.normal, roughnessMap: maps.roughness, envMap: viewEnvironment(THREE) });
+        map: maps.albedo, normalMap: maps.normal, roughnessMap: maps.roughness, envMap: viewEnvironment(THREE), envMapIntensity: 1.35 });
       if (!THREE.ColorManagement || !THREE.ColorManagement.enabled) m.color.convertSRGBToLinear();
       m.userData.hollowShared = true; m.userData.hollowSurface = finishKind; cache.set(key, m);
     }
@@ -1377,14 +1562,15 @@
   // Parkerized steel, bare-steel edges, black oxide, stippled polymer, walnut, brass, rubber and a woven glove.
   function gunPalette(THREE) {
     return {
-      steel: gunMaterial(THREE, 'gun:steel', 0x5f676b, 0.85, 'gun-metal'),
-      edge: gunMaterial(THREE, 'gun:edge', 0xb3b9bc, 0.95, 'gun-metal', 0.55),
-      black: gunMaterial(THREE, 'gun:black', 0x2c3234, 0.7, 'gun-metal'),
-      polymer: gunMaterial(THREE, 'gun:polymer', 0x2b3133, 0, 'gun-polymer'),
-      wood: gunMaterial(THREE, 'gun:wood', 0x6c4831, 0, 'gun-wood'),
+      // Phosphate and oxide finishes are coatings: half-metallic, so the key light still models their shape.
+      steel: gunMaterial(THREE, 'gun:steel', 0x6b7377, 0.5, 'gun-metal'),
+      edge: gunMaterial(THREE, 'gun:edge', 0xc0c6c9, 0.95, 'gun-metal', 0.5),
+      black: gunMaterial(THREE, 'gun:black', 0x353c3f, 0.4, 'gun-metal'),
+      polymer: gunMaterial(THREE, 'gun:polymer', 0x3a4042, 0, 'gun-polymer'),
+      wood: gunMaterial(THREE, 'gun:wood', 0x7a5236, 0, 'gun-wood'),
       brass: gunMaterial(THREE, 'gun:brass', 0xc29a55, 0.9, 'gun-metal', 0.6),
-      rubber: gunMaterial(THREE, 'gun:rubber', 0x17191a, 0, 'gun-rubber'),
-      glove: gunMaterial(THREE, 'gun:glove', 0x4b554e, 0, 'gun-fabric')
+      rubber: gunMaterial(THREE, 'gun:rubber', 0x1c1f20, 0, 'gun-rubber'),
+      glove: gunMaterial(THREE, 'gun:glove', 0x30352f, 0, 'gun-fabric')
     };
   }
 
@@ -1483,7 +1669,7 @@
     const bore = add(THREE, g, geometry(THREE, 'bore', () => new THREE.CircleGeometry(1, 16)), rubber,
       muzzle.x, muzzle.y, muzzle.z + 0.011, kind === 'shotgun' ? 0.016 : 0.011, kind === 'shotgun' ? 0.016 : 0.011, 1, 0, Math.PI);
     bore.castShadow = false;
-    const hands = { glove, rubber, sleeve: gunMaterial(THREE, 'flashlight:sleeve', 0x29343a, 0, 'gun-fabric') };
+    const hands = { glove, rubber, sleeve: gunMaterial(THREE, 'flashlight:sleeve', 0x22292d, 0, 'gun-fabric') };
     if (kind === 'rifle') {
       gripHand(THREE, g, hands, [0, -0.118, 0.066], -0.27, 0.0225, 0.033, 0.05, [0.36, -0.5, 0.79]);
       supportHand(THREE, g, hands, [0, 0.003, -0.31], 0.037, 0.0425, [-0.42, -0.46, 0.78]);
@@ -1507,7 +1693,7 @@
   function makeFlashlight(THREE) {
     const g = new THREE.Group(); g.name = 'field flashlight';
     const { steel, edge, black, rubber, glove } = gunPalette(THREE);
-    const sleeve = gunMaterial(THREE, 'flashlight:sleeve', 0x29343a, 0, 'gun-fabric');
+    const sleeve = gunMaterial(THREE, 'flashlight:sleeve', 0x22292d, 0, 'gun-fabric');
     cyl(THREE, g, black, 0, 0, 0, 0.027, 0.027, 0.236, Math.PI / 2, 0, 0, 16);
     cyl(THREE, g, steel, 0, 0, -0.134, 0.03, 0.045, 0.073, Math.PI / 2, 0, 0, 18);
     cyl(THREE, g, black, 0, 0, -0.172, 0.047, 0.047, 0.018, Math.PI / 2, 0, 0, 18);
@@ -1818,6 +2004,134 @@
     return g;
   }
 
+  // The decal atlas as one alpha-tested material; polygon offset keeps it on top of walls and floors at any distance.
+  function decalMaterial(THREE) {
+    const cache = store(THREE).materials, key = 'ward:decals';
+    if (!cache.has(key)) {
+      const s = surface('ward-decals'), maps = { albedo: texture(THREE, s.albedo, true), normal: texture(THREE, s.normal, false), roughness: texture(THREE, s.roughness, false) };
+      for (const t of Object.values(maps)) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+      store(THREE).maps.set('decals', maps);
+      const m = new THREE.MeshStandardMaterial({ map: maps.albedo, normalMap: maps.normal, roughnessMap: maps.roughness, roughness: 1, metalness: 0,
+        alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      m.userData.hollowShared = true; m.userData.hollowSurface = 'decals'; cache.set(key, m);
+    }
+    return cache.get(key);
+  }
+
+  // A unit quad showing one atlas tile (optionally mirrored), half a texel inside the tile so mips never pull in a neighbour.
+  function decalGeometry(THREE, tile, mirror) {
+    return geometry(THREE, 'ward:decal:' + tile + (mirror ? ':m' : ''), () => {
+      const g = new THREE.PlaneGeometry(1, 1), uv = g.attributes.uv, col = tile & 3, row = tile >> 2, e = 0.004;
+      for (let i = 0; i < uv.count; i++) {
+        const u = mirror ? 1 - uv.getX(i) : uv.getX(i), v = uv.getY(i);
+        uv.setXY(i, (col + e + u * (1 - 2 * e)) / 4, 1 - (row + 1 - (e + v * (1 - 2 * e))) / 2);
+      }
+      return g;
+    });
+  }
+
+  // Story dressing on its own seeded stream, so the fixtures, signs and wear keep their layout: blood at the room
+  // doorways, sparse spatter, claw marks and footprints, debris along the wall bases, sagging and loose cables, and
+  // hazard paint at the exit gate. Everything is flush with a wall, flat on the floor or above 2.65 m.
+  function dressWard(THREE, g, { grid, s, height, rooms, seed, cells, corridor, exit, ceilingY, overhead }) {
+    const random = seeded((Math.imul(seed | 0, 2654435761) ^ 0x5bd1e995) >>> 0), decal = decalMaterial(THREE);
+    const cable = standard(THREE, 'ward:cable', 0x15181a, 0.5, 0), plaster = standard(THREE, 'ward:plaster', 0x8b8676, 0.96, 0, 'concrete');
+    const grime = standard(THREE, 'ward:grime', 0x30362c, 1, 0, 'concrete'), k = Math.min(1, s / 3);
+    const walls = (x, z) => [[1, 0], [0, 1], [-1, 0], [0, -1]].filter(([dx, dz]) => grid[z + dz]?.[x + dx] === 1);
+    const wallPoint = (c, dx, dz, along) => [c.wx + dx * s / 2 - dz * along, c.wz + dz * s / 2 + dx * along];
+    const clampAlong = (a, w) => Math.max(-s / 2 + w / 2 + 0.02, Math.min(s / 2 - w / 2 - 0.02, a));
+    // (x, z) lies on the wall face; the quad faces back into the corridor.
+    const onWall = (tile, x, y, z, dx, dz, w, h, mirror) => {
+      y = Math.min(y, height - 0.06 - h / 2);
+      if (y - h / 2 < 0.02) return;
+      add(THREE, g, decalGeometry(THREE, tile, mirror == null ? random() < 0.5 : mirror), decal, x - dx * 0.006, y, z - dz * 0.006, w, h, 1, 0, Math.atan2(-dx, -dz), 0);
+    };
+    // Image right follows (dirX, dirZ) on the floor.
+    const onFloor = (tile, x, z, len, wid, dirX, dirZ, mirror) => add(THREE, g, decalGeometry(THREE, tile, mirror == null ? random() < 0.5 : mirror),
+      decal, x, 0.004, z, len, wid, 1, -Math.PI / 2, 0, Math.atan2(-dirZ, dirX));
+    const cellAt = new Map(cells.map(c => [c.x + ',' + c.z, c]));
+
+    // Approach corridors run south from each room door: hands and a smear on their side walls, a trail out of the room.
+    for (const r of rooms || []) {
+      const d = r && r.door, c = d && cellAt.get(d.x + ',' + (d.z + 1));
+      if (!c) continue;
+      walls(c.x, c.z).filter(([dx]) => dx !== 0).forEach(([dx, dz], i) => {
+        if (i && random() < 0.35) return;
+        const w = 0.62 * k, [x, z] = wallPoint(c, dx, dz, clampAlong(-dx * s * (0.16 + random() * 0.12), w));
+        onWall(i ? DECAL.smear : DECAL.hands, x, i ? 0.95 + random() * 0.3 : 1.2 + random() * 0.3, z, dx, dz, w, w);
+      });
+      if (random() < 0.7) onFloor(DECAL.trail, c.wx + (random() - 0.5) * 0.3 * k, c.wz - s / 2 + 0.96 * k, 1.9 * k, 0.75 * k, 0, 1);
+      else onFloor(DECAL.steps, c.wx + (random() - 0.5) * 0.3 * k, c.wz - s / 2 + 0.8 * k, 1.5 * k, 0.5 * k, 0, 1);
+    }
+
+    for (const c of cells) {
+      const sides = walls(c.x, c.z), roll = random();
+      if (roll < 0.1 && sides.length) {
+        const [dx, dz] = sides[random() * sides.length | 0], tile = roll < 0.04 ? DECAL.splatter : roll < 0.075 ? DECAL.claws : DECAL.smear;
+        const w = (tile === DECAL.claws ? 0.72 : 0.6) * k, [x, z] = wallPoint(c, dx, dz, clampAlong((random() - 0.5) * s, w));
+        onWall(tile, x, tile === DECAL.claws ? 1.3 + random() * 0.35 : 0.95 + random() * 0.6, z, dx, dz, w, w);
+      } else if (roll < 0.14) {
+        onFloor(DECAL.pool, c.wx + (random() - 0.5) * s * 0.35, c.wz + (random() - 0.5) * s * 0.35, 0.95 * k, 0.8 * k, Math.cos(roll * 99), Math.sin(roll * 99));
+      } else if (roll < 0.175) {
+        const alongX = corridor(c.x + 1, c.z) || corridor(c.x - 1, c.z), sign = random() < 0.5 ? -1 : 1;
+        onFloor(DECAL.steps, c.wx, c.wz, 1.5 * k, 0.5 * k, alongX ? sign : 0, alongX ? 0 : sign);
+      }
+      // Plaster crumbs against the skirting, with flakes and grit spreading into the corridor.
+      for (const [dx, dz] of sides) {
+        if (random() > 0.14) continue;
+        const a0 = (random() - 0.5) * (s - 1.2 * k), wallX = c.wx + dx * s / 2, wallZ = c.wz + dz * s / 2;
+        for (let i = 3 + (random() * 5 | 0); i > 0; i--) {
+          const size = (0.016 + random() * 0.022) * k, [x, z] = wallPoint(c, dx, dz, clampAlong(a0 + (random() - 0.5) * 0.8 * k, 0.1));
+          const m = box(THREE, g, random() < 0.72 ? plaster : grime, x - dx * 0.055, size, z - dz * 0.055, size * 1.3, size * 0.7, size, random() * 0.6, random() * TAU, random() * 0.6);
+          m.updateMatrixWorld(true);
+          const b = new THREE.Box3().setFromObject(m);
+          m.position.y -= b.min.y;
+          const far = dx > 0 ? wallX - b.min.x : dx < 0 ? b.max.x - wallX : dz > 0 ? wallZ - b.min.z : b.max.z - wallZ;
+          if (far > 0.075) { m.position.x += dx * (far - 0.075); m.position.z += dz * (far - 0.075); }
+        }
+        for (let i = 0; i < 5; i++) {
+          const w = (0.025 + random() * 0.06) * k, off = 0.08 + random() * random() * 0.55 * k;
+          const [x, z] = wallPoint(c, dx, dz, clampAlong(a0 + (random() - 0.5) * k, 0.1));
+          box(THREE, g, plaster, x - dx * off, 0.003, z - dz * off, w, 0.005, w * (0.5 + random() * 0.6), 0, random() * TAU, 0);
+        }
+      }
+      if (!overhead) continue;
+      // Cables tied off at the wall pipes sag between them; a few loose ends drop out of the ceiling.
+      for (const [dx, dz] of sides) {
+        if (random() > 0.09) continue;
+        const y0 = ceilingY - 0.035, drop = Math.min(0.12 + random() * 0.2, y0 - 2.7), inset = 0.2 + random() * 0.08;
+        if (drop < 0.04) continue;
+        const a = -s * (0.3 + random() * 0.15), b = s * (0.3 + random() * 0.15), pts = [];
+        for (let i = 0; i <= 10; i++) {
+          const t = i / 10, sag = drop * 4 * t * (1 - t), out = inset + 0.12 * sag, [x, z] = wallPoint(c, dx, dz, a + (b - a) * t);
+          pts.push(new THREE.Vector3(x - dx * out, y0 - sag, z - dz * out));
+        }
+        add(THREE, g, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 18, 0.011, 5, false), cable, 0, 0, 0);
+      }
+      const len = Math.min(0.3 + random() * 0.22, height - 0.04 - 2.72);
+      if (random() < 0.045 && len > 0.1) {
+        const x0 = c.wx + (random() - 0.5) * s * 0.5, z0 = c.wz + (random() - 0.5) * s * 0.5, a = random() * TAU, pts = [];
+        for (let i = 0; i <= 6; i++) {
+          const t = i / 6, curl = t * t * 0.07;
+          pts.push(new THREE.Vector3(x0 + Math.cos(a) * curl, height - 0.04 - len * t, z0 + Math.sin(a) * curl));
+        }
+        add(THREE, g, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 8, 0.009, 5, false), cable, 0, 0, 0);
+      }
+    }
+
+    // Worn hazard paint across the floor in front of the exit gate and up both jambs.
+    const inner = exit && cellAt.get((exit[0] - 1) + ',' + exit[1]);
+    if (inner) {
+      const gateX = exit[0] * s, wid = Math.min(0.56, s * 0.19), n = Math.max(1, Math.round(s / 0.75)), x = gateX - 0.06 - wid / 2;
+      for (let i = 0; i < n; i++) onFloor(DECAL.hazard, x, inner.z * s + (i + 0.5) * s / n, s / n, wid, 0, 1, false);
+      for (const [dx, dz] of walls(inner.x, inner.z)) {
+        if (dx) continue;
+        const z = inner.wz + dz * s / 2, h = Math.min(0.8, (height - 0.2) / 3);
+        for (let i = 0; i < 3; i++) onWall(DECAL.hazard, gateX - 0.06 - 0.21 * k, h * (i + 0.5) + 0.03, z, 0, dz, 0.42 * k, h, false);
+      }
+    }
+  }
+
   // grid[z][x]: 0 = open, 1 = wall. Rooms {x,z,w,d,door?:{x,z}}
   // use cell units; returned geometry/practicals use world metres at origin (0,0).
   // Shared source assets live for the session; disposeGroup owns merged geometry.
@@ -1943,6 +2257,7 @@
           width / 18, 0.008, width);
       }
     }
+    dressWard(THREE, g, { grid, s, height, rooms, seed, cells, corridor, exit: queue[0], ceilingY, overhead });
     batch(THREE, g);
     // No shadow-map draws: these thin details receive the caller's pooled light.
     g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } });

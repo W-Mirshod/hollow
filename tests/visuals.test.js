@@ -629,14 +629,14 @@ function assertWardClear(group, options) {
   });
 }
 
-test('corridor dressing stays within ten material draws on structured floorplans without lights or shadows', () => {
+test('corridor dressing stays within thirteen material draws on structured floorplans without lights or shadows', () => {
   for (const seed of [0, 1, 42]) {
     const options = wardOptions(seed), before = JSON.stringify(options);
     const group = V.decorateWard(THREE, options);
     assert.ok(group.isGroup && group.userData.decoration);
     assert.equal(group.userData.colliders.length, 0);
     assert.equal(JSON.stringify(options), before, 'must not mutate the floorplan');
-    assert.ok(meshCount(group) >= 8 && meshCount(group) <= 10);
+    assert.ok(meshCount(group) >= 8 && meshCount(group) <= 13);
     const materials = new Set();
     group.traverse(o => {
       assert.ok(!o.isLight);
@@ -770,7 +770,7 @@ test('empty, room-only, ragged and low-ceiling wards remain safe without overhea
     const options = { grid: [[1, 1, 1, 1, 1], [1, 0, 0, 0, 1], [1, 0, 1], [], [1, 1, 1]], rooms: [], cellSize: s, height, seed: 7 };
     const group = V.decorateWard(THREE, options);
     if (height < 2.95) assert.equal(group.userData.practicals.length, 0);
-    assert.ok(meshCount(group) <= 10);
+    assert.ok(meshCount(group) <= 13);
     assertFiniteGeometry(group); assertWardClear(group, options); V.disposeGroup(group);
   }
 });
