@@ -872,7 +872,7 @@ const camFX=window.HollowCameraFX.create({seed:1337});
 const camIn={speed:0,walkSpeed:PL.walk,runSpeed:PL.run,running:false,crouching:false,aiming:false,onGround:true,sliding:false,strafe:0,lookDX:0,lookDY:0,stamina:1,exhausted:false,danger:0,health:100,motion:true};
 let camPrevYaw=0,camPrevPitch=0,csPrevX=0,csPrevZ=0;
 const touchMove={x:0,y:0};
-let state='menu',prevState='outside',torchOn=false,battery=1,elapsed=0,t=0,grace=0,danger=0,caughtT=0,ambientT=12,heartT=0,msgTimer=0;
+let state='menu',prevState='outside',torchOn=false,battery=1,elapsed=0,t=0,grace=0,danger=0,caughtT=0,ambientT=12,msgTimer=0;
 let cs=0,csFlags={},csFrom=null,chanFall=null,birdT=1,boxT=0;
 const MAG=30;let mag=MAG,reserve=weaponDefs[0].reserve,fireT=0,reloadT=0,mouseDown=false,gunKick=0,flashT=0,gunOut=false,nearestD=99,caughtBy=null,stingerCD=0,mapT=0;
 let visited=new Uint8Array(W*W),ammoBoxes=[];
@@ -939,7 +939,7 @@ function newGame(full){
   avSpot.visible=avFlash.visible=false;
   worldSeed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);resetSurvivor();
   P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
-  battery=1;elapsed=0;danger=0;ambientT=14;heartT=0;$('flash').style.opacity=0;
+  battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   if(droneGain)droneGain.gain.value=0;
   if(full){
@@ -1005,7 +1005,7 @@ function sThud(x,y,z,vol,freq){
 }
 function shaper(amount){const ws=AC.createWaveShaper(),c=new Float32Array(1024);for(let i=0;i<1024;i++){const x=i/512-1;c[i]=Math.tanh(x*amount);}ws.curve=c;return ws;}
 function sCreature(m,cue,volume=1){
-  const id=sVoice(m.kind,cue,m.pos.x,cue==='step'?.15:m.stats.head,m.pos.z,volume);
+  const id=sVoice(m.kind,cue,m.pos.x,cue==='step'?.15:m.stats.head,m.pos.z,cue==='step'?volume*(STEP_LEVEL[m.kind]||1):volume);
   if(id!=null)vox(m).said[cue]=t;
   return id;
 }
@@ -2045,7 +2045,7 @@ function startCoopRound(seed,gen){
   R.dmApplied=new Array(MAX_MON).fill(0);R.lastSh=R.gn===gen?R.sh:0;R.seen=false;
   buildMazeSeeded(seed);resetSurvivor();
   P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
-  battery=1;elapsed=0;danger=0;ambientT=14;heartT=0;$('flash').style.opacity=0;
+  battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   setHell();P.pos.set(PED.x-.85,0,PED.z+(NET.role==='host'?-.8:.8));P.yaw=Math.PI/2;P.pitch=0;grace=10;
   if(NET.role==='host')spawnMonsters(12);else{hideMonsters();monCount=12;}
@@ -2223,6 +2223,8 @@ function cleanRow(r){if(!r||typeof r!=='object')return null;const time=Number(r.
 // here; call sites elsewhere only make short calls into this section.
 if(!window.HollowPlayerAudio||!window.HollowWeaponAudio)throw new Error('A local game asset could not be loaded.');
 const VOICE_PRIORITY={breath:0,step:1,whisper:2,moan:2,notice:3,laugh:3,growl:3,attack:4,death:4,scream:4};
+// Footsteps by weight: the Warden's tread carries, the others creep about 3-4.5 dB under it.
+const STEP_LEVEL={warden:1,stalker:.85,crawler:.85,shrieker:.85};
 const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
 const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,crouching:false,danger:0,chase:false,health:100,effects:true,hidden:false};
 let reloadEmpty=false,audioChase=false,chaseStingT=0,audioFault=false,audioSeq=0;
