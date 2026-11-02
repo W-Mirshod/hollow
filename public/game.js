@@ -2137,7 +2137,7 @@ const chaos=HollowChaos.create(worldSeed),streak=HollowChaos.createStreak({effec
 const hud=HollowHUDFX.create({root:$('hud'),document,motion:preferences.motion,effects:preferences.effects,touch:dopaTouch()});
 const HITSTOP_SCALE=.08,EMERGENCY_RED=lin(0xff2414),SPARK_DOWN=new THREE.Vector3(0,-1,0);
 let hitstopT=0,chaosLive=false;
-// chaos.beacon(0..1), refreshed every frame for the emergency beacons. TODO(I3 visuals): atmosphere beacons read these.
+// chaos.beacon(0..1), refreshed every simulation step for the emergency beacons. TODO(I3 visuals): atmosphere beacons read these.
 const beacons=[chaos.beacon(0),chaos.beacon(1)];
 const chaosIn={active:false,danger:0,chasers:0,nearest:99,alarm:false,sheltered:false,effects:true,health:100,lights:0,yaw:0,cue:false};
 const dopa={state:'',motion:preferences.motion,effects:preferences.effects,touch:dopaTouch(),snap:chaos.snapshot(),
@@ -2147,7 +2147,7 @@ const dopa={state:'',motion:preferences.motion,effects:preferences.effects,touch
 function dopaTouch(){return !!(controls?controls.touch:IS_TOUCH);}
 function dopaTrauma(amount){const rig=typeof camFX!=='undefined'?camFX:null;if(rig&&typeof rig.addTrauma==='function')rig.addTrauma(amount);}
 function chaosWorldBuilt(ward){
-  chaos.reset(worldSeed);streak.reset();hud.clear();hitstopT=0;chaosLive=false;chaosHemiRestore();
+  chaos.reset(worldSeed);streak.reset();hud.clear();hitstopT=0;chaosLive=false;chaosHemiRestore();chaosBeacons();
   const h=horror.snapshot();dopa.hEvents=h.events;dopa.hFuses=h.fuses;dopa.snap=chaos.snapshot();
   dopa.fuses=fuses;dopa.powered=exitPowered;dopa.open=exitOpen;dopa.chasers=0;dopa.chaseT=dopa.lostT=-1e9;dopa.emergency=dopa.shock=0;
   dopa.hitstops=dopa.lastHitstop=dopa.kills=dopa.damageHits=0;dopa.lastKill=dopa.damage=null;
@@ -2170,7 +2170,7 @@ function chaosStep(dt){
   chaosLive=state==='play';dopa.chasers=chasers;
   const c=chaosIn;c.active=chaosLive;c.danger=danger;c.chasers=chasers;c.nearest=nearestD;c.alarm=exitPowered&&!exitOpen;c.sheltered=!!currentShelter();
   c.effects=preferences.effects;c.health=P.health;c.lights=lights;c.yaw=P.yaw;c.cue=cue;
-  const events=chaos.update(dt,c);dopa.snap=chaos.snapshot();
+  const events=chaos.update(dt,c);dopa.snap=chaos.snapshot();chaosBeacons();
   for(let i=0;i<events.length;i++)chaosEvent(events[i]);
   // Emergency mood: chases, the exit alarm and blackouts pull the practicals and live strips toward red.
   const s=dopa.snap,target=preferences.effects&&chaosLive?Math.min(1,(s.chasing?.85:0)+(c.alarm?.45:0)+.3*s.blackoutLevel):0;
@@ -2245,8 +2245,8 @@ function chaosSparks(e){
   const a=typeof atm!=='undefined'?atm:null;
   if(a&&typeof a.sparks==='function')a.sparks(x,2.9,z,{dir:SPARK_DOWN,count:28,speed:3});
 }
+function chaosBeacons(){for(let i=0;i<beacons.length;i++)beacons[i]=chaos.beacon(i);}
 function chaosVisuals(){
-  for(let i=0;i<beacons.length;i++)beacons[i]=chaos.beacon(i);
   const post=typeof fx!=='undefined'?fx:null;if(!post||!post.uniforms)return;
   const u=post.uniforms,s=dopa.snap,on=preferences.effects&&chaosLive&&state==='play';
   if(u.blackout)u.blackout.value=on?.75*s.blackoutLevel:0;
@@ -2263,7 +2263,7 @@ function dopaFrame(rawDt,dt){
     hud.setOptions({motion:dopa.motion,effects:dopa.effects,touch});if(relight)chaosLights();
   }
   if(state!==dopa.state){dopa.state=state;if(state==='caught'||state==='dead'||state==='win'||state==='coopEnd')hud.clear();}
-  if(chaosLive&&state!=='play'&&state!=='pause'){chaosLive=false;chaosIn.active=false;chaos.update(0,chaosIn);dopa.snap=chaos.snapshot();dopa.emergency=0;chaosLights();}
+  if(chaosLive&&state!=='play'&&state!=='pause'){chaosLive=false;chaosIn.active=false;chaos.update(0,chaosIn);dopa.snap=chaos.snapshot();dopa.emergency=0;chaosBeacons();chaosLights();}
   dopa.shock=Math.max(0,dopa.shock-rawDt*1.6);
   let sdt=dt;
   if(NET.inGame||state!=='play')hitstopT=0;
