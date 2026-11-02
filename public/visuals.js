@@ -514,17 +514,24 @@
       }
       return blood(Math.max(a, sprayDrips(u, v, e)), 0.8, e);
     });
-    // 3: a body dragged along the floor (u = direction of travel): two streaky bands and a thin one out of a pool.
+    // 3: a body dragged along the floor (u = direction of travel on a 1.9 x 0.75 m quad): a pool, then a solid smear
+    // that breaks up into parallel streaks of different lengths.
     const c1 = Math.cos(0.1), s1 = Math.sin(0.1);
+    const streaks = Array.from({ length: 15 }, (_, i) => [0.5 + (i / 14 - 0.5) * 0.36 + (random() - 0.5) * 0.02,
+      0.003 + random() * random() * 0.011, 0.3 + random() * 0.62]);
     paint(DECAL.trail, (u, v, e, s) => {
+      const y = v - Math.sin(u * 5.5) * 0.03 - Math.sin(u * 13 + 1) * 0.008;
       let a = 0;
-      for (let j = 0; j < 3; j++) {
-        const cy = j ? (j === 1 ? 0.6 : 0.49) : 0.38, hw = j ? (j === 1 ? 0.09 : 0.035) : 0.075, yy = cy + Math.sin(u * 6 + cy * 9) * 0.025;
-        if (Math.abs(v - yy) > hw + 0.02) continue;
-        a = Math.max(a, smoothstep(hw + 0.02, hw - 0.015, Math.abs(v - yy)) * smoothstep(0.3 + 0.45 * u, 0.38 + 0.45 * u, s * 0.75 + e * 0.25) * smoothstep(0.03, 0.12, u) * smoothstep(0.99, 0.88, u));
+      if (u > 0.08 && Math.abs(y - 0.5) < 0.23) {
+        a = smoothstep(0.22, 0.18, Math.abs(y - 0.5) + (e - 0.5) * 0.06) * smoothstep(0.44, 0.2, u + (s - 0.5) * 0.25);
+        for (let j = 0; j < streaks.length; j++) {
+          const [cy, w, len] = streaks[j], dv = Math.abs(y - cy);
+          if (dv > w + 0.005 || u > len + 0.05) continue;
+          a = Math.max(a, smoothstep(w + 0.004, w, dv) * smoothstep(len + 0.04, len - 0.06, u + (e - 0.5) * 0.08) * (0.75 + 0.5 * s));
+        }
       }
-      const pool = u < 0.3 ? edge(ell(u, v, 0.13, 0.5, 0.09, 0.17, c1, s1), e, 0.15) : 0;
-      return blood(Math.max(a * (1 - u * 0.55), pool), 0.45 - u * 0.3, e);
+      const pool = u < 0.32 ? edge(ell(u, v, 0.14, 0.5, 0.1, 0.21, c1, s1), e, 0.15) : 0;
+      return blood(Math.max(a * (1 - u * 0.35), pool), 0.45 - u * 0.3, e);
     });
     // 4: worn diagonal yellow-black hazard paint (tiles seamlessly with itself, unmirrored).
     paint(DECAL.hazard, (u, v, e, s) => {
@@ -562,17 +569,22 @@
       o[0] = a; o[1] = 0.58 * inside + 0.07 * rim; o[2] = 0.54 * inside + 0.065 * rim; o[3] = 0.46 * inside + 0.06 * rim; o[4] = 0.95; o[5] = -1.4 * inside + 0.15 * rim;
       return a;
     });
-    // 7: bloody shoe prints walking out along u, fading step by step (authored for a 1.5 m x 0.5 m quad).
-    const cs = Math.cos(0.08), ss = Math.sin(0.08);
+    // 7: bloody shoe prints walking out along u, fading step by step. Drawn in metres on a 1.5 x 0.5 m quad: forefoot,
+    // the outer edge of the arch, heel and (from 256 px) a chevron tread.
+    const tread = t >= 256;
     paint(DECAL.steps, (u, v, e, s, vs) => {
+      const X = u * 1.5, Y = v * 0.5;
       let a = 0;
       for (let i = 0; i < 4; i++) {
-        const x = 0.14 + i * 0.235, y = 0.5 + (i & 1 ? 0.17 : -0.17), sn = i & 1 ? ss : -ss;
-        if (Math.abs(u - x) > 0.11 || Math.abs(v - y) > 0.12) continue;
-        const d = Math.min(ell(u, v, x + 0.02, y, 0.067, 0.09, cs, sn), ell(u, v, x - 0.062, y, 0.027, 0.075, cs, sn));
-        a = Math.max(a, edge(d, e, 0.1) * smoothstep(0.22 + i * 0.09, 0.34 + i * 0.09, e * 0.6 + vs * 0.4));
+        const side = i & 1 ? 1 : -1, cx = 0.2 + i * 0.37, cy = 0.25 + side * 0.085, c = Math.cos(side * 0.07), sn = Math.sin(side * 0.07);
+        const x = (X - cx) * c + (Y - cy) * sn, y = ((Y - cy) * c - (X - cx) * sn) * side;
+        if (x < -0.17 || x > 0.17 || y < -0.07 || y > 0.07) continue;
+        const arch = x > -0.075 && x < 0.005 ? Math.abs(y - 0.024) / 0.015 : 9;
+        const d = Math.min(ell(x, y, 0.055, 0.004, 0.09, 0.047, 1, 0), ell(x, y, -0.105, 0, 0.045, 0.036, 1, 0), arch);
+        const bars = !tread || Math.abs((x * 31.25 + Math.abs(y) * 9 + 64) % 1 - 0.5) < 0.37 ? 1 : 0.4;
+        a = Math.max(a, edge(d, e, 0.08) * bars * smoothstep(0.18 + i * 0.1, 0.3 + i * 0.1, e * 0.55 + vs * 0.45));
       }
-      return blood(a, 0.3, e);
+      return blood(a, 0.25, e);
     });
     const albedo = new Uint8ClampedArray(N * 4), rough = new Uint8ClampedArray(N * 4), normal = new Uint8ClampedArray(N * 4);
     for (let i = 0, p = 0; i < N; i++, p += 4) {
