@@ -2230,7 +2230,7 @@ let sharedRows=null,sharedState='loading',myId=null,canPost=null,lastMine=null,s
 // The streak gets the live effects preference with every kill (a creation-time option would pin it).
 const chaos=HollowChaos.create(worldSeed),streak=HollowChaos.createStreak();
 const hud=HollowHUDFX.create({root:$('hud'),document,motion:preferences.motion,effects:preferences.effects,touch:dopaTouch()});
-const HITSTOP_SCALE=.08,EMERGENCY_RED=lin(0xff2414),SPARK_DOWN=new THREE.Vector3(0,-1,0),coneTint=new THREE.Color();
+const HITSTOP_SCALE=.08,EMERGENCY_RED=lin(0xff2414),SPARK_DOWN=new THREE.Vector3(0,-1,0),SPARK_CLEAR=2.2,coneTint=new THREE.Color();
 let hitstopT=0,chaosLive=false;
 // chaos.beacon(0..1), refreshed every simulation step. The atmosphere beacons read chaos.beacon(i) in updateAtmosphere.
 const beacons=[chaos.beacon(0),chaos.beacon(1)];
@@ -2337,10 +2337,11 @@ function chaosCaption(e){
   captionT=4;
 }
 // Sparks rain from the light that cut out, or from the nearest ceiling fixture during a blackout (never a refuge).
+// A fixture within SPARK_CLEAR of the player is passed over: sparks falling past the eye smear into screen-tall streaks.
 function chaosSparks(e){
   const l=e.light!=null?practicalLights[e.light]:null;let x,z;
-  if(l&&l.userData.level>0&&!l.userData.shelter){x=l.position.x;z=l.position.z;}
-  else{let near=Infinity;for(const f of roomLights){if(f.shelter)continue;const d=Math.hypot(f.x-P.pos.x,f.z-P.pos.z);if(d<near){near=d;x=f.x;z=f.z;}}}
+  if(l&&l.userData.level>0&&!l.userData.shelter&&Math.hypot(l.position.x-P.pos.x,l.position.z-P.pos.z)>=SPARK_CLEAR){x=l.position.x;z=l.position.z;}
+  else{let near=Infinity;for(const f of roomLights){if(f.shelter)continue;const d=Math.hypot(f.x-P.pos.x,f.z-P.pos.z);if(d>=SPARK_CLEAR&&d<near){near=d;x=f.x;z=f.z;}}}
   if(x===undefined)return;
   e.x=x;e.y=2.9;e.z=z;
   const a=typeof atm!=='undefined'?atm:null;
