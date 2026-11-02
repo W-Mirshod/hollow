@@ -976,7 +976,7 @@ function initAudio(){
     const tl=AC.createOscillator();tl.frequency.value=0.2+k*0.07;const tg=AC.createGain();tg.gain.value=0.012;tl.connect(tg);tg.connect(g.gain);o.connect(g);g.connect(luxGain);o.start();tl.start();});
   sirenGain=AC.createGain();sirenGain.gain.value=1;sirenGain.connect(master);
   creatureAudio=HollowAudio.create({context:AC,output:master,noiseBuffer:noiseBuf});
-  playerAudio=HollowPlayerAudio.create({context:AC,output:master,noiseBuffer:noiseBuf});
+  playerAudio=HollowPlayerAudio.create({context:AC,output:bodyOut(),noiseBuffer:noiseBuf});
   weaponAudio=HollowWeaponAudio.create({context:AC,output:master,noiseBuffer:noiseBuf});
 }
 function noiseSrc(loop){const s=AC.createBufferSource();s.buffer=noiseBuf;s.loop=!!loop;return s;}
@@ -2227,7 +2227,9 @@ const VOICE_PRIORITY={breath:0,step:1,whisper:2,moan:2,notice:3,laugh:3,growl:3,
 const STEP_LEVEL={warden:1,stalker:.85,crawler:.85,shrieker:.85};
 const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
 const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,crouching:false,danger:0,chase:false,health:100,effects:true,hidden:false};
-let reloadEmpty=false,audioChase=false,chaseStingT=0,audioFault=false,audioSeq=0;
+// A threat call ducks the player's body bus (breathing, heartbeat, chase music): [max distance m, gain, hold s].
+const DUCK={scream:[30,.5,1.4],notice:[20,.65,.9],laugh:[12,.7,1],whisper:[10,.7,1.2]};
+let reloadEmpty=false,audioChase=false,chaseStingT=0,audioFault=false,audioSeq=0,bodyBus=null,duckFree=0,duckDepth=1,duckEnd=0;
 // Master safety limiter: a fast high-ratio compressor (its automatic makeup gain trimmed back out), then a soft
 // ceiling at -0.63 dBFS, so a pile-up of shots, screams and stingers never clips. Returns the chain's input.
 function masterOut(){
@@ -2238,6 +2240,20 @@ function masterOut(){
   ceiling.curve=curve;ceiling.oversample='none';
   comp.connect(trim);trim.connect(ceiling);ceiling.connect(AC.destination);
   return comp;
+}
+// HollowPlayerAudio's own bus. A scream, a rush notice, a laugh or a whisper nearby ducks it, so the call cuts through an
+// exhausted player's panting and the chase bed; a stinger is never ducked and holds ducking off for 1.5 s.
+function bodyOut(){bodyBus=AC.createGain();bodyBus.connect(master);return bodyBus;}
+function bodyGain(value,tau){const g=bodyBus.gain,now=AC.currentTime;g.cancelScheduledValues(now);g.setValueAtTime(g.value,now);g.setTargetAtTime(value,now,tau);}
+function duckBody(cue,d){
+  const k=DUCK[cue],now=AC.currentTime;if(!k||!bodyBus||d>k[0]||now<duckFree)return;
+  duckDepth=now<duckEnd?Math.min(duckDepth,k[1]):k[1];duckEnd=Math.max(duckEnd,now+k[2]);
+  bodyGain(duckDepth,.03);bodyBus.gain.setTargetAtTime(1,duckEnd,.25);
+}
+function playStinger(cue,kind){
+  if(!playerAudio||playerAudio.stinger(cue)==null)return false;
+  logCue('player',cue,kind);duckFree=AC.currentTime+1.5;duckEnd=0;if(bodyBus)bodyGain(1,.02);
+  return true;
 }
 // A short ring buffer of played cues for QA (HollowGame.snapshot().audioLog).
 function logCue(src,cue,kind){audioLog.push({n:++audioSeq,t:Math.round(t*1000)/1000,src,cue,kind:kind||null});if(audioLog.length>96)audioLog.shift();}
@@ -2256,7 +2272,7 @@ function sVoice(kind,cue,x,y,z,volume=1){
   if(!voiceRoom(cue))return null;
   const eye=spectating?(R.raw.y||0)+(R.raw.crouch?1:EYE):P.pos.y+P.eye;
   const id=creatureAudio.play(kind,cue,{x,y,z,volume,occluded:!sightLine(viewer.x,eye,viewer.z,x,y,z)});
-  if(id!=null)logCue('creature',cue,kind);
+  if(id!=null){logCue('creature',cue,kind);duckBody(cue,d);}
   return id;
 }
 // A full mix gives up its oldest lowest-priority voice: a growl, laugh or scream must never take a rush's notice.
@@ -2310,22 +2326,21 @@ function audioOnHit(info){
 }
 function audioOnKill(info){
   const m=info&&info.m;if(!m)return;const v=vox(m);if(v.killed)return;v.killed=true;
-  if(!playerAudio)return;const r=info.result,cue=info.headshot?'headshot':'kill';
-  if(playerAudio.stinger(cue)!=null)logCue('player',cue,m.kind);
-  if(r&&(r.count>=2||r.label==='WARDEN DOWN')&&playerAudio.stinger('streak')!=null)logCue('player','streak',r.label);
+  const r=info.result;playStinger(info.headshot?'headshot':'kill',m.kind);
+  if(r&&(r.count>=2||r.label==='WARDEN DOWN'))playStinger('streak',r.label);
 }
 function audioGasp(k,why){if(state==='play'&&playerAudio&&playerAudio.gasp(k)!=null)logCue('player','gasp',why);}
 function audioOnExhausted(){audioGasp(.8,'exhausted');}
 // The killing blow: a cry under the scare hit, then a Stalker or Shrieker laughs over the body.
 function audioOnCaught(m){
-  if(playerAudio){playerAudio.hurt(100);if(playerAudio.stinger('scare')!=null)logCue('player','scare','caught');}
+  if(playerAudio){playerAudio.hurt(100);playStinger('scare','caught');}
   if(m.kind==='stalker'||m.kind==='shrieker')audioAfter(rnd(.5,.7),()=>sCreature(m,'laugh'));
 }
 
 /* chaos director events (I1b calls this for every event) */
 function audioChaosEvent(e){
   if(!e||!AC)return;
-  if(e.type==='chaseStart'){if(playerAudio&&playerAudio.stinger('chase')!=null)logCue('player','chase');return;}
+  if(e.type==='chaseStart'){playStinger('chase');return;}
   if(e.type==='surge'){if(playerAudio&&playerAudio.surge(e.intensity)!=null)logCue('player','surge');return;}
   if(e.type==='blackout'){sThud(P.pos.x,H-.1,P.pos.z,.45,110);logCue('world','blackout');return;}
   // chaosEvent() fills e.x/e.y/e.z (where the sparks fall, where the caption points) before it calls here.
@@ -2342,7 +2357,7 @@ function audioChaosEvent(e){
   else if(e.type==='whisper'){sVoice(Math.random()<.5?'stalker':'crawler','whisper',x,1.5,z);audioAfter(rnd(.8,1.1),()=>audioGasp(.45,'whisper'));}
   else if(e.type==='laugh'){sVoice('stalker','laugh',x,1.6,z);audioAfter(rnd(.6,.9),()=>audioGasp(.6,'laugh'));}
 }
-function audioScare(k){if(!playerAudio)return;if(playerAudio.stinger('scare')!=null)logCue('player','scare');audioAfter(.15,()=>audioGasp(k,'scare'));}
+function audioScare(k){if(!playerAudio)return;playStinger('scare');audioAfter(.15,()=>audioGasp(k,'scare'));}
 function sSpark(x,y,z){
   if(!AC)return;const n=AC.currentTime,p=makePanner(2,1.2);setPos(p,x,y,z);
   for(let k=0,grains=preferences.effects?7:3;k<grains;k++){const st=n+rnd(0,.22),s=noiseSrc(),f=AC.createBiquadFilter(),g=AC.createGain();
@@ -2362,7 +2377,7 @@ function sShotAt(x,z){
 }
 function sDry(){if(weaponAudio&&weaponAudio.dry(weaponDefs[weaponIndex].id)!=null)logCue('weapon','dry');}
 function sReload(){const w=weaponDefs[weaponIndex];reloadEmpty=mag===0;if(weaponAudio&&weaponAudio.reload(w.id,w.reload,{empty:reloadEmpty})!=null)logCue('weapon','reload',w.id);}
-function sPickup(type){const cue=type==='fuse'?'fuse':'pickup';if(playerAudio&&playerAudio.stinger(cue)!=null)logCue('player',cue,type);}
+function sPickup(type){playStinger(type==='fuse'?'fuse':'pickup',type);}
 // Per pellet, once fire() has resolved it: flesh on monsters, the struck material on walls, doors and props.
 function audioBullet(hit,best,distance,wallDistance){
   if(best){
@@ -2490,7 +2505,7 @@ function snapshot(){return {
   player:{speed:Math.hypot(P.vel.x,P.vel.z),sprint:P.sprint,stamina:P.stamina,exhausted:P.exhausted,sliding:slideT>0,strafe:P.strafe},
   camera:{...camFX.snapshot(),y:camFX.pose.pos.y,x:camFX.pose.pos.x,roll:camFX.pose.rot.roll,pitch:camFX.pose.rot.pitch,fovAdd:camFX.pose.fov,fov:camera.fov,weaponZ:camFX.pose.weapon.z},
   injury:RULES.injuryLevel(P.health),audio:creatureAudio?creatureAudio.snapshot():null,
-  playerAudio:playerAudio?playerAudio.snapshot():null,weaponAudio:weaponAudio?weaponAudio.snapshot():null,audioLog:audioLog.slice(),
+  playerAudio:playerAudio?playerAudio.snapshot():null,weaponAudio:weaponAudio?weaponAudio.snapshot():null,audioLog:audioLog.slice(),bodyDuck:bodyBus&&AC.currentTime<duckEnd?duckDepth:1,
     horror:{...horror.snapshot(),effects:preferences.effects,notesRead:readNotes.size},
       flashes:{muzzle:!!muzzleFlash?.visible,world:muzzleLight.userData.level,weapon:fpFlash.userData.level,partner:avFlash.userData.level},
     records:caseNotes.map(n=>({id:n.id,x:n.x,z:n.z,title:n.title})),

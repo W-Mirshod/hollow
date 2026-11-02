@@ -185,6 +185,24 @@ test('with effects off, screams and laughs become quiet breaths',async({page})=>
   expect(cues(creature,'creature','breath','stalker'),'The chaos laugh falls back to a breath').toHaveLength(1);
 });
 
+test('threat calls duck the player\'s breathing and chase bed; a stinger is never ducked',async({page})=>{
+  await ready(page);await start(page);
+  const duck=await page.evaluate(()=>{
+    try{
+      HollowTest.pose({x:45,z:58,yaw:Math.PI});
+      const idle=HollowGame.snapshot().bodyDuck;
+      HollowTest.chaosAudio({type:'whisper',bearing:Math.PI,distance:3});
+      const whisper=HollowGame.snapshot().bodyDuck;
+      HollowTest.chaosAudio({type:'scream',bearing:0,distance:12});
+      return {idle,whisper,scream:HollowGame.snapshot().bodyDuck,log:HollowGame.snapshot().audioLog.slice(-4)};
+    }finally{HollowTest.silence();}
+  });
+  expect(duck.idle).toBe(1);
+  expect(duck.whisper,'A whisper 3 m away ducks the body bus by 3 dB').toBe(.7);
+  expect(cues(duck.log,'player','scare'),'A chaos scream brings the scare stinger').toHaveLength(1);
+  expect(duck.scream,'The scare stinger lifts the duck at once').toBe(1);
+});
+
 test('pausing stops every engine; resuming picks the reload foley back up',async({page})=>{
   await ready(page);await start(page);
   const busy=await page.evaluate(()=>{
