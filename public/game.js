@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 try {
-if(!window.THREE||!window.TSL||!window.HollowRenderer||!window.HollowSystems||!window.HollowLocomotion||!window.HollowCameraFX||!window.HollowVisuals||!window.HollowNavigation||!window.HollowHorror||!window.HollowAudio)throw new Error('A local game asset could not be loaded.');
+if(!window.THREE||!window.TSL||!window.HollowRenderer||!window.HollowSystems||!window.HollowLocomotion||!window.HollowCameraFX||!window.HollowMonsterAnim||!window.HollowVisuals||!window.HollowNavigation||!window.HollowHorror||!window.HollowAudio)throw new Error('A local game asset could not be loaded.');
 const $=id=>document.getElementById(id);
 const clamp01=v=>v<0?0:v>1?1:v;
 const lerp=(a,b,k)=>a+(b-a)*k;
@@ -861,7 +861,7 @@ const MAX_MON=12;let monCount=8;
 const MONSTER_ORDER=['warden','stalker','crawler','shrieker','stalker','crawler','warden','shrieker','crawler','stalker','warden','shrieker'];
 const monsters=[];
 for(let i=0;i<MAX_MON;i++){const kind=MONSTER_ORDER[i],g=makeMonster(kind);g.visible=false;scene.add(g);
-  monsters.push({g,kind,stats:RULES.MONSTERS[kind],pos:new THREE.Vector3(),yaw:0,state:'wander',path:[],repath:0,lastSeen:new THREE.Vector3(),lost:0,searchT:0,stepT:rnd(0,0.6),spotCD:0,hp:RULES.MONSTERS[kind].hp,dead:true,deadT:0,stagger:0,voiceT:rnd(2,6),stalkT:0,watchT:0,flank:i%2?1:-1,lungeT:0,attackT:0,screamT:0,senseT:0,seenTarget:null});}
+  monsters.push({g,kind,stats:RULES.MONSTERS[kind],pos:new THREE.Vector3(),yaw:0,state:'wander',path:[],repath:0,lastSeen:new THREE.Vector3(),lost:0,searchT:0,stepT:rnd(0,0.6),spotCD:0,hp:RULES.MONSTERS[kind].hp,dead:true,deadT:0,stagger:0,voiceT:rnd(2,6),stalkT:0,watchT:0,flank:i%2?1:-1,lungeT:0,lungeCD:0,lungeBoost:0,attackT:0,screamT:0,senseT:0,seenTarget:null,anim:HollowMonsterAnim.create(kind,{seed:i}),animYaw:0,watched:false});}
 
 /* ---------- state ---------- */
 const keys={};
@@ -874,6 +874,7 @@ let camPrevYaw=0,camPrevPitch=0,csPrevX=0,csPrevZ=0;
 const touchMove={x:0,y:0};
 let state='menu',prevState='outside',torchOn=false,battery=1,elapsed=0,t=0,grace=0,danger=0,caughtT=0,ambientT=12,heartT=0,msgTimer=0;
 let cs=0,csFlags={},csFrom=null,chanFall=null,birdT=1,boxT=0;
+let aiFrozen=false;   // QA only (HollowTest.freezeAI): monsters hold still for deterministic fixtures
 const MAG=30;let mag=MAG,reserve=weaponDefs[0].reserve,fireT=0,reloadT=0,mouseDown=false,gunKick=0,flashT=0,gunOut=false,nearestD=99,caughtBy=null,stingerCD=0,mapT=0;
 let visited=new Uint8Array(W*W),ammoBoxes=[];
 
@@ -923,7 +924,7 @@ function spawnMonsters(count){
   while(chosen.length<monCount)chosen.push(cand[Math.floor(Math.random()*cand.length)]);
   monsters.forEach((m,i)=>{if(i>=monCount){m.dead=true;m.spawned=false;m.g.visible=false;return;}m.spawned=true;const [wx,wz]=center(chosen[i][0],chosen[i][1]);
     m.pos.set(wx,0,wz);m.yaw=Math.random()*Math.PI*2;m.state='wander';m.path=[];m.repath=0;m.lost=0;m.spotCD=0;m.hp=m.stats.hp;m.dead=false;m.deadT=0;m.stagger=0;m.attackT=0;m.screamT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;
-    m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.stalkT=0;m.watchT=0;m.lungeT=0;
+    m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.stalkT=0;m.watchT=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;
     m.g.position.copy(m.pos);m.g.rotation.set(0,m.yaw,0);m.g.visible=true;m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);});
 }
 function hideMonsters(){monsters.forEach(m=>{m.g.visible=false;m.spawned=false;m.dead=true;});if(creatureAudio)creatureAudio.stop();}
@@ -937,7 +938,9 @@ function resetSurvivor(){
 function newGame(full){
   if(NET.g)leaveRoom();NET.inGame=false;avatar.visible=false;
   avSpot.visible=avFlash.visible=false;
-  worldSeed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);resetSurvivor();
+  // A dark run started from the title reuses the world the menu prebuilt and warmed (warmPlayPipelines).
+  if(full||!prebuiltSeed){worldSeed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);}
+  prebuiltSeed=0;resetSurvivor();
   P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
   battery=1;elapsed=0;danger=0;ambientT=14;heartT=0;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
@@ -1014,12 +1017,17 @@ function sCreature(m,cue,volume=1){
   return creatureAudio.play(m.kind,cue,{x:m.pos.x,y,z:m.pos.z,volume,occluded:!sightLine(viewer.x,eye,viewer.z,m.pos.x,y,m.pos.z)});
 }
 function updateMonsterAudio(m,dt,moved){
-  const quiet=m.state==='stalk';m.stepT-=moved;m.voiceT-=dt;
-  if(m.stepT<=0&&moved>.001){m.stepT=(m.kind==='warden'?1.15:m.kind==='crawler'?.65:.85)*rnd(.85,1.15);sCreature(m,'step',quiet?.3:1);}
+  const quiet=m.state==='stalk';m.voiceT-=dt;
   if(m.voiceT<=0){m.voiceT=quiet?rnd(4.5,7.5):m.state==='chase'?rnd(2.2,4):rnd(5,9);sCreature(m,'breath',quiet?.55:.85);}
 }
 
 
+// Creature footsteps, driven by the monster animation's foot plants (pose.footstep / pose.stepIntensity).
+// I2: may refine the step cue and volumes here.
+function onMonsterFootstep(m,intensity){
+  sCreature(m,'step',(m.state==='stalk'?.3:1)*(.45+.55*intensity));
+  if(m.kind==='warden'&&state==='play'){const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);if(d<9)camFX.addTrauma(.12*(1-d/9));}
+}
 function sHeart(vol){if(!AC)return;const n=AC.currentTime;[0,0.17].forEach((d,k)=>{const o=AC.createOscillator(),g=AC.createGain();o.frequency.setValueAtTime(62,n+d);o.frequency.exponentialRampToValueAtTime(38,n+d+0.15);o.connect(g);g.connect(master);env(g,n+d,0.008,vol*(k?0.7:1),0.18);o.start(n+d);o.stop(n+d+0.3);});}
 function sClick(){if(!AC)return;const n=AC.currentTime,o=AC.createOscillator(),g=AC.createGain();o.type='square';o.frequency.value=2400;o.connect(g);g.connect(master);env(g,n,0.002,0.06,0.03);o.start(n);o.stop(n+0.05);}
 function sSlam(){
@@ -1436,7 +1444,7 @@ function alertMonsters(radius,x,z){
 }
 function damagePlayer(m){
   if(!localInDanger()||damageT>0||grace>0||P.hidden)return;
-  P.health=Math.max(0,P.health-m.stats.damage);damageT=1.05;m.lungeT=.3;
+  P.health=Math.max(0,P.health-m.stats.damage);damageT=1.05;m.lungeT=.3;m.anim.attack();
   {const dx=m.pos.x-P.pos.x,dz=m.pos.z-P.pos.z,dist=Math.max(.01,Math.hypot(dx,dz));camFX.punch((dx*Math.cos(P.yaw)-dz*Math.sin(P.yaw))/dist,.5);camFX.addTrauma(.45);}
   sCreature(m,'attack');sThud(P.pos.x,1,P.pos.z,.16,90);
   if(P.health<=0){caught(m);return;}
@@ -1460,14 +1468,15 @@ function stalkRoute(m,tg){
 }
 function chargeCue(m,local){
   if(m.spotCD>0)return;
-  m.spotCD=10;sCreature(m,'notice');
+  m.spotCD=10;sCreature(m,'notice');m.anim.scream(.9);
   if(local&&stingerCD<=0&&Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z)<9){stingerCD=8;flashDanger();}
 }
 function updateMonster(m,dt){
-  if(m.dead){if(m.g.visible){m.deadT+=dt;const k=ease(0,.8,m.deadT);m.g.rotation.x=-1.5*k;m.g.position.y=.15*k;if(m.deadT>18)m.g.visible=false;}return;}
+  if(m.dead){if(m.g.visible){m.deadT+=dt;if(m.deadT>18)m.g.visible=false;}return;}
   resolve(m.pos,m.stats.radius);
   const previousState=m.state,sneaky=m.kind==='stalker'||m.kind==='crawler';
   m.spotCD=Math.max(0,m.spotCD-dt);m.stagger=Math.max(0,m.stagger-dt);m.attackT=Math.max(0,m.attackT-dt);m.screamT=Math.max(0,m.screamT-dt);m.lungeT=Math.max(0,m.lungeT-dt);
+  m.lungeCD=Math.max(0,m.lungeCD-dt);m.lungeBoost=Math.max(0,m.lungeBoost-dt);m.watched=false;
   const tgs=targets();m.senseT-=dt;
   if(m.senseT<=0){
     m.senseT=.12+Math.random()*.06;let nearest=1e9;m.seenTarget=null;m.heardTarget=null;
@@ -1492,7 +1501,7 @@ function updateMonster(m,dt){
   const oldX=m.pos.x,oldZ=m.pos.z;let speed=m.stats.walk;
   if(m.state==='stalk'){
     m.stalkT+=dt;if(!sees&&!heard)m.lost+=dt;
-    const watched=sees&&watchingMonster(m,tg);
+    const watched=sees&&watchingMonster(m,tg);m.watched=watched;
     m.watchT=watched?m.watchT+dt:Math.max(0,m.watchT-dt*2);
     // A brief, crooked stare is a warning, not an indefinitely frozen enemy.
     if(m.watchT>1.35||m.stalkT>(m.kind==='crawler'?8:12)){m.state='chase';m.repath=0;}
@@ -1508,12 +1517,19 @@ function updateMonster(m,dt){
   if(m.state==='chase'){
     if(previousState!=='chase')chargeCue(m,!!tg?.local);
     if(sees&&m.kind==='shrieker'&&m.screamT<=0){
-      m.screamT=16;if(previousState==='chase')sCreature(m,'notice');
+      m.screamT=16;if(previousState==='chase')sCreature(m,'notice');m.anim.scream(1.6);
       alertMonsters(28,m.pos.x,m.pos.z);m.lastSeen.set(tg.x,0,tg.z);
       if(tg.local)showMsg('A Shrieker called the others. Change direction.',2.8);
     }
     speed=m.stats.chase*(m.stagger>0?(m.kind==='warden'?.85:.35):1);
     if(m.kind==='crawler')speed*=Math.sin(t*8+m.g.userData.phase*.2)>.15?1.12:.62;
+    // Lunge: a short committed burst at close range in a clear straight line (never through doors, never from stalk).
+    const st=m.stats,ld=tg?Math.hypot(tg.x-m.pos.x,tg.z-m.pos.z):1e9;
+    if(sees&&m.canWalkStraight&&m.stagger<=0&&m.lungeCD<=0&&ld<=st.lungeRange&&ld>st.radius+PR+.35){
+      m.lungeBoost=st.lungeTime;m.lungeCD=st.lungeTime+st.lungeCooldown;m.lungeT=.3;
+      if(tg.local&&ld<4)camFX.addTrauma(.3);
+    }
+    if(m.lungeBoost>0)speed=st.chase*st.lungeSpeed*(m.stagger>0?.35:1);
     const locked=roomDoors.find(d=>!d.open&&RULES.insideRoom(d.room,m.lastSeen.x,m.lastSeen.z));
     if(!sees)m.lost+=dt;
     if(locked){
@@ -1522,7 +1538,7 @@ function updateMonster(m,dt){
         m.yaw=angLerp(m.yaw,Math.atan2(locked.box.x-m.pos.x,locked.box.z-m.pos.z),Math.min(1,dt*4));
         if(tgs.some(c=>c.torch&&RULES.insideRoom(locked.room,c.x,c.z)))m.lost=0;
         locked.health-=dt*(locked.locked?(m.kind==='warden'?6:2):32);
-        if(m.attackT<=0){m.attackT=1.3;m.lungeT=.3;sThud(locked.box.x,1,locked.box.z,.35,m.kind==='warden'?75:150);}
+        if(m.attackT<=0){m.attackT=1.3;m.lungeT=.3;m.anim.attack();sThud(locked.box.x,1,locked.box.z,.35,m.kind==='warden'?75:150);}
         if(locked.health<=0){locked.open=true;locked.locked=false;locked.revision++;m.repath=0;showMsg('An isolation lock broke. Find another shelter.',3);}
       }else{m.repath-=dt;if(m.repath<=0){setPathTo(m,locked.box.x,locked.box.z+S);m.repath=.8;}followPath(m,speed,dt);}
     }else if(sees&&m.canWalkStraight){moveToward(m,tg.x,tg.z,speed,dt);m.path=[];}
@@ -1556,41 +1572,31 @@ function updateMonsters(dt){
   let target=0;nearestD=99;
   const st0=state;
   for(const m of monsters){
-    updateMonster(m,dt);if(state!==st0)return;
+    if(!aiFrozen){
+      // Sub-step fast movers (lunging crawlers reach ~10 m/s) so no step skips collision or attack checks.
+      const top=m.dead||m.state!=='chase'?m.stats.search:m.stats.chase*(m.lungeBoost>0?m.stats.lungeSpeed:1.12);
+      const n=Math.max(1,Math.ceil(top*dt/.25));
+      for(let k=0;k<n&&state===st0;k++)updateMonster(m,dt/n);
+      if(state!==st0)return;
+    }
     if(m.dead)continue;const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);nearestD=Math.min(nearestD,d);
     target=Math.max(target,m.state==='chase'?Math.max(0,1-d/32):m.state==='stalk'?Math.max(0,1-d/6)*.18:Math.max(0,1-d/14)*.35);
   }
   danger+=(target-danger)*Math.min(1,dt*2);
 }
+// Procedural run/stalk/lunge/hit/death animation (HollowMonsterAnim). One input object is reused (zero allocation).
+const animIn={speed:0,state:'wander',lunge:0,stagger:0,turn:0,watched:false,time:0,effects:true,dead:false};
 function animateMonster(m,dt){
-  const u=m.g.userData;if(m.dead){u.glow.intensity=0;return;}
-  const sp=u.speed||0,moving=Math.min(1,sp),quiet=m.state==='stalk';
-  u.phase+=dt*sp*(m.kind==='warden'?1.6:m.kind==='crawler'?4.8:2.4);
-  const s=Math.sin(u.phase)*moving,drag=Math.sin(u.phase+.65)*moving;
-  const lunge=Math.sin(Math.PI*clamp01((m.lungeT||0)/.3)),chasing=u.chasing||state==='caught'&&m===caughtBy;
-  const reach=chasing?-.5:quiet?-.16:0,jolt=preferences.effects&&m.stagger>0?Math.sin(m.stagger*45)*.12:0;
-  const pose=(part,x=0,y=0,z=0)=>{if(!part)return;const rest=u.restPose[part.name];part.rotation.set(rest.x+x,rest.y+y,rest.z+z);};
-  pose(u.legL,s*.34);pose(u.legR,-drag*.25);
-  pose(u.armL,reach-s*.14-lunge*.65+jolt,0,-lunge*.09);
-  pose(u.armR,reach*.55+drag*.12-lunge*.42-jolt,0,lunge*.15);
-  u.knees.forEach((joint,i)=>pose(joint,Math.max(0,-Math.sin(u.phase+i*Math.PI))*.42*moving));
-  u.elbows.forEach((joint,i)=>pose(joint,Math.sin(u.phase+i*Math.PI)*.07*moving-lunge*.22));
-  u.twitchT-=dt;if(u.twitchT<=0){u.twitchT=rnd(1.8,4.8);u.twitch=rnd(-.24,.24);}
-  u.twitchAngle=lerp(u.twitchAngle||0,preferences.effects?u.twitch:0,1-Math.exp(-dt*8));
-  pose(u.neck,Math.sin(t*.85)*.035+jolt-lunge*.12,Math.sin(t*.47)*.05,u.twitchAngle);
-  pose(u.jaw,(m.kind==='shrieker'?.09:.035)*(1+Math.sin(t*1.7))+lunge*.3);
-  if(m.kind==='stalker'){
-    pose(u.legR,-drag*.19);pose(u.armR,reach*.4+drag*.09-lunge*.7,Math.sin(t*.6)*.08,.1);
-    pose(u.head,Math.sin(t*.8)*.025,Math.sin(t*.43)*.06);
-  }else if(m.kind==='crawler'){
-    pose(u.armL,s*.18-lunge*.25,0,s*.06);pose(u.armR,-s*.26-lunge*.35,0,-drag*.08);
-    pose(u.legL,-drag*.22,0,drag*.05);pose(u.legR,s*.14,0,-s*.07);
-    u.elbows.forEach((joint,i)=>pose(joint,Math.max(0,Math.sin(u.phase+i*Math.PI))*.28));
-    pose(u.neck,Math.sin(t*.9)*.025-lunge*.18,Math.sin(u.phase*.5)*.045,u.twitchAngle*.4);
-  }else if(m.kind==='warden'){
-    pose(u.armL,-s*.12-lunge*.6);pose(u.armR,drag*.08-lunge*.3);
-    pose(u.neck,-lunge*.1,Math.sin(t*.5)*.035,Math.sin(t*.7)*.035);
-  }
+  const u=m.g.userData;if(m.dead)u.glow.intensity=0;if(!m.g.visible)return;
+  const sp=u.speed||0,close=state==='caught'&&m===caughtBy;
+  u.phase+=dt*sp*4.8; // the crawler speed burst in updateMonster still reads it
+  let dy=m.yaw-m.animYaw;dy-=Math.round(dy/(2*Math.PI))*2*Math.PI;m.animYaw=m.yaw;
+  animIn.speed=state==='caught'?0:sp;animIn.state=close?'chase':m.state;
+  animIn.lunge=m.lungeBoost>0?1:(m.lungeT||0);animIn.stagger=m.stagger||0;animIn.turn=dt>0?dy/dt:0;
+  animIn.watched=m.watched===true;animIn.time=t;animIn.effects=preferences.effects===true;animIn.dead=m.dead===true;
+  const pose=m.anim.update(dt,animIn);
+  HollowMonsterAnim.apply(m.g,pose,m.pos.x,m.pos.z,m.yaw,close);
+  if(pose.footstep&&!m.dead)onMonsterFootstep(m,pose.stepIntensity);
 }
 
 /* ---------- rifle ---------- */
@@ -1631,8 +1637,8 @@ function fire(){
     if(best){
       didHit=true;if(atm)atm.blood(hit.x,hit.y,hit.z,{dir:_d,amount:w.pellets>1?.4:1});else puff(hit,true);
       const damage=RULES.weaponDamage(w.id,best.y>best.m.stats.head,distance,best.m.kind);
-      if(NET.inGame&&NET.role==='guest'){const k=monsters.indexOf(best.m);NET.dm[k]=(NET.dm[k]||0)+damage;best.m.stagger=.2;}
-      else hitMonster(best.m,damage);
+      if(NET.inGame&&NET.role==='guest'){const k=monsters.indexOf(best.m);NET.dm[k]=(NET.dm[k]||0)+damage;best.m.stagger=.2;best.m.anim.hit({dirX:_d.x,dirZ:_d.z,yaw:best.m.yaw,headshot:best.y>best.m.stats.head});}
+      else hitMonster(best.m,damage,null,best.y>best.m.stats.head,w.pellets>1?.35:1);
     }else if(wallDistance<48&&atm){
       if(streak){const k=.12;_atmNd.copy(_d).negate();
         if(metalAt(hit.x,hit.z))atm.sparks(hit.x-_d.x*k,hit.y-_d.y*k,hit.z-_d.z*k,{dir:_atmNd,count:16});
@@ -1644,13 +1650,15 @@ function fire(){
   P.pitch=Math.min(1.35,P.pitch+recoil*.35);P.yaw+=rnd(-.001,.001);
   if(w.id==='shotgun'){sMetal(.35,440,.14);camFX.addTrauma(.2);}
 }
-function hitMonster(m,dmg,from){
+function hitMonster(m,dmg,from,headshot,strength){
   if(m.dead)return;
+  const src=from||P.pos,shot={dirX:m.pos.x-src.x,dirZ:m.pos.z-src.z,yaw:m.yaw,headshot:!!headshot,strength:strength??1};
   m.hp-=dmg;m.stagger=m.kind==='warden'?.07:.25;m.state='chase';
+  if(m.hp>0)m.anim.hit(shot);
   if(from)m.lastSeen.set(from.x,0,from.z);else m.lastSeen.copy(P.pos);m.lost=0;
   if(m.hp<=0){
     m.dead=true;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
-    fxKill=1;
+    m.anim.die(shot);fxKill=1;
     const left=monsters.filter((o,i)=>i<monCount&&!o.dead).length;
     showMsg(left?`${m.stats.name} down · ${left} threats remain.`:'The corridors are silent. Restore the exit power.',2.5);
   }else if(m.kind==='warden'&&noticeT<=0){noticeT=12;showMsg('It barely flinched. Save ammunition: break sight, lock a room, hide.',3.2);}
@@ -1731,7 +1739,7 @@ function caught(m){
   if(!localInDanger())return;
   if(state==='pause'){showScreen(null);}
   state='caught';caughtT=0;caughtBy=m;torchOn=true;mouseDown=false;
-  if(creatureAudio)creatureAudio.stop();sCreature(m,'attack');$('hud').hidden=true;
+  if(creatureAudio)creatureAudio.stop();sCreature(m,'attack');m.anim.scream(1.5);$('hud').hidden=true;
 }
 function updateCaught(dt){
   caughtT+=dt;const g=caughtBy.g;
@@ -1754,6 +1762,36 @@ function drawGrain(){const d=gimg.data;for(let i=0;i<d.length;i+=4){const v=Math
 
 /* ---------- loop ---------- */
 const timer=new THREE.Timer();let frame=0,hudT=0,baseFov=72;
+// Pipeline warm-up while the menu idles: compile the play-state lighting, monsters and weapons ahead of time so
+// pressing Play does not stall on shader/pipeline builds. The menu frame is not redrawn while the hell state is staged.
+let warming=false,warmed=false,prebuiltSeed=0;const warmCam=new THREE.PerspectiveCamera(100,1.6,.04,120);warmCam.rotation.order='YXZ';
+async function warmPlayPipelines(){
+  if(warming||warmed||state!=='menu'||typeof renderer.compileAsync!=='function')return;
+  warming=warmed=true;
+  const views=[[PED.x-.85,PED.z],[W*S/2,W*S/2]],yaws=[0,Math.PI/2,Math.PI,-Math.PI/2];
+  try{
+    // Build the next dark run's world now (Play then skips the ~1-2 s build) and compile it in its play lighting.
+    const seed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(seed);prebuiltSeed=seed;
+    setHell();weaponModels.forEach(g=>g.visible=true);
+    // Fill the navigator's per-radius clearance caches, which the first monster paths would otherwise build mid-play.
+    if(mazeNavigator)for(const kind in RULES.MONSTERS)for(const [cx,cz] of [[W-2,W-2],[W-2,3],[3,W-2],[N,N]])if(openCell(cx,cz))mazeNavigator.path(PED.x+1,PED.z,cx*S+S/2,cz*S+S/2,RULES.MONSTERS[kind].radius);
+    monsters.forEach((m,i)=>{m.g.visible=true;m.g.position.set(views[0][0]+3+(i%4)*.9,0,views[0][1]-1.5+Math.floor(i/4)*1.2);m.g.updateMatrixWorld(true);});
+    dynamicWorld.updateMatrixWorld(true);
+    warmCam.aspect=camera.aspect;warmCam.updateProjectionMatrix();
+    for(const [x,z] of views)for(const yaw of yaws){
+      if(state!=='menu'||graphicsDown)break;
+      warmCam.position.set(x,EYE,z);warmCam.rotation.set(-.15,yaw,0);warmCam.updateMatrixWorld(true);
+      // The atmosphere's prewarm stand-ins are staged in front of the warm camera so its pipelines compile too.
+      if(atm){atm.prewarm();_atmIn.cameraPosition=warmCam.position;warmCam.getWorldDirection(_atmDir);_atmIn.torchOn=true;atm.update(0,_atmIn);_atmIn.cameraPosition=camera.position;}
+      await renderer.compileAsync(scene,warmCam);
+    }
+    if(state==='menu'&&!graphicsDown)await renderer.compileAsync(fpScene,camera);
+  }catch(e){console.warn('[The Hollow] pipeline warm-up skipped:',e);}
+  finally{
+    warming=false;renderRequested=true;
+    if(state==='menu'){setLux();monsters.forEach(m=>m.g.visible=false);weaponModels.forEach(g=>g.visible=false);}
+  }
+}
 function updateAtmosphere(dt){
   if(!atm)return;
   for(const l of practicalLights){const c=l.userData.cone;if(c)c.setIntensity(l.visible?l.intensity/(1.75*l.userData.scale):0);}
@@ -1914,6 +1952,8 @@ function loop(){
   }
   updateAtmosphere(dt);updatePostFX(dt);
   renderer.info.reset();
+  if(warming&&state==='menu')return;
+  if(state==='menu'&&!warmed&&renderedFrames>0&&frame>20)warmPlayPipelines();
   if(['menu','pause','dead','win','coopEnd'].includes(state)&&!renderRequested&&lastRenderedState===state)return;
   renderRequested=false;lastRenderedState=state;
   if(fx){fx.render(dt);renderCalls=renderer.info.render.drawCalls;renderedFrames++;return;}
@@ -1931,7 +1971,7 @@ const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false
 const R={present:false,peer:null,nm:'Partner',gn:-1,al:1,out:0,sh:0,lastSh:0,tk:[],dm:[],dmApplied:[],ph:'',seed:0,mc:0,mon:null,
   raw:{x:0,z:0,y:0,yaw:0,pitch:0,torch:false,run:false,crouch:false,hidden:false},pos:new THREE.Vector3(),yaw:0,pitch:0,stepD:0,seen:false,actions:[],actionAck:0,grants:[]};
 function seeded(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
-function buildMazeSeeded(seed){worldSeed=seed;const o=Math.random;Math.random=seeded(seed);try{buildMaze();}finally{Math.random=o;}}
+function buildMazeSeeded(seed){worldSeed=seed;prebuiltSeed=0;const o=Math.random;Math.random=seeded(seed);try{buildMaze();}finally{Math.random=o;}}
 const r2=v=>Math.round(v*100)/100;
 
 // partner's body in the world
@@ -2123,10 +2163,11 @@ function guestMonsters(dt){
   for(let i=0;i<MAX_MON;i++){const m=monsters[i],d=R.mon[i];
     if(!d||i>=monCount){m.g.visible=false;m.dead=true;continue;}
     const [x,z,yaw,fl,hp]=d;const dead=!!(fl&2),chase=!!(fl&1),stalk=!!(fl&8);m.hp=Number(hp)||0;m.attackT=Math.max(0,m.attackT-dt);m.lungeT=Math.max(0,m.lungeT-dt);
-    if(m.dead&&!dead){m.spawned=true;m.g.visible=true;m.dead=false;m.deadT=0;m.pos.set(x,0,z);m.yaw=yaw;m.g.rotation.set(0,yaw,0);m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);m.state='wander';m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.lungeT=0;m.spotCD=0;m.stagger=0;}
+    if(m.dead&&!dead){m.spawned=true;m.g.visible=true;m.dead=false;m.deadT=0;m.pos.set(x,0,z);m.yaw=yaw;m.g.rotation.set(0,yaw,0);m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);m.state='wander';m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.spotCD=0;m.stagger=0;m.anim.reset();m.animYaw=m.yaw;}
     if(dead&&!m.dead){m.dead=true;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
+      m.anim.die({dirX:m.pos.x-P.pos.x,dirZ:m.pos.z-P.pos.z,yaw:m.yaw});
       const left=R.mon.slice(0,monCount).filter(q=>q&&!(q[3]&2)).length;showMsg(left?`It went down. ${left} still walking.`:'It went down. The corridors are silent.',3);}
-    if(m.dead){if(m.g.visible){m.deadT+=dt;const k=ease(0,0.8,m.deadT);m.g.rotation.x=-1.5*k;m.g.position.y=0.15*k;}continue;}
+    if(m.dead){if(m.g.visible)m.deadT+=dt;continue;}
     if(chase&&m.state!=='chase')chargeCue(m,true);
     m.spotCD=Math.max(0,(m.spotCD||0)-dt);
     m.state=chase?'chase':stalk?'stalk':'wander';if(fl&4)m.stagger=Math.max(m.stagger,0.1);m.stagger=Math.max(0,m.stagger-dt);
@@ -2302,6 +2343,8 @@ async function recordWin(time,kills){
 
 // Read-only instrumentation is useful for profiling; deterministic test controls
 // are deliberately restricted to an explicit localhost QA session.
+function animSummary(m){const a=m.anim.snapshot();return {run:a.run,lunge:a.lunge,attack:a.attack,scream:a.scream,dying:a.dying,dead:a.dead,settled:a.settled,deathMode:a.deathMode,footsteps:a.footsteps,
+  pitch:m.g.rotation.x,roll:m.g.rotation.z,y:m.g.position.y,lowest:HollowMonsterAnim.lowest(m.kind,m.anim.pose)};}
 function snapshot(){return {
   state,seed:worldSeed,position:{x:P.pos.x,y:P.pos.y,z:P.pos.z},yaw:P.yaw,pitch:P.pitch,onGround:P.onGround,crouching:P.crouching,running:P.running,hidden:P.hidden,health:P.health,stamina:P.stamina,torchOn,battery,
   weapon:weaponDefs[weaponIndex].id,mag,reserve,reloadT,aiming,elapsed,simulationTime,fuses,exitPowered,exitRelease,exitOpen,decoys,
@@ -2321,7 +2364,7 @@ function snapshot(){return {
   doors:roomDoors.map(d=>({id:d.id,x:d.box.x,z:d.box.z,open:d.open,locked:d.locked,health:d.health})),
   loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending})),
   ammoPickups:ammoBoxes.map((b,i)=>({id:i,x:b.x,z:b.z,taken:b.taken,pending:!!b.pending})),
-  enemies:monsters.slice(0,monCount).map((m,i)=>({index:i,kind:m.kind,x:m.pos.x,z:m.pos.z,hp:m.hp,dead:m.dead,state:m.state,speed:m.stats.chase,moveSpeed:m.g.userData.speed,stalkTime:m.stalkT,watchTime:m.watchT})),
+  enemies:monsters.slice(0,monCount).map((m,i)=>({index:i,kind:m.kind,x:m.pos.x,z:m.pos.z,hp:m.hp,dead:m.dead,state:m.state,speed:m.stats.chase,moveSpeed:m.g.userData.speed,stalkTime:m.stalkT,watchTime:m.watchT,lunge:m.lungeBoost>0,lungeCooldown:m.lungeCD,anim:animSummary(m)})),
   network:{role:NET.role,inGame:NET.inGame,generation:NET.gen,partner:R.present,code:NET.code,partnerY:R.raw.y||0,partnerCrouching:!!R.raw.crouch},
   input:{mouseDown,touchX:touchMove.x,touchY:touchMove.y}
 };}
@@ -2332,7 +2375,8 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     colliders:()=>roomProps.map(p=>({...p})),
     pose:({x,z,y=0,yaw=0,pitch=0})=>{P.pos.set(x,y,z);P.vel.set(0,0,0);P.velY=0;P.yaw=yaw;P.pitch=pitch;P.onGround=y===0;},
     silence:()=>{hideMonsters();grace=100000;},
-    enemy:(index,pose)=>{const m=monsters[index];m.pos.set(pose.x,0,pose.z);m.g.position.copy(m.pos);m.hp=m.stats.hp;m.dead=false;m.spawned=true;m.g.visible=true;m.state=pose.state||'wander';m.path=[];m.yaw=pose.yaw||0;m.g.rotation.set(0,m.yaw,0);m.lastSeen.copy(P.pos);m.attackT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;m.stalkT=0;m.watchT=0;m.lost=0;m.spotCD=0;m.repath=0;m.lungeT=0;m.voiceT=3;grace=0;},
+    enemy:(index,pose)=>{const m=monsters[index];m.pos.set(pose.x,0,pose.z);m.g.position.copy(m.pos);m.hp=m.stats.hp;m.dead=false;m.spawned=true;m.g.visible=true;m.state=pose.state||'wander';m.path=[];m.yaw=pose.yaw||0;m.g.rotation.set(0,m.yaw,0);m.lastSeen.copy(P.pos);m.attackT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;m.stalkT=0;m.watchT=0;m.lost=0;m.spotCD=0;m.repath=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;m.voiceT=3;grace=0;},
+    freezeAI:value=>{aiFrozen=!!value;},
     health:value=>{P.health=finiteNumber(value,100,0,100);damageT=0;},torch:value=>{torchOn=value;},
     advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateCameraRig(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));}updateHUD();updateHealthVignette();},
     hit:(index,damage)=>hitMonster(monsters[index],damage),

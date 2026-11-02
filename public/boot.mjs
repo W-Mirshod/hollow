@@ -4,7 +4,7 @@ import * as TSL from 'three/tsl';
 
 // Classic scripts share globals and run in this order; `.mjs` entries are imported as ES modules in place.
 // game.js stays last: it requires every global above it.
-const BOOT_ORDER = ['systems.js', 'locomotion.js', 'camerafx.js', 'horror.js', 'audio.js', 'navigation.js', 'visuals.js', 'controls.js', 'game.js'];
+const BOOT_ORDER = ['systems.js', 'locomotion.js', 'camerafx.js', 'monster-anim.js', 'horror.js', 'audio.js', 'navigation.js', 'visuals.js', 'controls.js', 'game.js'];
 
 const query = new URLSearchParams(location.search);
 const IS_TOUCH = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 1;
