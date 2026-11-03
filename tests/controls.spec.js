@@ -71,22 +71,10 @@ test('desktop and hybrid devices keep mouse input available, then detect real to
 test.describe('touch controls',()=>{
   test.use({hasTouch:true,isMobile:true,viewport:{width:844,height:390},deviceScaleFactor:1});
 
-  test('phone detection and cinematic controls expose only useful actions',async({page})=>{
+  test('phone detection shows every play action',async({page})=>{
     await setup(page);
     expect(await page.evaluate(()=>testControls.touch)).toBe(true);
     await expect(page.locator('.touch-button:visible')).toHaveCount(12);
-    await page.evaluate(()=>testControls.update({state:'outside'}));
-    await expect(page.locator('.touch-fire')).toBeHidden();
-    await expect(page.locator('.touch-torch')).toBeHidden();
-    await expect(page.locator('.touch-jump')).toBeVisible();
-    await expect(page.locator('.touch-sprint')).toBeVisible();
-    await page.evaluate(()=>testControls.update({state:'cutscene'}));
-    await expect(page.locator('.touch-button:visible')).toHaveCount(1);
-    await expect(page.locator('#touchMove')).toBeHidden();
-    await expect(page.locator('#touchLook')).toBeHidden();
-    await expect(page.getByRole('button',{name:'Skip cinematic'})).toBeVisible();
-    await page.getByRole('button',{name:'Skip cinematic'}).tap();
-    expect(await page.evaluate(()=>inputLog.actions)).toEqual([['jump',true],['jump',false]]);
     await page.evaluate(()=>testControls.update({state:'play'}));
     await expect(page.locator('.touch-button:visible')).toHaveCount(12);
     await expect(page.locator('.touch-jump')).toHaveAccessibleName('Jump');
@@ -134,7 +122,7 @@ test.describe('touch controls',()=>{
         if(cause==='cancel')await touch(cdp,'touchCancel');
         else await page.evaluate(cause=>{
           if(cause==='inactive')testControls.update({active:false});
-          else if(cause==='state')testControls.update({state:'cutscene'});
+          else if(cause==='state')testControls.update({state:'pause'});
           else if(cause==='destroy')testControls.destroy();
           else if(cause==='visibility'){
             Object.defineProperty(document,'hidden',{value:true,configurable:true});

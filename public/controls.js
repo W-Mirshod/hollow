@@ -266,14 +266,6 @@
         if (data.state && overlay.dataset.state !== data.state) {
           releaseAll();
           overlay.dataset.state = data.state;
-          const inStory = data.state === 'outside' || data.state === 'cutscene';
-          const cinematic = data.state === 'cutscene';
-          for (const name of ['fire', 'aim', 'reload', 'weapon', 'decoy', 'torch', 'interact', 'map']) buttons[name].hidden = inStory;
-          for (const name of ['crouch', 'sprint', 'pause']) buttons[name].hidden = cinematic;
-          moveZone.hidden = cinematic;
-          lookZone.hidden = cinematic;
-          buttons.jump.querySelector('span').textContent = cinematic ? 'Skip scene' : 'Jump';
-          buttons.jump.setAttribute('aria-label', cinematic ? 'Skip cinematic' : 'Jump');
         }
       },
       destroy: function () {

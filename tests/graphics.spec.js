@@ -70,10 +70,10 @@ function inspect(page){
       if(o.isMesh&&o.material&&o.material.userData&&o.material.userData.hollowSurface==='decals'){
         const m=o.material,g=o.geometry;out.decals.push({triangles:(g.index?g.index.count:g.attributes.position.count)/3,alphaTest:m.alphaTest,map:!!(m.map&&m.map.image),normal:!!(m.normalMap&&m.normalMap.image),roughness:!!(m.roughnessMap&&m.roughnessMap.image),transparent:m.transparent});
       }
-      if(o.isMesh&&!Array.isArray(o.material)&&o.material.userData&&o.material.userData.transitionMap){
+      if(o.isMesh&&!Array.isArray(o.material)&&o.material.userData&&o.material.userData.hollowSurface==='ward'){
         const m=o.material;
         out.surfaces.push({name:o.name||o.geometry.type,normal:!!(m.normalMap&&m.normalMap.image),roughness:!!(m.roughnessMap&&m.roughnessMap.image),
-          normalNode:!!m.normalNode,roughnessNode:!!m.roughnessNode,colorNode:!!m.colorNode,emissiveNode:!!m.emissiveNode,lux:!!(m.userData.luxMaps&&m.userData.luxMaps.normal&&m.userData.luxMaps.roughness)});
+          normalNode:!!m.normalNode,roughnessNode:!!m.roughnessNode,colorNode:!!m.colorNode});
       }
       if(['rifle','pistol','shotgun'].includes(u.kind)&&u.bolt){
         const meshes=[];o.traverse(c=>{if(c.isMesh&&c!==u.muzzleFlash)meshes.push(c);});
@@ -121,7 +121,7 @@ for(const backend of ['webgpu','webgl'])for(const quality of ['high','low']){
     // floor, ceiling, wall instances, runner, both door leaves and the pedestal
     expect(info.surfaces.length).toBeGreaterThanOrEqual(6);
     // Low keeps the roughness maps but drops the relief, so the test tier costs about what flat albedo did.
-    for(const surface of info.surfaces)expect(surface).toEqual(expect.objectContaining({normal:quality!=='low',roughness:true,normalNode:quality!=='low',roughnessNode:true,colorNode:true,emissiveNode:true,lux:true}));
+    for(const surface of info.surfaces)expect(surface).toEqual(expect.objectContaining({normal:quality!=='low',roughness:true,normalNode:quality!=='low',roughnessNode:true,colorNode:true}));
     // Corridor blood, claw marks, footprints and hazard paint: one alpha-tested (unsorted) PBR decal batch.
     expect(info.decals.length).toBe(1);
     expect(info.decals[0]).toEqual(expect.objectContaining({map:true,normal:true,roughness:true,transparent:false}));

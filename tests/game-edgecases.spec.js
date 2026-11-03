@@ -130,31 +130,19 @@ test('pausing freezes movement and an in-flight reload while settings remain usa
   await test.info().attach('pause-reload',{body:JSON.stringify({paused:{position:paused.position,reloadT:paused.reloadT,elapsed:paused.elapsed},frozen:{position:frozen.position,reloadT:frozen.reloadT,elapsed:frozen.elapsed},saved,reloaded:{mag:reloaded.mag,reserve:reloaded.reserve,reloadT:reloaded.reloadT}},null,2),contentType:'application/json'});
 });
 
-test.describe('mobile story transition',()=>{
+test.describe('mobile gestures',()=>{
   test.use({viewport:{width:390,height:844},deviceScaleFactor:1,isMobile:true,hasTouch:true});
 
-  test('Skip scene enters interactive play and portrait gestures clear on rotation',async({page,context,browserName})=>{
+  test('Play opens straight into the ward and portrait gestures clear on rotation',async({page,context,browserName})=>{
     test.skip(browserName!=='chromium','Real multi-touch injection uses Chromium CDP.');
     await ready(page);
-        // The outdoor opening remains available through the result-screen replay action.
-        await page.evaluate(()=>document.getElementById('retryFull').click());
-    await expect.poll(async()=>(await snapshot(page)).state).toBe('outside');
-    await expect(page.locator('#touchMove')).toBeVisible();
-    await pose(page,{x:-3.55,z:7.5,yaw:-Math.PI/2,pitch:0});
-    const cdp=await context.newCDPSession(page),outsideStick=await center(page,'#touchMove');
-    await touch(cdp,'touchStart',[{id:1,x:outsideStick.x,y:outsideStick.y-38}]);
-    await expect.poll(async()=>(await snapshot(page)).state,{timeout:90000}).toBe('cutscene');
-    await expect(page.getByRole('button',{name:'Skip cinematic'})).toBeVisible();
-    await expect(page.locator('#touchMove')).toBeHidden();
-    expect((await snapshot(page)).input.touchY).toBe(0);
-    await touch(cdp,'touchEnd');
-    await page.getByRole('button',{name:'Skip cinematic'}).tap();
+    await page.locator('#startDarkBtn').tap();
     await expect.poll(async()=>(await snapshot(page)).state,{timeout:90000}).toBe('play');
     await page.evaluate(()=>HollowTest.silence());
     await expect(page.locator('#touchMove')).toBeVisible();
     await expect(page.locator('.touch-fire')).toBeVisible();
-    await expect(page.locator('body')).not.toHaveClass(/bars-on/);
     await expect(page.locator('.touch-jump')).toHaveAccessibleName('Jump');
+    const cdp=await context.newCDPSession(page);
     await pose(page,{x:13,z:7.5,yaw:Math.PI/2,pitch:0});
     const before=await snapshot(page),stick=await center(page,'#touchMove'),fire=await center(page,'.touch-fire'),aim=await center(page,'.touch-aim');
     const points=[{id:1,x:stick.x,y:stick.y-38},{id:2,x:280,y:350},{id:3,...fire},{id:4,...aim}];
@@ -178,6 +166,6 @@ test.describe('mobile story transition',()=>{
     await expect.poll(async()=>(await snapshot(page)).state).toBe('play');
     const cleared=await snapshot(page);
     expect(cleared.input).toMatchObject({mouseDown:false,touchX:0,touchY:0});expect(cleared.aiming).toBe(false);
-    await test.info().attach('portrait-story-gestures',{body:JSON.stringify({held:{position:held.position,mag:held.mag,aiming:held.aiming,input:held.input},cleared:{state:cleared.state,aiming:cleared.aiming,input:cleared.input}},null,2),contentType:'application/json'});
+    await test.info().attach('portrait-gestures',{body:JSON.stringify({held:{position:held.position,mag:held.mag,aiming:held.aiming,input:held.input},cleared:{state:cleared.state,aiming:cleared.aiming,input:cleared.input}},null,2),contentType:'application/json'});
   });
 });

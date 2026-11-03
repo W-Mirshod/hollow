@@ -42,7 +42,7 @@ async function renderedFrames(page,count=2){
 }
 function expectViewmodel(s,weapon){
   expect(s.weapon).toBe(weapon);
-  expect(s.viewmodel).toEqual({weapons:[weapon],torch:false,hand:false});
+  expect(s.viewmodel).toEqual({weapons:[weapon],torch:false});
 }
 function pickup(s,item){return (typeof item.id==='number'?s.ammoPickups:s.loot).find(candidate=>candidate.id===item.id);}
 async function inventory(page){

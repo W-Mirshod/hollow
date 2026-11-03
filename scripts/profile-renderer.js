@@ -49,21 +49,11 @@ function replaceOnce(source, before, after, description) {
 function rollbackRendererOptimizations(input) {
   let source = input;
   const changes = [];
-  // The TSL morph graph keeps its branches; out-of-range thresholds make every fragment take the blending path.
-  source = replaceOnce(source, 'If(U.progress.greaterThan(.999),()=>{color.assign(texture(b));}).ElseIf(U.progress.lessThan(.001),',
-    'If(U.progress.greaterThan(2),()=>{color.assign(texture(b));}).ElseIf(U.progress.lessThan(-1),', 'morph shader steady-state fast paths');
-  changes.push({ optimization: 'Steady-state morph shader branch', replacements: 1,
-    disabledBehavior: 'Always sample both surface maps and both transition-noise lookups; at progress=1 the resulting surface is still the final map.' });
-
   const matrixCount = (source.match(/\.matrixAutoUpdate=false\b/g) || []).length;
   if (matrixCount < 6) throw new Error('Static-matrix freeze markers changed; review this profiler before rerunning.');
   source = source.replace(/\.matrixAutoUpdate=false\b/g, '.matrixAutoUpdate=true');
   changes.push({ optimization: 'Static local-matrix freezing', replacements: matrixCount,
     disabledBehavior: 'Recompose unchanged local matrices on each normal scene update; retain the same transforms.' });
-
-  source = replaceOnce(source, 'exterior.visible=false;', 'exterior.visible=true;', 'exterior culling');
-  changes.push({ optimization: 'Interior exterior-group culling', replacements: 1,
-    disabledBehavior: 'Submit the existing exterior group as well; opaque room surfaces still occlude it in the chosen view.' });
 
   source = replaceOnce(source,
     'r.group.visible=Math.hypot(r.group.position.x-camera.position.x,r.group.position.z-camera.position.z)<38;',
@@ -71,11 +61,9 @@ function rollbackRendererOptimizations(input) {
   changes.push({ optimization: 'Room-distance culling', replacements: 1,
     disabledBehavior: 'Keep all existing room groups visible and let normal frustum/depth processing handle them.' });
 
-  source = replaceOnce(source, 'sun.visible=false;', 'sun.visible=true;', 'zero-intensity sun suppression');
-  source = replaceOnce(source, 'chanLight.visible=pedLight.visible=false;', 'chanLight.visible=pedLight.visible=true;', 'zero-intensity hall light suppression');
   source = replaceOnce(source, "muzzleLight.visible=level!=='low';", 'muzzleLight.visible=true;', 'idle muzzle-light suppression');
-  changes.push({ optimization: 'Zero-intensity light suppression', replacements: 4,
-    disabledBehavior: 'Retain the zero-intensity sun, chandelier, pedestal, and idle muzzle light in renderer light processing. Active lighting and all shadow settings stay unchanged.' });
+  changes.push({ optimization: 'Zero-intensity light suppression', replacements: 1,
+    disabledBehavior: 'Retain the idle muzzle light in renderer light processing. Active lighting and all shadow settings stay unchanged.' });
 
   return { source, changes };
 }
@@ -96,7 +84,7 @@ window.__HollowRenderProfile=Object.freeze({
           meshNodes++;if(o.instanceMatrix)mix(o.instanceMatrix.array);if(o.instanceColor)mix(o.instanceColor.array);
           const geo=o.geometry;if(!seen.has(geo)){seen.add(geo);vertices+=geo.attributes.position?.count||0;indices+=geo.index?.count||0;
             for(const key of Object.keys(geo.attributes).sort())mix(geo.attributes[key].array);if(geo.index)mix(geo.index.array);}
-          for(const mat of Array.isArray(o.material)?o.material:[o.material])for(const map of [mat.map,mat.normalMap,mat.roughnessMap,mat.userData?.transitionMap])if(map)maps.add(map);
+          for(const mat of Array.isArray(o.material)?o.material:[o.material])for(const map of [mat.map,mat.normalMap,mat.roughnessMap])if(map)maps.add(map);
         }
       });
       world.traverseVisible(o=>{if(o.isMesh)visibleMeshNodes++;if(o.isLight)visibleLights.push({type:o.type,intensity:o.intensity,color:o.color.getHex(),position:o.matrixWorld.elements.slice(12,15),castShadow:o.castShadow});});
@@ -107,7 +95,7 @@ window.__HollowRenderProfile=Object.freeze({
       framebuffer:{width:renderer.domElement.width,height:renderer.domElement.height},
       inventory:{nodes,meshNodes,frozenNodes,visibleMeshNodes,geometryBuffers:seen.size,vertices,indices,geometryHash:hash.toString(16)},
       anisotropy:[...new Set([...maps].map(map=>map.anisotropy))].sort((a,b)=>a-b),
-      visibleLights,exteriorVisible:exterior.visible,visibleRooms:specialRooms.filter(r=>r.group.visible).length,
+      visibleLights,visibleRooms:specialRooms.filter(r=>r.group.visible).length,
       gpu:gl?{backend:window.HollowBackend,vendor:gl.getParameter(ext?ext.UNMASKED_VENDOR_WEBGL:gl.VENDOR),renderer:gl.getParameter(ext?ext.UNMASKED_RENDERER_WEBGL:gl.RENDERER),version:gl.getParameter(gl.VERSION),shadingLanguage:gl.getParameter(gl.SHADING_LANGUAGE_VERSION)}:
         {backend:window.HollowBackend,vendor:adapter?adapter.vendor:'',renderer:adapter?[adapter.architecture,adapter.description].filter(Boolean).join(' ')||adapter.vendor:'WebGPU adapter'}
     };
