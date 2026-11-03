@@ -75,7 +75,7 @@ function inspect(page){
         out.surfaces.push({name:o.name||o.geometry.type,normal:!!(m.normalMap&&m.normalMap.image),roughness:!!(m.roughnessMap&&m.roughnessMap.image),
           normalNode:!!m.normalNode,roughnessNode:!!m.roughnessNode,colorNode:!!m.colorNode});
       }
-      if(['rifle','pistol','shotgun'].includes(u.kind)&&u.bolt){
+      if(['rifle','pistol','shotgun'].includes(u.kind)&&u.bolt&&!u.world){
         const meshes=[];o.traverse(c=>{if(c.isMesh&&c!==u.muzzleFlash)meshes.push(c);});
         const lit=meshes.filter(c=>c.material.isMeshStandardMaterial);
         out.weapons.push({kind:u.kind,magazine:!!(u.magazine&&u.magazine.isObject3D),flash:!!(u.muzzleFlash&&u.muzzleFlash.isMesh),

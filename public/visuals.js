@@ -1711,7 +1711,7 @@
     const muzzleFlash = new THREE.Mesh(geometry(THREE, 'flashPlane', () => new THREE.PlaneGeometry(0.27, 0.27)), flashMaterial(THREE));
     muzzleFlash.position.copy(muzzle); muzzleFlash.visible = false; muzzleFlash.userData.dynamic = true; g.add(muzzleFlash);
     bolt.userData.restZ = bolt.position.z;
-    g.userData = { kind, magazine, muzzleFlash, muzzlePosition: muzzle, bolt, run: 0,
+    g.userData = { kind, world, magazine, muzzleFlash, muzzlePosition: muzzle, bolt, run: 0,
       grips: { right: new THREE.Vector3(...grips.right), left: grips.left && new THREE.Vector3(...grips.left) } };
     return g;
   }
