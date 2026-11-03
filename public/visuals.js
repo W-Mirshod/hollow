@@ -1519,12 +1519,13 @@
   // A finger is a chain of rounded phalanges (cached 8-sided open cylinders) with a knuckle at every joint.
   function digit(THREE, parent, mat, points, r) {
     const up = new THREE.Vector3(0, 1, 0), unit = geometry(THREE, 'gun:phalanx', () => new THREE.CylinderGeometry(1, 1, 1, 8, 1, true));
-    oval(THREE, parent, mat, points[0][0], points[0][1], points[0][2], r * 1.12, r * 1.12, r * 1.12);
+    const knuckle = geometry(THREE, 'gun:knuckle', () => new THREE.SphereGeometry(1, 8, 6));
+    add(THREE, parent, knuckle, mat, points[0][0], points[0][1], points[0][2], r * 1.12, r * 1.12, r * 1.12);
     for (let i = 1; i < points.length; i++) {
       const a = new THREE.Vector3(...points[i - 1]), b = new THREE.Vector3(...points[i]), delta = b.clone().sub(a), radius = r * (1 - i * 0.06);
       const m = add(THREE, parent, unit, mat, (a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2, radius, delta.length(), radius);
       m.quaternion.setFromUnitVectors(up, delta.normalize());
-      oval(THREE, parent, mat, b.x, b.y, b.z, radius * 1.02, radius * 1.02, radius * 1.02);
+      add(THREE, parent, knuckle, mat, b.x, b.y, b.z, radius * 1.02, radius * 1.02, radius * 1.02);
     }
   }
 
@@ -2048,7 +2049,9 @@
   function dressWard(THREE, g, { grid, s, height, rooms, seed, cells, corridor, exit, ceilingY, overhead }) {
     const random = seeded((Math.imul(seed | 0, 2654435761) ^ 0x5bd1e995) >>> 0), decal = decalMaterial(THREE);
     const cable = standard(THREE, 'ward:cable', 0x15181a, 0.5, 0), plaster = standard(THREE, 'ward:plaster', 0x8b8676, 0.96, 0, 'concrete');
-    const grime = standard(THREE, 'ward:grime', 0x30362c, 1, 0, 'concrete'), k = Math.min(1, s / 3);
+    const grime = standard(THREE, 'ward:grime', 0x30362c, 1, 0, 'concrete'), k = Math.min(1, s / 3), low = detail === 0;
+    const flake = geometry(THREE, 'ward:flake', () => new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2));
+    const [tubeSides, tubeSteps] = low ? [3, 8] : [4, 12];
     const walls = (x, z) => [[1, 0], [0, 1], [-1, 0], [0, -1]].filter(([dx, dz]) => grid[z + dz]?.[x + dx] === 1);
     const wallPoint = (c, dx, dz, along) => [c.wx + dx * s / 2 - dz * along, c.wz + dz * s / 2 + dx * along];
     const clampAlong = (a, w) => Math.max(-s / 2 + w / 2 + 0.02, Math.min(s / 2 - w / 2 - 0.02, a));
@@ -2094,7 +2097,9 @@
         const a0 = (random() - 0.5) * (s - 1.2 * k), wallX = c.wx + dx * s / 2, wallZ = c.wz + dz * s / 2;
         for (let i = 3 + (random() * 5 | 0); i > 0; i--) {
           const size = (0.016 + random() * 0.022) * k, [x, z] = wallPoint(c, dx, dz, clampAlong(a0 + (random() - 0.5) * 0.8 * k, 0.1));
-          const m = box(THREE, g, random() < 0.72 ? plaster : grime, x - dx * 0.055, size, z - dz * 0.055, size * 1.3, size * 0.7, size, random() * 0.6, random() * TAU, random() * 0.6);
+          const mat = random() < 0.72 ? plaster : grime, rx = random() * 0.6, ry = random() * TAU, rz = random() * 0.6;
+          if (low && i > 3) continue;
+          const m = box(THREE, g, mat, x - dx * 0.055, size, z - dz * 0.055, size * 1.3, size * 0.7, size, rx, ry, rz);
           m.updateMatrixWorld(true);
           const b = new THREE.Box3().setFromObject(m);
           m.position.y -= b.min.y;
@@ -2104,7 +2109,7 @@
         for (let i = 0; i < 5; i++) {
           const w = (0.025 + random() * 0.06) * k, off = 0.08 + random() * random() * 0.55 * k;
           const [x, z] = wallPoint(c, dx, dz, clampAlong(a0 + (random() - 0.5) * k, 0.1));
-          box(THREE, g, plaster, x - dx * off, 0.003, z - dz * off, w, 0.005, w * (0.5 + random() * 0.6), 0, random() * TAU, 0);
+          add(THREE, g, flake, plaster, x - dx * off, 0.003, z - dz * off, w, 1, w * (0.5 + random() * 0.6), 0, random() * TAU, 0).castShadow = false;
         }
       }
       if (!overhead) continue;
@@ -2118,7 +2123,7 @@
           const t = i / 10, sag = drop * 4 * t * (1 - t), out = inset + 0.12 * sag, [x, z] = wallPoint(c, dx, dz, a + (b - a) * t);
           pts.push(new THREE.Vector3(x - dx * out, y0 - sag, z - dz * out));
         }
-        add(THREE, g, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 18, 0.011, 5, false), cable, 0, 0, 0);
+        add(THREE, g, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), tubeSteps, 0.011, tubeSides, false), cable, 0, 0, 0);
       }
       const len = Math.min(0.3 + random() * 0.22, height - 0.04 - 2.72);
       if (random() < 0.045 && len > 0.1) {
@@ -2127,7 +2132,7 @@
           const t = i / 6, curl = t * t * 0.07;
           pts.push(new THREE.Vector3(x0 + Math.cos(a) * curl, height - 0.04 - len * t, z0 + Math.sin(a) * curl));
         }
-        add(THREE, g, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 8, 0.009, 5, false), cable, 0, 0, 0);
+        add(THREE, g, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), tubeSteps >> 1, 0.009, tubeSides, false), cable, 0, 0, 0);
       }
     }
 
