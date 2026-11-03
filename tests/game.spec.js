@@ -39,15 +39,18 @@ test('offline-local boot, menus, settings, assets and restart are error-free',as
 test('inertial movement, jump, crouch, slide, aiming and all three weapons work',async({page})=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));await start(page);
   await pose(page,{x:13,z:7.5,yaw:Math.PI/2});
-  await key(page,'w',600);const moved=await state(page);expect(moved.position.x).toBeLessThan(12.7);
+  // The first frames after Play can take over a second on software renderers (SwiftShader), so hold W until it has moved
+  // the player instead of for a fixed 600 ms: this checks movement, not startup latency.
+  await page.keyboard.down('w');
+  try{await expect.poll(async()=>(await state(page)).position.x,{message:'W moves the player forward',timeout:10000}).toBeLessThan(12.7);}finally{await page.keyboard.up('w');}
   await page.keyboard.down('Space');await expect.poll(async()=>(await state(page)).position.y).toBeGreaterThan(.12);await page.keyboard.up('Space');
   await expect.poll(async()=>(await state(page)).onGround).toBe(true);
   await page.keyboard.down('c');await expect.poll(async()=>(await state(page)).crouching).toBe(true);await page.keyboard.up('c');
-  await pose(page,{x:13,z:7.5,yaw:Math.PI/2});await page.keyboard.down('w');await page.keyboard.down('Shift');await page.waitForTimeout(250);
-  expect((await state(page)).running).toBe(true);await page.keyboard.down('c');await expect.poll(()=>page.locator('#stanceText').textContent()).toBe('SLIDING');await page.keyboard.up('c');await page.keyboard.up('w');await page.keyboard.up('Shift');
+  await pose(page,{x:13,z:7.5,yaw:Math.PI/2});await page.keyboard.down('w');await page.keyboard.down('Shift');
+  await expect.poll(async()=>(await state(page)).running,{message:'Shift+W sprints'}).toBe(true);await page.keyboard.down('c');await expect.poll(()=>page.locator('#stanceText').textContent()).toBe('SLIDING');await page.keyboard.up('c');await page.keyboard.up('w');await page.keyboard.up('Shift');
   await page.keyboard.press('2');await expect.poll(async()=>(await state(page)).weapon).toBe('pistol');
   await page.mouse.down({button:'right'});await expect.poll(async()=>(await state(page)).aiming).toBe(true);await page.mouse.up({button:'right'});
-  await page.mouse.down();await page.waitForTimeout(650);await page.mouse.up();expect((await state(page)).mag).toBe(11);
+  await page.mouse.down();await page.waitForTimeout(650);await page.mouse.up();await expect.poll(async()=>(await state(page)).mag,{message:'the queued pistol click fires once on the next frame'}).toBe(11);
   await page.keyboard.press('r');await expect.poll(async()=>(await state(page)).mag).toBe(12);expect((await state(page)).reserve).toBe(11);
   await page.keyboard.press('3');await page.waitForTimeout(350);await page.mouse.down();await page.waitForTimeout(250);await page.mouse.up();await expect.poll(async()=>(await state(page)).mag).toBe(5);
   await page.keyboard.press('1');await expect.poll(async()=>(await state(page)).weapon).toBe('rifle');await page.mouse.down();
