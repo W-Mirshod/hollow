@@ -1,4 +1,4 @@
-/* The survivor's own body and score: breathing, heartbeat, grunts, a chase bed and stingers.
+/* The survivor's own body and score: heartbeat, grunts, a chase bed and stingers.
    The caller owns the context, its master gain and the frame clock; update() is cheap per frame. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -8,33 +8,22 @@
   'use strict';
 
   const MAX_VOICES = 12, LOOKAHEAD = .12, CONTROL = 1 / 30, FADE = .025, BPM = 130;
-  const BREATH = .2, HEART = .16, BED = .16;
-  const PRIORITY = { breath: 0, heart: 1, pickup: 1, land: 2, gasp: 2, surge: 2, hurt: 3, kill: 3, headshot: 3,
+  const HEART = .16, BED = .16;
+  const PRIORITY = { heart: 1, pickup: 1, land: 2, surge: 2, hurt: 3, kill: 3, headshot: 3,
     fuse: 3, chase: 4, streak: 4, scare: 5 };
   const STINGERS = ['chase', 'kill', 'headshot', 'streak', 'fuse', 'pickup', 'scare'];
-  const FLAGS = ['exhausted', 'running', 'moving', 'crouching', 'chase', 'hidden'];
+  const FLAGS = ['exhausted', 'running', 'moving', 'chase', 'hidden'];
   const LADDER = [0, 2, 4, 7, 9, 12], EMPTY = Object.freeze({});
-  // [centre Hz, Q, weight]. Breath is broad turbulence; voiced grunts ring through narrow vocal-tract bands.
+  // [centre Hz, Q, weight]. A winded exhale is broad turbulence; voiced grunts ring through narrow vocal-tract bands.
   const FORMANTS = {
-    inhale: [[960, 1.2, .5], [1820, 1.5, .9], [3700, 1.8, .55]],
     exhale: [[640, 1.4, 1], [1180, 1.7, .72], [2550, 2.2, .3]],
-    nasal: [[360, 1.8, 1], [980, 2.2, .4], [2300, 2.6, .16]],
-    gasp: [[880, 3.5, .9], [1700, 4.5, 1], [3000, 5, .45]],
     grunt: [[540, 6, 1], [1060, 7.5, .62], [2380, 9, .28]],
-    pain: [[760, 5.5, 1], [1280, 7, .72], [2650, 8.5, .34]],
-    cough: [[470, 4, 1], [1350, 5, .6], [2450, 6, .3]]
+    pain: [[760, 5.5, 1], [1280, 7, .72], [2650, 8.5, .34]]
   };
   // [phase, amount] breakpoints after a silent start; every shape closes at true zero.
   const SHAPES = {
-    inhale: [[.3, .45], [.6, .9], [.8, 1], [.93, .5], [1, 0]],
-    gaspIn: [[.07, .7], [.2, 1], [.45, .8], [.72, .62], [.9, .3], [1, 0]],
     exhale: [[.07, .85], [.18, 1], [.42, .6], [.72, .24], [1, 0]],
-    pant: [[.04, 1], [.15, .88], [.34, .6], [.6, .32], [.84, .12], [1, 0]],
-    held: [[.3, .55], [.55, 1], [.8, .45], [1, 0]],
-    edge: [[.1, 1], [.35, .55], [.7, .18], [1, 0]],
     grunt: [[.05, 1], [.2, .86], [.48, .62], [.78, .28], [1, 0]],
-    gasp: [[.12, 1], [.4, .92], [.7, .7], [.88, .35], [1, 0]],
-    squeak: [[.2, 1], [.55, .6], [1, 0]],
     swell: [[.12, .55], [.3, 1], [.46, .7], [.62, .95], [.84, .45], [1, 0]],
     rise: [[.5, .12], [.8, .45], [.97, 1], [1, 0]],
     hold: [[.06, 1], [.8, .85], [1, 0]]
@@ -76,13 +65,12 @@
       (context.state === 'suspended' && typeof context.startRendering !== 'function');
 
     const voices = new Map(), retiring = new Set();
-    const input = { active: false, stamina: 1, exhausted: false, running: false, moving: false, crouching: false,
+    const input = { active: false, stamina: 1, exhausted: false, running: false, moving: false,
       danger: 0, chase: false, health: 100, effects: true, hidden: false };
-    const breath = { effort: 0, rate: 14, level: 0, ragged: false, inhale: true, nextAt: 0, wasExhausted: false };
-    const heart = { strain: 0, bpm: 60, level: 0, nextAt: 0 };
+    const heart = { effort: 0, strain: 0, bpm: 60, level: 0, nextAt: 0 };
     const music = { intensity: 0, target: 0, level: 0 };
     const combo = { step: 0, at: -Infinity };
-    let nextId = 1, bus = null, bed = null, glottis = null, pulse = null, live = false, gaspAt = -Infinity;
+    let nextId = 1, bus = null, bed = null, glottis = null, pulse = null, live = false;
 
     /* ---------- graph bookkeeping ---------- */
     const add = (group, node) => { group.nodes.add(node); return node; };
@@ -272,7 +260,7 @@
       }
       return input;
     }
-    // Irregular openings and catches for exhausted, ragged breaths.
+    // Irregular flutter: every breakpoint but the closing zero is randomly weakened.
     const roughen = points => points.map(([phase, amount], index) =>
       [phase, index === points.length - 1 ? 0 : amount * rand(.5, 1)]);
     // Irregular sparks on one gain: ordered, non-overlapping spikes.
@@ -297,7 +285,7 @@
       play(voice, source, start, stopAt, rand(0, Math.max(0, noiseBuffer.duration - (stopAt - start) * playback)));
     }
 
-    /* ---------- body: breathing and heartbeat ---------- */
+    /* ---------- body: heartbeat ---------- */
     function physiology(step) {
       const fatigue = 1 - input.stamina;
       let effort = 0;
@@ -306,13 +294,10 @@
         else if (input.running) effort = .3 + .58 * fatigue;
         else effort = .82 * Math.pow(fatigue, 1.25) + (input.moving ? .05 : 0);
       }
-      // Breathing climbs over seconds of sprinting, snaps ragged at exhaustion and recovers slowly.
-      breath.effort = follow(breath.effort, effort, step, effort > breath.effort ? (input.exhausted ? .35 : 1.4) : 3.2);
-      breath.ragged = input.active && (input.exhausted || breath.effort > .9);
-      breath.rate = (14 + 36 * breath.effort) * (input.hidden ? .62 : 1);
-      breath.level = BREATH * (.05 + .95 * Math.pow(breath.effort, 1.7)) * (input.hidden ? .28 : 1) * (input.crouching ? .62 : 1);
+      // Exertion climbs over seconds of sprinting, jumps at exhaustion and recovers slowly.
+      heart.effort = follow(heart.effort, effort, step, effort > heart.effort ? (input.exhausted ? .35 : 1.4) : 3.2);
       const injury = Math.pow(1 - input.health / 100, 1.15);
-      const strain = input.active ? Math.max(input.danger, injury, .5 * breath.effort) : 0;
+      const strain = input.active ? Math.max(input.danger, injury, .5 * heart.effort) : 0;
       heart.strain = follow(heart.strain, strain, step, strain > heart.strain ? .7 : 4);
       heart.bpm = 60 + 90 * clamp(heart.strain, 0, 1);
       heart.level = HEART * ease(.1, .32, heart.strain) * (.45 + .55 * heart.strain) * (input.hidden ? 1.25 : 1);
@@ -320,42 +305,6 @@
       music.intensity = follow(music.intensity, music.target, step,
         music.target > music.intensity ? .5 : input.active ? 3 : .8);
       if (music.intensity < 1e-5 && !music.target) music.intensity = 0;
-    }
-    function breathVoice(inhale, at, length) {
-      const ragged = breath.ragged, hidden = input.hidden;
-      const level = breath.level * (inhale ? .82 : 1) * (ragged ? rand(.8, 1.12) : rand(.92, 1.06));
-      return oneShot('breath', level, (voice, start) => {
-        const set = hidden ? FORMANTS.nasal : inhale ? FORMANTS.inhale : FORMANTS.exhale;
-        const throat = tract(voice, set, start, length, inhale ? 1.1 : .9, 1 + .16 * breath.effort, hidden ? 1500 : 5200);
-        const form = hidden ? SHAPES.held : inhale ? (ragged ? SHAPES.gaspIn : SHAPES.inhale) : (ragged ? SHAPES.pant : SHAPES.exhale);
-        const cough = !inhale && ragged && chance() < .14;
-        const air = cough ? .07 : 0;
-        noise(voice, throat, start + air, length, 1, ragged ? roughen(form) : form, rand(.9, 1.1));
-        if (!inhale && ragged && !hidden) {
-          // The faint voiced "hah" edge of a winded exhale.
-          const pitch = rand(108, 128), edge = length * .42;
-          tone(voice, throat, glottal(), start + air + length * .03, edge, rand(.1, .17), SHAPES.edge,
-            [[0, pitch], [edge, pitch * .86]]);
-        }
-        if (cough) {
-          const cords = tract(voice, FORMANTS.cough, start, .16, .85);
-          noise(voice, cords, start, .1, 1.3, strike(.004, .07), rand(.8, .95));
-          tone(voice, cords, glottal(), start + .004, .08, .5, strike(.006, .06), [[0, rand(140, 160)], [.07, 105]]);
-        }
-      }, at);
-    }
-    function breathe(now) {
-      if (!breath.nextAt || breath.nextAt < now - .3) breath.nextAt = now + .04;
-      if (breath.nextAt > now + LOOKAHEAD) return;
-      const at = Math.max(breath.nextAt, now + .006), inhale = breath.inhale, ragged = breath.ragged;
-      const period = 60 / breath.rate, wobble = () => ragged ? rand(.8, 1.2) : rand(.94, 1.06);
-      const length = clamp(period * (inhale ? (ragged ? .4 : .36) : (ragged ? .47 : .44)) * wobble(), .22, inhale ? 1.7 : 2.1);
-      // Winded breathing snags: now and then a held catch before the next gulp of air.
-      const snag = ragged && !inhale && chance() < .16 ? rand(.12, .32) : 0;
-      const rest = inhale ? Math.max(.03, period * .05 * wobble()) : Math.max(.05, period * (ragged ? .08 : .17) * wobble()) + snag;
-      breath.inhale = !inhale;
-      breath.nextAt = at + length + rest;
-      breathVoice(inhale, at, length);
     }
     function beat(at) {
       const strain = clamp(heart.strain, 0, 1);
@@ -510,44 +459,18 @@
       try {
         prune();
         if (live) {
-          if (!wasLive) { breath.nextAt = 0; heart.nextAt = 0; breath.inhale = true; }
-          // Exhaustion snaps straight into a ragged, gasping inhale.
-          if (input.exhausted && !breath.wasExhausted && !input.hidden) { breath.inhale = true; breath.nextAt = now + .02; }
-          breathe(now);
+          if (!wasLive) heart.nextAt = 0;
           heartbeat(now);
         }
-        breath.wasExhausted = input.exhausted;
         score(step, now);
       } catch (error) { /* The audio graph is optional; a failing context must not stall the frame. */ }
-    }
-    function pushBreath(at, inhale) {
-      breath.inhale = inhale;
-      breath.nextAt = Math.max(breath.nextAt || 0, at);
-    }
-    function gasp(strength = 1) {
-      const value = numeric(strength);
-      if (!Number.isFinite(value) || value <= 0) return null;
-      const k = clamp(value, 0, 1), now = context.currentTime;
-      if (now - gaspAt < .6) return null;
-      const id = oneShot('gasp', .18 + .22 * k, (voice, start) => {
-        const length = .24 + .16 * k;
-        const throat = tract(voice, FORMANTS.gasp, start, length, 1.14);
-        noise(voice, throat, start, length, 1, SHAPES.gasp, rand(1, 1.15));
-        if (k > .45) {
-          const squeak = .13 + .06 * k;
-          tone(voice, throat, glottal(), start + .03, squeak, .22 * k, SHAPES.squeak,
-            [[0, rand(240, 270)], [squeak, rand(310, 340)]]);
-        }
-      });
-      if (id !== null) { gaspAt = now; pushBreath(voices.get(id).endsAt + .08, false); }
-      return id;
     }
     function hurt(amount) {
       const value = numeric(amount);
       if (!Number.isFinite(value) || value <= 0) return null;
       // amount is health lost (0..100); a Warden blow (~68) is the biggest grunt.
       const severity = clamp(value / 60, .12, 1), length = .17 + .4 * severity;
-      const id = oneShot('hurt', .34 + .4 * severity, (voice, start) => {
+      return oneShot('hurt', .34 + .4 * severity, (voice, start) => {
         const pitch = rand(132, 152) * (1 + .12 * severity);
         const throat = tract(voice, FORMANTS.pain, start, length + .05, .94);
         tone(voice, throat, glottal(), start + .008, length, .9, SHAPES.grunt,
@@ -558,8 +481,6 @@
           noise(voice, winded, start + length * .9, .5, .45 * severity, SHAPES.exhale);
         }
       });
-      if (id !== null) pushBreath(voices.get(id).endsAt + .12, true);
-      return id;
     }
     function land(impact) {
       const value = numeric(impact);
@@ -713,7 +634,7 @@
     }
     function stop() {
       live = false;
-      breath.nextAt = heart.nextAt = 0; breath.inhale = true;
+      heart.nextAt = 0;
       music.intensity = music.target = music.level = 0;
       combo.step = 0; combo.at = -Infinity;
       if (!bus && !voices.size && !bed) return;
@@ -753,7 +674,6 @@
       if (!inactive()) prune();
       const on = live && !inactive();
       return {
-        breathing: { rate: breath.rate, level: on ? breath.level : 0, exhausted: on && breath.ragged },
         heart: { bpm: heart.bpm, level: on ? heart.level : 0 },
         music: { level: bed ? music.level : 0, intensity: music.intensity },
         activeVoices: voices.size, maxVoices: MAX_VOICES,
@@ -761,7 +681,7 @@
           level: voice.level, startedAt: voice.startedAt, endsAt: voice.endsAt }))
       };
     }
-    return Object.freeze({ update, gasp, hurt, stinger, surge, land, stop, snapshot });
+    return Object.freeze({ update, hurt, stinger, surge, land, stop, snapshot });
   }
   return Object.freeze({ create });
 });

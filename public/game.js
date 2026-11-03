@@ -1040,7 +1040,6 @@ function updatePlayer(dt){
   const inputLength=Math.hypot(ix,iz);if(inputLength>1){ix/=inputLength;iz/=inputLength;}
   const mv=LOCO.update(dt,{forward:iz,strafe:ix,sprint:sprintHeld||keys.AltLeft||keys.AltRight||keys.ShiftLeft||keys.ShiftRight,crouch:crouchHeld,aiming,onGround:P.onGround});
   slideT=mv.slideT;P.crouching=mv.crouching;P.running=mv.running;P.stamina=mv.stamina;P.exhausted=mv.exhausted;P.sprint=mv.sprint;P.strafe=ix;
-  if(mv.events&HollowLocomotion.EVENTS.EXHAUSTED)onExhausted();
   P.eye=lerp(P.eye,P.crouching?1.0:EYE,1-Math.exp(-dt*12));
   P.moving=Math.hypot(ix,iz)>.08||slideT>0;
   P.jumpBuffer=Math.max(0,P.jumpBuffer-dt);
@@ -1072,8 +1071,6 @@ function updatePlayer(dt){
   }
   P.noise=mouseDown&&mag>0?1:mv.noise;
 }
-// Stamina just ran out: the one exhaustion gasp (player-audio); the breathing turns ragged on its own.
-function onExhausted(){audioOnExhausted();}
 function stepKind(){return specialRooms.some(r=>r.type==='lounge'&&RULES.insideRoom(r,P.pos.x,P.pos.z))?'carpet':'metal';}
 // One camera-rig step per frame (loop and HollowTest.advance). Footsteps follow the rig's plant events.
 function updateCameraRig(dt){
@@ -2176,8 +2173,8 @@ const VOICE_PRIORITY={breath:0,step:1,whisper:2,moan:2,notice:3,laugh:3,growl:3,
 // Footsteps by weight: the Warden's tread carries, the others creep about 3-4.5 dB under it.
 const STEP_LEVEL={warden:1,stalker:.85,crawler:.85,shrieker:.85};
 const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
-const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,crouching:false,danger:0,chase:false,health:100,effects:true,hidden:false};
-// A threat call ducks the player's body bus (breathing, heartbeat, chase music): [max distance m, gain, hold s].
+const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,danger:0,chase:false,health:100,effects:true,hidden:false};
+// A threat call ducks the player's body bus (heartbeat, grunts, chase music): [max distance m, gain, hold s].
 const DUCK={scream:[30,.4,1.4],notice:[20,.65,.9],laugh:[12,.7,1],whisper:[10,.7,1.2]};
 let reloadEmpty=false,audioFault=false,audioSeq=0,bodyBus=null,duckFree=0,duckDepth=1,duckEnd=0;
 // Master safety limiter: a fast high-ratio compressor (its automatic makeup gain trimmed back out), then a soft
@@ -2191,8 +2188,8 @@ function masterOut(){
   comp.connect(trim);trim.connect(ceiling);ceiling.connect(AC.destination);
   return comp;
 }
-// HollowPlayerAudio's own bus. A scream, a rush notice, a laugh or a whisper nearby ducks it, so the call cuts through an
-// exhausted player's panting and the chase bed; a stinger is never ducked and holds ducking off for 1.5 s.
+// HollowPlayerAudio's own bus. A scream, a rush notice, a laugh or a whisper nearby ducks it, so the call cuts through a
+// racing heartbeat and the chase bed; a stinger is never ducked and holds ducking off for 1.5 s.
 function bodyOut(){bodyBus=AC.createGain();bodyBus.connect(master);return bodyBus;}
 function bodyGain(value,tau){const g=bodyBus.gain,now=AC.currentTime;g.cancelScheduledValues(now);g.setValueAtTime(g.value,now);g.setTargetAtTime(value,now,tau);}
 function duckBody(cue,d){
@@ -2279,8 +2276,6 @@ function audioOnKill(info){
   const r=info.result;playStinger(info.headshot?'headshot':'kill',m.kind);
   if(r&&(r.count>=2||r.label==='WARDEN DOWN'))playStinger('streak',r.label);
 }
-function audioGasp(k,why){if(state==='play'&&playerAudio&&playerAudio.gasp(k)!=null)logCue('player','gasp',why);}
-function audioOnExhausted(){audioGasp(.8,'exhausted');}
 // The killing blow: a cry under the scare hit, then a Stalker or Shrieker laughs over the body.
 function audioOnCaught(m){
   if(playerAudio){playerAudio.hurt(100);playStinger('scare','caught');}
@@ -2302,12 +2297,11 @@ function audioChaosEvent(e){
   }
   let x=e.x,z=e.z;
   if(!placed){const b=Number(e.bearing),d=Number(e.distance);if(!Number.isFinite(b)||!Number.isFinite(d))return;x=P.pos.x+Math.cos(b)*d;z=P.pos.z+Math.sin(b)*d;}
-  if(e.type==='scream'){sVoice('shrieker','scream',x,1.7,z);audioScare(1);}
-  else if(e.type==='slam'){sThud(x,1.4,z,.95,170);audioAfter(.11,()=>sThud(x,1.1,z,.4,320));logCue('world','slam');audioScare(.8);}
-  else if(e.type==='whisper'){sVoice(Math.random()<.5?'stalker':'crawler','whisper',x,1.5,z);audioAfter(rnd(.8,1.1),()=>audioGasp(.45,'whisper'));}
-  else if(e.type==='laugh'){sVoice('stalker','laugh',x,1.6,z);audioAfter(rnd(.6,.9),()=>audioGasp(.6,'laugh'));}
+  if(e.type==='scream'){sVoice('shrieker','scream',x,1.7,z);playStinger('scare');}
+  else if(e.type==='slam'){sThud(x,1.4,z,.95,170);audioAfter(.11,()=>sThud(x,1.1,z,.4,320));logCue('world','slam');playStinger('scare');}
+  else if(e.type==='whisper'){sVoice(Math.random()<.5?'stalker':'crawler','whisper',x,1.5,z);}
+  else if(e.type==='laugh'){sVoice('stalker','laugh',x,1.6,z);}
 }
-function audioScare(k){if(!playerAudio)return;playStinger('scare');audioAfter(.15,()=>audioGasp(k,'scare'));}
 function sSpark(x,y,z){
   if(!AC)return;const n=AC.currentTime,p=makePanner(2,1.2);setPos(p,x,y,z);
   for(let k=0,grains=preferences.effects?7:3;k<grains;k++){const st=n+rnd(0,.22),s=noiseSrc(),f=AC.createBiquadFilter(),g=AC.createGain();
@@ -2361,7 +2355,7 @@ function audioFrame(dt){
     let chase=false;
     if(active)for(const m of monsters)if(!m.dead&&m.state==='chase'&&Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z)<32){chase=true;break;}
     if(!playerAudio)return;
-    bodyIn.active=active;bodyIn.stamina=P.stamina;bodyIn.exhausted=P.exhausted;bodyIn.running=P.running;bodyIn.moving=P.moving;bodyIn.crouching=P.crouching;
+    bodyIn.active=active;bodyIn.stamina=P.stamina;bodyIn.exhausted=P.exhausted;bodyIn.running=P.running;bodyIn.moving=P.moving;
     bodyIn.danger=danger;bodyIn.chase=chase;bodyIn.health=P.health;bodyIn.effects=preferences.effects;bodyIn.hidden=P.hidden;
     playerAudio.update(dt,bodyIn);
   }catch(error){if(!audioFault){audioFault=true;console.warn('[The Hollow] Audio update failed:',error);}}
