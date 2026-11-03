@@ -294,7 +294,9 @@ function cellUV(kind){
   return {uv:mix(f,f.oneMinus(),mir).add(shift.div(tiles)),gx:dFdx(p).mul(s),gy:dFdy(p).mul(s),s};
 }
 // Specular anti-aliasing (Toksvig): mips of a busy normal map shorten the averaged normal; widen the lobe to match.
-function specAA(r,n){const len=n.mul(2).sub(1).length().max(.25),v=len.oneMinus().sub(.012).max(0).div(len).mul(2);return r.mul(r).mul(r.mul(r)).add(v).sqrt().sqrt().min(1);}
+// Low keeps the maps but skips this and the per-cell variation (cellUV): the test tier stays as cheap as possible.
+const wardLow=qualityLevel==='low';
+function specAA(r,n){if(wardLow)return r;const len=n.mul(2).sub(1).length().max(.25),v=len.oneMinus().sub(.012).max(0).div(len).mul(2);return r.mul(r).mul(r.mul(r)).add(v).sqrt().sqrt().min(1);}
 // World-space wear on the end-state ward (medium/high): broad puddles that mirror the torch, grime and gloss drift.
 function wardMacro(kind,color){
   const p=positionWorld;
@@ -347,7 +349,7 @@ function morphMat(luxC,hellC,rep,opts,surf){
   m.userData.transitionMap=b;m.userData.luxMaps={normal:ln,roughness:lr};
   const lux=()=>{const n=texture(ln).xyz;return {c:texture(a),n,r:specAA(texture(lr).g,n)};};
   const hell=()=>{
-    if(!s.cells){const n=texture(hn).xyz;return {c:texture(b),n,r:specAA(texture(hr).g,n)};}
+    if(!s.cells||wardLow){const n=texture(hn).xyz;return {c:texture(b),n,r:specAA(texture(hr).g,n)};}
     const v=cellUV(s.cells),n=texture(hn,v.uv).grad(v.gx,v.gy).xyz;
     return {c:texture(b,v.uv).grad(v.gx,v.gy),n:vec3(n.xy.sub(.5).mul(v.s).add(.5),n.z),r:specAA(texture(hr,v.uv).grad(v.gx,v.gy).g,n)};
   };
