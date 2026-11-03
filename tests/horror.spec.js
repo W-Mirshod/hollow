@@ -213,15 +213,16 @@ test('Blackwater menu, infirmary, central corridor and safe visible Warden rende
   await capture(page,'blackwater-corridor.png');
   const warden=(await snapshot(page)).enemies.find(enemy=>enemy.kind==='warden');
   expect(warden).toBeTruthy();
-  await page.evaluate(index=>{HollowTest.torch(true);HollowTest.enemy(index,{x:45,z:50,yaw:Math.PI,state:'wander'});},warden.index);
+  // The Warden now chases at 3.2 m/s: hold the AI still so this render fixture stays 4-6 m away at any frame rate.
+  await page.evaluate(index=>{HollowTest.torch(true);HollowTest.freezeAI(true);HollowTest.enemy(index,{x:45,z:50,yaw:Math.PI,state:'wander'});},warden.index);
   await renderedFrames(page);
   const visible=await snapshot(page),enemy=visible.enemies.find(enemy=>enemy.index===warden.index);
   const distance=Math.hypot(enemy.x-visible.position.x,enemy.z-visible.position.z);
-  expect(distance).toBeGreaterThanOrEqual(4);expect(distance).toBeLessThanOrEqual(6);
+  expect(distance,'frozen Warden stays where it was placed (5 m)').toBeGreaterThanOrEqual(4);expect(distance).toBeLessThanOrEqual(6);
   expect(enemy.dead).toBe(false);expect(visible.health).toBe(100);expect(visible.state).toBe('play');
   expect(await page.evaluate(({x,z})=>HollowTest.navClear(45,55,x,z,.3),enemy)).toBe(true);
   await capture(page,'blackwater-creature.png');
   expect((await snapshot(page)).health).toBe(100);
-  await page.evaluate(()=>HollowTest.silence());
+  await page.evaluate(()=>{HollowTest.freezeAI(false);HollowTest.silence();});
   console.log('Blackwater captures: infirmary entrance',entrance,'looking toward',target,'; Warden distance',distance,'metres; corridor at x45 z55 facing north.');
 });
