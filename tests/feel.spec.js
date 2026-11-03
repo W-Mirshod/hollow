@@ -109,3 +109,39 @@ test('with motion off the camera is static but footsteps still plant',async({pag
   expect(run.range).toBe(0);expect(run.roll).toBe(0);expect(run.fov).toBe(0);
   expect(run.steps,'footstep events still occur').toBeGreaterThanOrEqual(2);
 });
+
+test('a Stalker in chase with a clear line at 3.5 m lunges faster than its chase speed, without first-frame damage',async({page})=>{
+  await start(page);
+  const s=await page.evaluate(()=>{
+    HollowTest.torch(true);HollowTest.pose({x:45,z:55,yaw:0});
+    const index=HollowGame.snapshot().enemies.find(e=>e.kind==='stalker').index;
+    HollowTest.enemy(index,{x:45,z:51.5,yaw:0,state:'chase'});
+    HollowTest.advance(.05);const s=HollowGame.snapshot();return {s,index};
+  });
+  const enemy=s.s.enemies.find(e=>e.index===s.index);
+  expect(enemy.state).toBe('chase');
+  expect(enemy.lunge,'a clear 3.5 m line inside lungeRange (4.4 m) starts a lunge').toBe(true);
+  expect(enemy.lungeCooldown,'the lunge arms its cooldown').toBeGreaterThan(2.5);
+  expect(enemy.moveSpeed,'lunge speed is chase x lungeSpeed (5.5 x 1.5)').toBeGreaterThan(enemy.speed*1.2);
+  expect(s.s.health,'the lunge itself does no damage on its first frame').toBe(100);
+  expect(s.s.camera.trauma,'a lunge within 4 m shakes the camera').toBeGreaterThan(.2);
+  await page.evaluate(()=>HollowTest.silence());
+});
+
+test('a killed Stalker falls and lies on the floor',async({page})=>{
+  await start(page);
+  const r=await page.evaluate(()=>{
+    HollowTest.pose({x:45,z:55,yaw:0});
+    const index=HollowGame.snapshot().enemies.find(e=>e.kind==='stalker').index;
+    HollowTest.freezeAI(true);HollowTest.enemy(index,{x:45,z:50,yaw:0,state:'wander'});
+    HollowTest.advance(.1);HollowTest.hit(index,100);HollowTest.advance(.3);
+    const falling=HollowGame.snapshot().enemies.find(e=>e.index===index);
+    HollowTest.advance(4);HollowTest.freezeAI(false);
+    return {falling,lying:HollowGame.snapshot().enemies.find(e=>e.index===index)};
+  });
+  expect(r.falling.dead).toBe(true);expect(r.falling.anim.dying,'the death animation is playing').toBe(1);
+  const e=r.lying;
+  expect(e.anim.settled,'the body has come to rest').toBe(1);
+  expect(Math.max(Math.abs(e.anim.pitch),Math.abs(e.anim.roll)),'the body is lying down, not standing').toBeGreaterThan(1);
+  expect(Math.abs(e.anim.lowest),'the body rests on the floor (within 12 cm)').toBeLessThan(.12);
+});
