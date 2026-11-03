@@ -179,8 +179,13 @@ async function main() {
     assert(current.performance.textures > 0 && current.performance.drawCalls > 0, 'The 3D scene must render');
     const frame = await presented(page);
     assert(frame.deviation > 6, 'The ' + current.performance.backend + ' canvas must present a rendered frame: ' + JSON.stringify(frame));
-    assert((await page.locator('#controlsHint').textContent()).trim(), 'Bottom instructions must be visible');
-    await expect(page.locator('#controlsHint')).toBeVisible();
+    if (touch) {
+      // Touch play swaps the keyboard hint for on-screen controls (styles.css: body.touch-mode #controlsHint { display: none }).
+      await expect(page.locator('#controlsHint')).toBeHidden();
+    } else {
+      assert((await page.locator('#controlsHint').textContent()).trim(), 'Bottom instructions must be visible');
+      await expect(page.locator('#controlsHint')).toBeVisible();
+    }
     current.presentedFrame = frame;
     return current;
   }
