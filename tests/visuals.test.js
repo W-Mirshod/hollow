@@ -111,6 +111,33 @@ test('weapon models have independent moving magazines, bolts, and correctly orie
   assert.ok(muzzle.shotgun > muzzle.rifle && muzzle.rifle > muzzle.pistol);
 });
 
+test('the co-op survivor keeps both hands on each weapon and its feet on the floor in every pose', () => {
+  const s = V.makeSurvivor(THREE), u = s.userData;
+  assert.equal(u.weapons.length, 3);
+  for (const [i, gun] of u.weapons.entries()) {
+    u.setWeapon(i);
+    assert.deepEqual(Array.from(u.weapons, w => w.visible), [0, 1, 2].map(j => j === i));
+    assert.ok(gun.userData.grips.right.isVector3);
+    for (const crouch of [false, true]) for (const pitch of [-1, 0, 1]) for (const aim of [false, true]) for (const v of [0, 1.6, 5]) {
+      for (let f = 0; f < 30; f++) u.animate({ vx: 0, vz: -v, yaw: 0, pitch, crouch, run: v > 2, aim }, 1 / 60);
+      s.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(s.matrixWorld).invert();
+      const grip = p => p.clone().applyMatrix4(gun.matrixWorld).applyMatrix4(inv);
+      const g = gun.userData.grips;
+      assert.ok(u.arms[1].wrist.distanceTo(grip(g.right)) < 0.03);
+      assert.ok(u.arms[0].wrist.distanceTo(grip(g.left || g.right)) < 0.03);
+      for (const leg of u.legs) assert.ok(leg.ankle.y >= 0.084 && leg.ankle.y < 0.25);
+    }
+  }
+  u.fire();
+  assert.ok(u.weapons[2].userData.muzzleFlash.visible);
+  for (let f = 0; f < 10; f++) u.animate({}, 1 / 60);
+  assert.ok(!u.weapons[2].userData.muzzleFlash.visible);
+  u.flinch(1); u.animate({}, 1 / 60);
+  assertFiniteGeometry(s);
+  V.disposeGroup(s);
+});
+
 test('procedural surface enhancement preserves the world transition node graph, albedo and its tiling', async () => {
   const { MeshStandardNodeMaterial } = await import('three/webgpu');
   const TSL = await import('three/tsl');

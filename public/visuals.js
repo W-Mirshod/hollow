@@ -881,13 +881,15 @@
   }
 
   // Weapon and flashlight finishes: tiled finish maps (box-projected UVs), their own reflections, and a roughness
-  // factor over the finish's roughness map.
-  function gunMaterial(THREE, key, color, metalness, finishKind, roughness) {
+  // factor over the finish's roughness map. World copies (carried by the co-op partner) reflect the scene's own
+  // environment instead of the viewmodel studio, so they stay dark in a dark corridor.
+  function gunMaterial(THREE, key, color, metalness, finishKind, roughness, world) {
     const cache = store(THREE).materials;
+    if (world) key += ':world';
     if (!cache.has(key)) {
       const maps = finishMaps(THREE, finishKind);
-      const m = new THREE.MeshStandardMaterial({ color, roughness: roughness == null ? 1 : roughness, metalness,
-        map: maps.albedo, normalMap: maps.normal, roughnessMap: maps.roughness, envMap: viewEnvironment(THREE), envMapIntensity: 1.35 });
+      const m = new THREE.MeshStandardMaterial(Object.assign({ color, roughness: roughness == null ? 1 : roughness, metalness,
+        map: maps.albedo, normalMap: maps.normal, roughnessMap: maps.roughness }, world ? {} : { envMap: viewEnvironment(THREE), envMapIntensity: 1.35 }));
       if (!THREE.ColorManagement || !THREE.ColorManagement.enabled) m.color.convertSRGBToLinear();
       m.userData.hollowShared = true; m.userData.hollowSurface = finishKind; cache.set(key, m);
     }
@@ -1573,24 +1575,26 @@
   }
 
   // Parkerized steel, bare-steel edges, black oxide, stippled polymer, walnut, brass, rubber and a woven glove.
-  function gunPalette(THREE) {
+  function gunPalette(THREE, world) {
     return {
       // Phosphate and oxide finishes are coatings: half-metallic, so the key light still models their shape.
-      steel: gunMaterial(THREE, 'gun:steel', 0x6b7377, 0.5, 'gun-metal'),
-      edge: gunMaterial(THREE, 'gun:edge', 0xc0c6c9, 0.95, 'gun-metal', 0.5),
-      black: gunMaterial(THREE, 'gun:black', 0x353c3f, 0.4, 'gun-metal'),
-      polymer: gunMaterial(THREE, 'gun:polymer', 0x3a4042, 0, 'gun-polymer'),
-      wood: gunMaterial(THREE, 'gun:wood', 0x7a5236, 0, 'gun-wood'),
-      brass: gunMaterial(THREE, 'gun:brass', 0xc29a55, 0.9, 'gun-metal', 0.6),
-      rubber: gunMaterial(THREE, 'gun:rubber', 0x1c1f20, 0, 'gun-rubber'),
-      glove: gunMaterial(THREE, 'gun:glove', 0x30352f, 0, 'gun-fabric')
+      steel: gunMaterial(THREE, 'gun:steel', 0x6b7377, 0.5, 'gun-metal', null, world),
+      edge: gunMaterial(THREE, 'gun:edge', 0xc0c6c9, 0.95, 'gun-metal', 0.5, world),
+      black: gunMaterial(THREE, 'gun:black', 0x353c3f, 0.4, 'gun-metal', null, world),
+      polymer: gunMaterial(THREE, 'gun:polymer', 0x3a4042, 0, 'gun-polymer', null, world),
+      wood: gunMaterial(THREE, 'gun:wood', 0x7a5236, 0, 'gun-wood', null, world),
+      brass: gunMaterial(THREE, 'gun:brass', 0xc29a55, 0.9, 'gun-metal', 0.6, world),
+      rubber: gunMaterial(THREE, 'gun:rubber', 0x1c1f20, 0, 'gun-rubber', null, world),
+      glove: gunMaterial(THREE, 'gun:glove', 0x30352f, 0, 'gun-fabric', null, world)
     };
   }
 
-  function makeWeapon(THREE, requestedKind) {
+  // options.world: a third-person copy (scene-lit finishes, no first-person hands) for the co-op partner.
+  function makeWeapon(THREE, requestedKind, options) {
     const kind = ['rifle', 'pistol', 'shotgun'].includes(requestedKind) ? requestedKind : 'rifle';
+    const world = !!(options && options.world);
     const g = new THREE.Group(); g.name = kind;
-    const { steel, edge, black, polymer, wood, brass, rubber, glove } = gunPalette(THREE);
+    const { steel, edge, black, polymer, wood, brass, rubber, glove } = gunPalette(THREE, world);
     const sight = basic(THREE, 'gun:sight', 0x97d3b1);
     const magazine = joint(THREE, g, 'magazine', 0, 0, 0);
     const bolt = joint(THREE, g, 'bolt', 0, 0, 0);
@@ -1670,7 +1674,7 @@
       oval(THREE, g, brass, 0, 0.069, -0.792, 0.006, 0.006, 0.006);
       bevel(THREE, g, black, -0.039, 0.006, -0.051, 0.005, 0.045, 0.096, 0.005);
       bevel(THREE, g, edge, -0.042, 0.006, -0.048, 0.007, 0.034, 0.062, 0.005);
-      const shell = gunMaterial(THREE, 'gun:shell', 0x8a3b2b, 0, 'gun-polymer', 0.7);
+      const shell = gunMaterial(THREE, 'gun:shell', 0x8a3b2b, 0, 'gun-polymer', 0.7, world);
       for (let i = 0; i < 4; i++) {
         cyl(THREE, g, shell, -0.053, -0.021, 0.029 - i * 0.038, 0.011, 0.011, 0.064);
         cyl(THREE, g, brass, -0.053, 0.014, 0.029 - i * 0.038, 0.012, 0.012, 0.01);
@@ -1682,8 +1686,16 @@
     const bore = add(THREE, g, geometry(THREE, 'bore', () => new THREE.CircleGeometry(1, 16)), rubber,
       muzzle.x, muzzle.y, muzzle.z + 0.011, kind === 'shotgun' ? 0.016 : 0.011, kind === 'shotgun' ? 0.016 : 0.011, 1, 0, Math.PI);
     bore.castShadow = false;
-    const hands = { glove, rubber, sleeve: gunMaterial(THREE, 'flashlight:sleeve', 0x22292d, 0, 'gun-fabric') };
-    if (kind === 'rifle') {
+    const hands = { glove, rubber, sleeve: gunMaterial(THREE, 'flashlight:sleeve', 0x22292d, 0, 'gun-fabric', null, world) };
+    // Where a carrier's hands hold the weapon (weapon space): firing grip, and the support hand (null: one-handed).
+    const grips = {
+      rifle: { right: [0, -0.1, 0.07], left: [0, -0.045, -0.25] },
+      pistol: { right: [0, -0.095, 0.045], left: [-0.035, -0.115, 0.03] },
+      shotgun: { right: [0, -0.07, 0.125], left: [0, -0.07, -0.31] }
+    }[kind];
+    if (world) {
+      // No viewmodel hands: the survivor's own arms reach these grips.
+    } else if (kind === 'rifle') {
       gripHand(THREE, g, hands, [0, -0.118, 0.066], -0.27, 0.0225, 0.033, 0.05, [0.36, -0.5, 0.79]);
       supportHand(THREE, g, hands, [0, 0.003, -0.31], 0.037, 0.0425, [-0.42, -0.46, 0.78]);
     } else if (kind === 'pistol') {
@@ -1699,7 +1711,8 @@
     const muzzleFlash = new THREE.Mesh(geometry(THREE, 'flashPlane', () => new THREE.PlaneGeometry(0.27, 0.27)), flashMaterial(THREE));
     muzzleFlash.position.copy(muzzle); muzzleFlash.visible = false; muzzleFlash.userData.dynamic = true; g.add(muzzleFlash);
     bolt.userData.restZ = bolt.position.z;
-    g.userData = { kind, magazine, muzzleFlash, muzzlePosition: muzzle, bolt, run: 0 };
+    g.userData = { kind, magazine, muzzleFlash, muzzlePosition: muzzle, bolt, run: 0,
+      grips: { right: new THREE.Vector3(...grips.right), left: grips.left && new THREE.Vector3(...grips.left) } };
     return g;
   }
 
@@ -1750,6 +1763,226 @@
     lens.castShadow = false; lens.receiveShadow = false;
     g.userData = { lensMaterial, lens, muzzlePosition: new THREE.Vector3(0, 0, -0.184) };
     return g;
+  }
+
+  // ---------- co-op survivor ----------
+  // The partner as others see them: a field evacuation contractor in a softshell, plate carrier with pouches, radio
+  // and hydration pack, coyote cargo trousers with knee pads, boots, gloves and a bump helmet with a headset. Blue ID
+  // strobes on the helmet, strap and pack keep a partner from ever reading as a creature in the dark.
+  // Feet, knees, hands and elbows are solved every frame (two-bone IK), so the body walks on the floor and both hands
+  // stay on whichever weapon is carried. Space: +y up, -z forward (the camera's convention), metres.
+  function makeSurvivor(THREE) {
+    const root = new THREE.Group(); root.name = 'survivor';
+    const mat = {
+      skin: standard(THREE, 'survivor:skin', 0xb7856a, 0.55, 0, 'skin'),
+      hair: standard(THREE, 'survivor:hair', 0x2b221c, 0.85, 0, 'fabric'),
+      jacket: standard(THREE, 'survivor:jacket', 0x2e3946, 0.88, 0, 'fabric'),
+      vest: standard(THREE, 'survivor:vest', 0x4d5541, 0.92, 0, 'fabric'),
+      webbing: standard(THREE, 'survivor:webbing', 0x3b4134, 0.95, 0, 'fabric'),
+      pants: standard(THREE, 'survivor:pants', 0x6d5f4a, 0.9, 0, 'fabric'),
+      boot: standard(THREE, 'survivor:boot', 0x3b2c21, 0.62, 0, 'fabric'),
+      sole: standard(THREE, 'survivor:sole', 0x18191a, 0.85, 0),
+      glove: standard(THREE, 'survivor:glove', 0x27292a, 0.8, 0, 'fabric'),
+      helmet: standard(THREE, 'survivor:helmet', 0x3b4146, 0.48, 0.05),
+      hardware: standard(THREE, 'survivor:hardware', 0x1d2023, 0.45, 0.4),
+      patch: standard(THREE, 'survivor:patch', 0x3466d6, 0.55, 0),
+      eye: basic(THREE, 'survivor:eye', 0x0c0a09),
+      id: basic(THREE, 'survivor:id', 0x6fb0ff)
+    };
+    const capsule = (parent, m, r, len, x, y, z, sx, sz) => add(THREE, parent,
+      geometry(THREE, 'survivor:capsule:' + r + ':' + len, () => new THREE.CapsuleGeometry(r, len, 4, 12)), m, x, y, z, sx || 1, 1, sz || 1);
+    const HIP = 0.94, ANKLE = 0.085, THIGH = 0.43, SHIN = 0.43, UPPER = 0.31, FORE = 0.31;
+
+    // Pelvis, belt and dump pouch.
+    const hips = joint(THREE, root, 'hips', 0, HIP, 0);
+    oval(THREE, hips, mat.pants, 0, -0.03, 0, 0.165, 0.12, 0.115);
+    cyl(THREE, hips, mat.webbing, 0, 0.055, 0, 0.169, 0.169, 0.05, 0, 0, 0, 16).scale.z = 0.72;
+    box(THREE, hips, mat.hardware, 0, 0.055, -0.123, 0.05, 0.036, 0.012);
+    bevel(THREE, hips, mat.webbing, 0, 0, 0.125, 0.14, 0.1, 0.06, 0.012);
+    bevel(THREE, hips, mat.webbing, 0.15, 0.0, -0.02, 0.05, 0.11, 0.09, 0.01);
+
+    // Torso: softshell under a plate carrier.
+    const spine = joint(THREE, hips, 'spine', 0, 0.07, 0);
+    capsule(spine, mat.jacket, 0.165, 0.2, 0, 0.27, 0, 1.08, 0.68);
+    for (const side of [-1, 1]) {
+      oval(THREE, spine, mat.jacket, side * 0.178, 0.43, 0, 0.075, 0.066, 0.076);
+      bevel(THREE, spine, mat.vest, side * 0.17, 0.2, -0.005, 0.045, 0.17, 0.2, 0.01);
+      bevel(THREE, spine, mat.webbing, side * 0.105, 0.47, 0, 0.062, 0.034, 0.25, 0.008);
+    }
+    cyl(THREE, spine, mat.jacket, 0, 0.535, 0, 0.075, 0.09, 0.06, 0, 0, 0, 14);
+    cyl(THREE, spine, mat.skin, 0, 0.585, 0.005, 0.05, 0.056, 0.1, 0, 0, 0, 12);
+    bevel(THREE, spine, mat.vest, 0, 0.3, -0.112, 0.3, 0.33, 0.05, 0.012);
+    bevel(THREE, spine, mat.vest, 0, 0.31, 0.105, 0.3, 0.34, 0.05, 0.012);
+    for (const x of [-0.085, 0, 0.085]) {
+      bevel(THREE, spine, mat.webbing, x, 0.2, -0.148, 0.072, 0.12, 0.04, 0.008);
+      bevel(THREE, spine, mat.vest, x, 0.256, -0.152, 0.076, 0.032, 0.046, 0.006);
+    }
+    bevel(THREE, spine, mat.webbing, 0, 0.372, -0.142, 0.2, 0.07, 0.028, 0.006);
+    box(THREE, spine, mat.patch, 0.055, 0.378, -0.157, 0.062, 0.04, 0.004);
+    bevel(THREE, spine, mat.hardware, -0.195, 0.29, 0.035, 0.05, 0.13, 0.055, 0.008);
+    cyl(THREE, spine, mat.hardware, -0.2, 0.46, 0.04, 0.004, 0.006, 0.22, 0, 0, 0, 6);
+    bevel(THREE, spine, mat.vest, 0, 0.29, 0.165, 0.24, 0.34, 0.07, 0.02);
+    box(THREE, spine, mat.id, 0.105, 0.492, 0.06, 0.022, 0.012, 0.03);
+    box(THREE, spine, mat.id, 0, 0.43, 0.202, 0.03, 0.02, 0.008);
+
+    // Head: face, hair, a bump helmet with rails, an NVG shroud and a headset with a boom mic.
+    const head = joint(THREE, spine, 'head', 0, 0.6, 0);
+    oval(THREE, head, mat.skin, 0, 0.1, 0, 0.088, 0.112, 0.098);
+    oval(THREE, head, mat.skin, 0, 0.036, -0.022, 0.072, 0.058, 0.078);
+    box(THREE, head, mat.skin, 0, 0.086, -0.1, 0.024, 0.042, 0.03, 0.25);
+    for (const side of [-1, 1]) {
+      oval(THREE, head, mat.skin, side * 0.09, 0.095, 0.008, 0.013, 0.03, 0.022);
+      oval(THREE, head, mat.eye, side * 0.034, 0.112, -0.087, 0.012, 0.007, 0.006);
+      box(THREE, head, mat.hair, side * 0.034, 0.127, -0.091, 0.032, 0.008, 0.012, 0, 0, side * -0.08);
+      bevel(THREE, head, mat.hardware, side * 0.108, 0.137, 0.005, 0.012, 0.022, 0.1, 0.004);
+      cyl(THREE, head, mat.webbing, side * 0.099, 0.088, 0.01, 0.037, 0.037, 0.032, 0, 0, Math.PI / 2, 14);
+    }
+    box(THREE, head, mat.eye, 0, 0.046, -0.096, 0.03, 0.004, 0.006);
+    oval(THREE, head, mat.hair, 0, 0.115, 0.022, 0.091, 0.075, 0.092);
+    add(THREE, head, geometry(THREE, 'survivor:helmet', () => new THREE.SphereGeometry(1, 18, 10, 0, TAU, 0, Math.PI * 0.56)),
+      mat.helmet, 0, 0.13, 0.008, 0.114, 0.11, 0.124);
+    bevel(THREE, head, mat.hardware, 0, 0.202, -0.113, 0.045, 0.032, 0.022, 0.005);
+    link(THREE, head, mat.hardware, [-0.104, 0.07, -0.01], [-0.045, 0.04, -0.098], 0.004);
+    box(THREE, head, mat.id, 0, 0.21, 0.104, 0.022, 0.012, 0.012);
+
+    // Shoulder torch (the partner's light), riding with the aim so it points where they look.
+    const aim = joint(THREE, spine, 'aim', 0, 0.42, 0);
+    const torch = joint(THREE, aim, 'torch', -0.15, 0.06, -0.12);
+    cyl(THREE, torch, mat.hardware, 0, 0, 0, 0.022, 0.022, 0.1, Math.PI / 2, 0, 0, 10);
+    const mount = joint(THREE, aim, 'mount', 0, 0, 0);
+    const weapons = ['rifle', 'pistol', 'shotgun'].map(kind => {
+      const w = makeWeapon(THREE, kind, { world: true }); w.visible = kind === 'rifle'; mount.add(w);
+      const flash = w.userData.muzzleFlash, cross = flash.clone(); cross.rotation.set(0, Math.PI / 2, 0); flash.add(cross);
+      return w;
+    });
+
+    // Limbs: placed per frame in root space.
+    const limb = (m, r, length) => {
+      const mesh = capsule(root, m, r, Math.max(0.01, length - r)); mesh.userData.dynamic = true; return mesh;
+    };
+    const legs = [-1, 1].map(side => {
+      const foot = joint(THREE, root, 'foot', side * 0.11, ANKLE, 0);
+      cyl(THREE, foot, mat.boot, 0, 0.03, 0, 0.055, 0.06, 0.1, 0, 0, 0, 12);
+      bevel(THREE, foot, mat.boot, 0, -0.025, -0.05, 0.1, 0.075, 0.25, 0.02);
+      bevel(THREE, foot, mat.sole, 0, -0.07, -0.05, 0.106, 0.024, 0.27, 0.008);
+      const pad = oval(THREE, root, mat.hardware, 0, 0, 0, 0.052, 0.062, 0.035); pad.userData.dynamic = true;
+      return { side, foot, pad, thigh: limb(mat.pants, 0.07, THIGH), shin: limb(mat.pants, 0.058, SHIN),
+        hip: new THREE.Vector3(), knee: new THREE.Vector3(), ankle: new THREE.Vector3(), target: new THREE.Vector3() };
+    });
+    const arms = [-1, 1].map(side => {
+      const hand = joint(THREE, root, 'hand', 0, 0, 0);
+      oval(THREE, hand, mat.glove, 0, 0, 0, 0.042, 0.05, 0.058);
+      oval(THREE, hand, mat.glove, side * -0.03, 0.02, -0.02, 0.016, 0.03, 0.018, 0.4);
+      cyl(THREE, hand, mat.glove, 0, -0.01, 0.05, 0.04, 0.036, 0.04, Math.PI / 2, 0, 0, 10);
+      return { side, hand, upper: limb(mat.jacket, 0.052, UPPER), fore: limb(mat.jacket, 0.045, FORE),
+        shoulder: new THREE.Vector3(), elbow: new THREE.Vector3(), wrist: new THREE.Vector3(), target: new THREE.Vector3() };
+    });
+    for (const group of [hips, spine, head, torch, ...legs.map(l => l.foot), ...arms.map(a => a.hand)]) batch(THREE, group);
+
+    const UP = new THREE.Vector3(0, 1, 0), FORWARD = new THREE.Vector3(0, 0, -1);
+    const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3(), inv = new THREE.Matrix4();
+    const q1 = new THREE.Quaternion(), q2 = new THREE.Quaternion();
+    const poles = { knee: [new THREE.Vector3(-0.15, 0, -1), new THREE.Vector3(0.15, 0, -1)],
+      elbow: [new THREE.Vector3(-0.8, -1, 0.15), new THREE.Vector3(0.6, -1, 0.45)] };
+    // Weapon placement in aim space, at rest and aimed down the sights: [x, y, z, adsX, adsY, adsZ, torso blade (rad)].
+    const MOUNT = { rifle: [0.1, -0.04, -0.31, 0.06, 0, -0.3, 0.35], pistol: [0.03, -0.07, -0.47, 0.01, -0.025, -0.5, 0.08], shotgun: [0.1, -0.045, -0.3, 0.06, -0.005, -0.29, 0.35] };
+    const st = { phase: 0, walk: 0, run: 0, crouch: 0, aim: 0, reload: 0, kick: 0, flash: 0, flinch: 0, flinchX: 0, t: 0, weapon: 0 };
+
+    // Two-bone IK from a toward t (lengths l1, l2), bending toward pole; writes the joint and the (reachable) end.
+    function solve(a, t, l1, l2, pole, mid, end) {
+      const d = v1.subVectors(t, a); let len = d.length();
+      if (len < 1e-6) { d.set(0, -1, 0); len = 1e-6; } else d.divideScalar(len);
+      const reach = clamp(len, Math.abs(l1 - l2) + 1e-3, l1 + l2 - 1e-3);
+      end.copy(a).addScaledVector(d, reach);
+      const along = (l1 * l1 - l2 * l2 + reach * reach) / (2 * reach), h = Math.sqrt(Math.max(0, l1 * l1 - along * along));
+      const bend = v2.copy(pole).addScaledVector(d, -pole.dot(d));
+      if (bend.lengthSq() < 1e-8) bend.set(0, 0, -1).addScaledVector(d, -d.z);
+      mid.copy(a).addScaledVector(d, along).addScaledVector(bend.normalize(), h);
+    }
+    function place(mesh, a, b) {
+      mesh.position.addVectors(a, b).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(UP, v3.subVectors(b, a).normalize());
+    }
+    const toRoot = (object, local, out) => out.copy(local).applyMatrix4(object.matrixWorld).applyMatrix4(inv);
+
+    function setWeapon(index) {
+      const i = clamp(Math.floor(index) || 0, 0, weapons.length - 1);
+      if (i === st.weapon) return;
+      weapons[st.weapon].visible = false; weapons[st.weapon].userData.muzzleFlash.visible = false;
+      st.weapon = i; weapons[i].visible = true;
+    }
+    function fire() {
+      st.kick = 1; st.flash = 0.055;
+      const f = weapons[st.weapon].userData.muzzleFlash;
+      f.visible = true; f.rotation.z = Math.random() * TAU; f.scale.setScalar(0.8 + Math.random() * 0.5);
+    }
+    function flinch(dirX) { st.flinch = 1; st.flinchX = clamp(dirX || 0, -1, 1); }
+
+    // input: {vx, vz} world velocity (m/s), yaw (root rotation.y), pitch (look, + up), crouch, run, aim, reload.
+    function animate(input, dt) {
+      const k = (rate) => 1 - Math.exp(-dt * rate), yaw = input.yaw || 0;
+      const lx = (input.vx || 0) * Math.cos(yaw) - (input.vz || 0) * Math.sin(yaw);
+      const lz = (input.vx || 0) * Math.sin(yaw) + (input.vz || 0) * Math.cos(yaw);
+      const speed = Math.hypot(lx, lz);
+      st.t += dt;
+      st.walk += (smoothstep(0.08, 0.6, speed) - st.walk) * k(10);
+      st.run += ((input.run && speed > 1.5 ? 1 : 0) - st.run) * k(6);
+      st.crouch += ((input.crouch ? 1 : 0) - st.crouch) * k(10);
+      st.aim += ((input.aim ? 1 : 0) - st.aim) * k(12);
+      st.reload += ((input.reload ? 1 : 0) - st.reload) * k(8);
+      st.kick *= Math.exp(-dt * 16); st.flinch *= Math.exp(-dt * 7);
+      if (st.flash > 0) { st.flash -= dt; if (st.flash <= 0) weapons[st.weapon].userData.muzzleFlash.visible = false; }
+      const stride = 0.3 + 0.12 * Math.min(speed, 6), w = st.walk;
+      st.phase = (st.phase + dt * speed / stride * Math.PI) % (TAU * 64);
+      const pitch = clamp(input.pitch || 0, -1.3, 1.3), low = st.run * (1 - st.aim) * (1 - st.reload), crouch = st.crouch;
+
+      const m = MOUNT[weapons[st.weapon].name] || MOUNT.rifle, a = st.aim, blade = m[6] * (1 - low * 0.6);
+      hips.position.y = HIP - crouch * 0.3 - 0.03 * w * Math.abs(Math.sin(st.phase));
+      hips.rotation.y = -Math.sin(st.phase) * 0.05 * w - blade * 0.35;
+      spine.rotation.set(-0.2 * st.run * w - 0.28 * crouch + pitch * 0.3 - st.flinch * 0.18 - st.kick * 0.03,
+        Math.sin(st.phase) * 0.07 * w * (1 - st.aim) - blade * 0.65 + st.flinchX * st.flinch * 0.2, st.flinchX * st.flinch * -0.12);
+      head.rotation.set(pitch * 0.45 + crouch * 0.22 + st.run * w * 0.12 + st.aim * 0.06 + st.reload * -0.35, blade + st.aim * -0.05, st.aim * 0.1);
+      aim.rotation.set(pitch - spine.rotation.x - low * 0.75 - st.reload * 0.25, blade + low * 0.4 + st.reload * 0.15, 0);
+      mount.position.set(m[0] + (m[3] - m[0]) * a, m[1] + (m[4] - m[1]) * a, m[2] + (m[5] - m[2]) * a + 0.05 * st.kick);
+      mount.rotation.set(0.09 * st.kick - st.reload * 0.2, 0, st.reload * 0.55);
+
+      root.updateMatrixWorld(true); inv.copy(root.matrixWorld).invert();
+      // Legs: each foot cycles half a stride either side of its stance along the motion, lifted while it swings.
+      const dirX = speed > 0.05 ? lx / speed : 0, dirZ = speed > 0.05 ? lz / speed : 0;
+      for (const leg of legs) {
+        const phase = st.phase + (leg.side > 0 ? Math.PI : 0), along = Math.sin(phase) * stride * 0.5 * w;
+        const lift = Math.max(0, Math.cos(phase)) * (0.07 + 0.06 * st.run) * w;
+        leg.target.set(leg.side * 0.11 * (1 + 0.3 * crouch) + dirX * along, ANKLE + lift, (leg.side < 0 ? -0.12 : 0.15) * crouch + dirZ * along);
+        toRoot(hips, v3.set(leg.side * 0.095, -0.05, 0), leg.hip);
+        solve(leg.hip, leg.target, THIGH, SHIN, poles.knee[leg.side < 0 ? 0 : 1], leg.knee, leg.ankle);
+        place(leg.thigh, leg.hip, leg.knee); place(leg.shin, leg.knee, leg.ankle);
+        leg.foot.position.copy(leg.ankle); leg.foot.rotation.set(lift * 2.2, 0, 0);
+        leg.pad.position.copy(leg.knee).addScaledVector(poles.knee[leg.side < 0 ? 0 : 1], 0.045);
+        leg.pad.quaternion.copy(leg.shin.quaternion);
+      }
+      // Arms: the firing hand on the grip, the support hand on the fore-end (or the magazine while reloading).
+      const gun = weapons[st.weapon], grips = gun.userData.grips;
+      gun.getWorldQuaternion(q1); root.getWorldQuaternion(q2); q1.premultiply(q2.invert());
+      for (const arm of arms) {
+        if (arm.side > 0) toRoot(gun, grips.right, arm.target);
+        else {
+          toRoot(gun, grips.left || grips.right, arm.target);
+          if (st.reload > 0.01) {
+            toRoot(gun.userData.magazine, v3.set(0, -0.08 + Math.sin(st.t * 7) * 0.025, 0), v1);
+            arm.target.lerp(v1, st.reload);
+          }
+        }
+        toRoot(spine, v3.set(arm.side * 0.18, 0.43, 0.01), arm.shoulder);
+        solve(arm.shoulder, arm.target, UPPER, FORE, poles.elbow[arm.side < 0 ? 0 : 1], arm.elbow, arm.wrist);
+        place(arm.upper, arm.shoulder, arm.elbow); place(arm.fore, arm.elbow, arm.wrist);
+        arm.hand.position.copy(arm.wrist); arm.hand.quaternion.copy(q1);
+      }
+    }
+
+    root.userData = { kind: 'survivor', hips, spine, head, aim, mount, torch, weapons, legs, arms, state: st,
+      animate, setWeapon, fire, flinch, height: 1.8 };
+    animate({}, 0);
+    return root;
   }
 
   function roomPalette(THREE) {
@@ -2342,5 +2575,5 @@
     if (group.parent) group.parent.remove(group);
   }
 
-  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, deriveMaps });
+  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, makeSurvivor, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, deriveMaps });
 })(window);

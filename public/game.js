@@ -686,7 +686,6 @@ const fpHemi=physical(new THREE.HemisphereLight(0xffffff,0x000000,0.5),Math.PI);
 const fpKey=physical(new THREE.DirectionalLight(0xbad1dc,.5),Math.PI);fpKey.position.set(-1,2,1);fpRig.add(fpKey);fpRig.add(fpKey.target);
 const fpTorchLight=physical(new THREE.PointLight(0xffe7c4,0,2.5),1,1);fpTorchLight.position.set(-0.1,0.15,0.1);fpRig.add(fpTorchLight);
 const fpFlash=physical(new THREE.PointLight(0xffa850,0,2.5),1,1);fpFlash.position.set(0.18,-0.12,-0.75);fpRig.add(fpFlash);
-const skin=new THREE.MeshStandardMaterial({color:lin(0xc99f86),roughness:0.7});
 const torch=HollowVisuals.makeFlashlight(THREE);
 const lensMat=torch.userData.lensMaterial;
 torch.position.set(-0.25,-0.27,-0.44);torch.rotation.set(0.06,-0.07,0);torch.visible=false;fpRig.add(torch);
@@ -1312,7 +1311,7 @@ function fire(){
   _shotQuat.setFromEuler(_shotEuler.set(P.pitch,P.yaw,0,'YXZ'));_shotDir.set(0,0,-1).applyQuaternion(_shotQuat);
   const spread=w.spread*(aiming?.4:1)*(P.crouching?.65:1)+(P.moving?.008:0);
   dopaShotBegin();
-  let didHit=false;
+  let didHit=false,hitPartner=false;
   if(atm&&gun.userData.muzzlePosition)_atmMz.copy(gun.userData.muzzlePosition).applyEuler(gun.rotation).add(gun.position);
   if(w.pellets>1)fxFlash=.55;
   for(let pellet=0;pellet<w.pellets;pellet++){
@@ -1326,10 +1325,21 @@ function fire(){
       const sq=Math.sqrt(disc);let at=(-b-sq)/(2*a);if(at<0)at=(-b+sq)/(2*a);if(at<0||at>=distance)continue;
       const y=_o.y+_d.y*at;if(y<.06||y>m.stats.height)continue;distance=at;best={m,y};
     }
+    // Friendly fire: the partner is a 0.3 m upright cylinder (lower when crouched); a locker hides them.
+    if(NET.inGame&&R.present&&R.gn===NET.gen&&R.al&&!R.out&&!R.raw.hidden&&avatar.visible){
+      const ox=_o.x-R.pos.x,oz=_o.z-R.pos.z,a=_d.x*_d.x+_d.z*_d.z,b=2*(ox*_d.x+oz*_d.z),c=ox*ox+oz*oz-.09,disc=b*b-4*a*c;
+      if(a>.00001&&c>0&&disc>=0){const at=(-b-Math.sqrt(disc))/(2*a),y=_o.y+_d.y*at-(R.raw.y||0),top=R.raw.crouch?1.2:1.8;
+        if(at>0&&at<distance&&y>.06&&y<top){distance=at;best={mate:true,y,head:y>top-.26};}}
+    }
     const hit=_o.clone().addScaledVector(_d,Math.max(0,distance-.04));
     const streak=w.pellets===1||pellet%3===0;
     if(atm&&streak)atm.tracer(_o.x,_o.y,_o.z,hit.x,hit.y,hit.z,gun.userData.muzzlePosition?{muzzle:_atmMz}:undefined);
-    if(best){
+    if(best&&best.mate){
+      didHit=true;if(atm)atm.blood(hit.x,hit.y,hit.z,{dir:_d,amount:w.pellets>1?.4:1});else puff(hit,true);
+      NET.ff+=RULES.weaponDamage(w.id,best.head,distance,'partner')*FRIENDLY_FIRE;
+      avatar.userData.flinch(_d.x*Math.cos(R.yaw)-_d.z*Math.sin(R.yaw));
+      if(!hitPartner)showMsg(`You hit ${R.nm}! Friendly fire is on.`,1.6);hitPartner=true;
+    }else if(best){
       didHit=true;if(atm)atm.blood(hit.x,hit.y,hit.z,{dir:_d,amount:w.pellets>1?.4:1});else puff(hit,true);
       const damage=RULES.weaponDamage(w.id,best.y>best.m.stats.head,distance,best.m.kind);
       dopaShotHit(best.m,best.y>best.m.stats.head,distance);
@@ -1344,6 +1354,7 @@ function fire(){
   }
   dopaShotEnd();
   if(didHit){hitMarkerT=.16;audioHitTick();}
+  if(hitPartner)sendNet(true);
   const recoil=w.recoil*(aiming?.65:1);camFX.kick(recoil,rnd(-1,1)*w.recoil*.25);
   P.pitch=Math.min(1.35,P.pitch+recoil*.35);P.yaw+=rnd(-.001,.001);
   if(w.id==='shotgun')camFX.addTrauma(.2);
@@ -1475,6 +1486,7 @@ async function warmPlayPipelines(){
     // Fill the navigator's per-radius clearance caches, which the first monster paths would otherwise build mid-play.
     if(mazeNavigator)for(const kind in RULES.MONSTERS)for(const [cx,cz] of [[W-2,W-2],[W-2,3],[3,W-2],[N,N]])if(openCell(cx,cz))mazeNavigator.path(PED.x+1,PED.z,cx*S+S/2,cz*S+S/2,RULES.MONSTERS[kind].radius);
     monsters.forEach((m,i)=>{m.g.visible=true;m.g.position.set(views[0][0]+3+(i%4)*.9,0,views[0][1]-1.5+Math.floor(i/4)*1.2);m.g.updateMatrixWorld(true);});
+    avatar.visible=true;avatar.userData.weapons.forEach(g=>g.visible=true);avatar.position.set(views[0][0]+2,0,views[0][1]+1.5);avatar.updateMatrixWorld(true);
     dynamicWorld.updateMatrixWorld(true);
     warmCam.aspect=camera.aspect;warmCam.updateProjectionMatrix();
     for(const [x,z] of views)for(const yaw of yaws){
@@ -1489,6 +1501,7 @@ async function warmPlayPipelines(){
   finally{
     warming=false;renderRequested=true;
     if(state==='menu'){monsters.forEach(m=>m.g.visible=false);weaponModels.forEach(g=>g.visible=false);}
+    if(!NET.inGame){avatar.visible=false;avatar.userData.weapons.forEach((g,i)=>g.visible=i===avWeapon);}
   }
 }
 function updateAtmosphere(dt){
@@ -1648,30 +1661,29 @@ function loop(){
 }
 
 /* ---------- co-op (two players over the live room) ---------- */
-const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false,gen:0,seed:0,shots:0,tk:[],dm:[],myPeer:null,sendT:0,joinT:0,over:false,unsubs:[],actions:[],actionSeq:0,actionAck:0,claimed:new Set(),joining:false,joinToken:0};
-const R={present:false,peer:null,nm:'Partner',gn:-1,al:1,out:0,sh:0,lastSh:0,tk:[],dm:[],dmApplied:[],ph:'',seed:0,mc:0,mon:null,
-  raw:{x:0,z:0,y:0,yaw:0,pitch:0,torch:false,run:false,crouch:false,hidden:false},pos:new THREE.Vector3(),yaw:0,pitch:0,stepD:0,seen:false,actions:[],actionAck:0,grants:[]};
+const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false,gen:0,seed:0,shots:0,tk:[],dm:[],ff:0,myPeer:null,sendT:0,joinT:0,over:false,unsubs:[],actions:[],actionSeq:0,actionAck:0,claimed:new Set(),joining:false,joinToken:0};
+const R={present:false,peer:null,nm:'Partner',gn:-1,al:1,out:0,sh:0,lastSh:0,ff:0,ffApplied:0,tk:[],dm:[],dmApplied:[],ph:'',seed:0,mc:0,mon:null,
+  raw:{x:0,z:0,y:0,yaw:0,pitch:0,torch:false,run:false,crouch:false,hidden:false,reload:false,aim:false},pos:new THREE.Vector3(),vx:0,vz:0,yaw:0,pitch:0,stepD:0,seen:false,actions:[],actionAck:0,grants:[]};
 function seeded(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 function buildMazeSeeded(seed){worldSeed=seed;prebuiltSeed=0;const o=Math.random;Math.random=seeded(seed);try{buildMaze();}finally{Math.random=o;}}
 const r2=v=>Math.round(v*100)/100;
+// A partner's bullet hurts like a creature's bite: ~12 per rifle round, ~16 per pistol round, a close shotgun blast ~75.
+const FRIENDLY_FIRE=12;
 
-// partner's body in the world
-const avatar=new THREE.Group();avatar.visible=false;scene.add(avatar);
-let avLegL,avLegR,avPivot,avSpot,avFlash,avLabelTex,avLabelCv;
-{const coat=new THREE.MeshStandardMaterial({color:lin(0x2a2f3d),roughness:0.9}),pants=new THREE.MeshStandardMaterial({color:lin(0x1b1c22),roughness:0.95});
- const body=new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.2,0.75,10),coat);body.position.y=1.15;body.castShadow=true;avatar.add(body);
- const head=new THREE.Mesh(new THREE.SphereGeometry(0.13,12,10),skin);head.position.y=1.65;head.castShadow=true;avatar.add(head);
- const legGeo=new THREE.CylinderGeometry(0.08,0.07,0.8,8);legGeo.translate(0,-0.4,0);
- avLegL=new THREE.Mesh(legGeo,pants);avLegL.position.set(-0.1,0.8,0);avatar.add(avLegL);
- avLegR=new THREE.Mesh(legGeo,pants);avLegR.position.set(0.1,0.8,0);avatar.add(avLegR);
- avPivot=new THREE.Group();avPivot.position.y=1.42;avatar.add(avPivot);
- const rifle=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.08,0.7),new THREE.MeshStandardMaterial({color:lin(0x1c1d20),metalness:0.6,roughness:0.5}));rifle.position.set(0.16,-0.05,-0.3);avPivot.add(rifle);
- const tl=new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,0.18,8),new THREE.MeshStandardMaterial({color:lin(0x26272b)}));tl.rotation.x=Math.PI/2;tl.position.set(-0.18,0,-0.25);avPivot.add(tl);
- avSpot=physical(new THREE.SpotLight(0xfff1d6,0,22,0.42,0.55),5,0.5);avSpot.position.set(-0.18,0,-0.35);avPivot.add(avSpot);
- const tgt=new THREE.Object3D();tgt.position.set(-0.1,-0.2,-6);avPivot.add(tgt);avSpot.target=tgt;
- avFlash=physical(new THREE.PointLight(0xffb060,0,10),5,1);avFlash.position.set(0.16,0,-0.7);avPivot.add(avFlash);
+// partner's body in the world: the modelled survivor carrying their equipped weapon, with a shoulder torch
+const avatar=HollowVisuals.makeSurvivor(THREE);avatar.visible=false;scene.add(avatar);
+let avSpot,avFlash,avLabel,avLabelTex,avLabelCv,avWeapon=-1;
+{const rig=avatar.userData;
+ avSpot=physical(new THREE.SpotLight(0xfff1d6,0,22,0.42,0.55),5,0.5);avSpot.position.set(0,0,-0.06);rig.torch.add(avSpot);
+ const tgt=new THREE.Object3D();tgt.position.set(0.1,-0.25,-6);rig.torch.add(tgt);avSpot.target=tgt;
+ avFlash=physical(new THREE.PointLight(0xffb060,0,10),5,1);
  [avLabelCv]=cv(256,64);avLabelTex=new THREE.CanvasTexture(avLabelCv);
- const lab=new THREE.Sprite(new THREE.SpriteMaterial({map:avLabelTex,transparent:true,depthWrite:false,fog:false}));lab.scale.set(0.9,0.225,1);lab.position.y=2.05;avatar.add(lab);}
+ avLabel=new THREE.Sprite(new THREE.SpriteMaterial({map:avLabelTex,transparent:true,depthWrite:false,fog:false}));avLabel.scale.set(0.9,0.225,1);avLabel.position.y=2.12;avatar.add(avLabel);}
+function setAvatarWeapon(i){
+  if(i===avWeapon)return;avWeapon=i;avatar.userData.setWeapon(i);
+  const w=avatar.userData.weapons[i]||avatar.userData.weapons[0];w.add(avFlash);avFlash.position.copy(w.userData.muzzlePosition);
+}
+setAvatarWeapon(0);
 function setAvatarName(n){const x=avLabelCv.getContext('2d');x.clearRect(0,0,256,64);x.font='30px "Special Elite",monospace';x.textAlign='center';x.textBaseline='middle';
   x.fillStyle='rgba(0,0,0,.55)';const w=Math.min(250,x.measureText(n).width+24);x.fillRect(128-w/2,12,w,40);x.fillStyle='#9fc1ff';x.fillText(n,128,33);avLabelTex.needsUpdate=true;}
 
@@ -1730,9 +1742,9 @@ function onPeers(ch){
   R.peer=partner.peer;
   R.nm=String(pr.nm||'Partner').slice(0,18);if(R.nm!==R.lastNm){R.lastNm=R.nm;setAvatarName(R.nm);}
   R.gn=Math.floor(finiteNumber(pr.gn,0,0,1e9));R.al=pr.al===0?0:1;R.out=pr.out?1:0;R.ph=typeof pr.ph==='string'?pr.ph:'';
-  if(Array.isArray(pr.p)){R.raw.x=finiteNumber(pr.p[0],R.raw.x,-110,W*S+60);R.raw.z=finiteNumber(pr.p[1],R.raw.z,-70,W*S+70);R.raw.yaw=finiteNumber(pr.p[2],R.raw.yaw);R.raw.pitch=finiteNumber(pr.p[3],R.raw.pitch,-1.35,1.35);R.raw.torch=!!pr.p[4];R.raw.run=!!pr.p[5];R.raw.y=finiteNumber(pr.p[6],0,0,H);R.raw.crouch=!!pr.p[7];R.raw.hidden=!!pr.p[8];R.raw.health=finiteNumber(pr.p[9],100,0,100);R.raw.weapon=Math.floor(finiteNumber(pr.p[10],0,0,2));
+  if(Array.isArray(pr.p)){R.raw.x=finiteNumber(pr.p[0],R.raw.x,-110,W*S+60);R.raw.z=finiteNumber(pr.p[1],R.raw.z,-70,W*S+70);R.raw.yaw=finiteNumber(pr.p[2],R.raw.yaw);R.raw.pitch=finiteNumber(pr.p[3],R.raw.pitch,-1.35,1.35);R.raw.torch=!!pr.p[4];R.raw.run=!!pr.p[5];R.raw.y=finiteNumber(pr.p[6],0,0,H);R.raw.crouch=!!pr.p[7];R.raw.hidden=!!pr.p[8];R.raw.health=finiteNumber(pr.p[9],100,0,100);R.raw.weapon=Math.floor(finiteNumber(pr.p[10],0,0,2));R.raw.reload=!!pr.p[11];R.raw.aim=!!pr.p[12];
     if(!R.seen){R.pos.set(R.raw.x,0,R.raw.z);R.yaw=R.raw.yaw;R.pitch=R.raw.pitch;R.seen=true;}}
-  R.sh=finiteNumber(pr.sh,0,0);R.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];R.dm=Array.isArray(pr.dm)?pr.dm.slice(0,MAX_MON).map(v=>finiteNumber(v,0,0)):[];R.actions=Array.isArray(pr.actions)?pr.actions.slice(0,32):[];
+  R.sh=finiteNumber(pr.sh,0,0);R.ff=finiteNumber(pr.ff,0,0);R.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];R.dm=Array.isArray(pr.dm)?pr.dm.slice(0,MAX_MON).map(v=>finiteNumber(v,0,0)):[];R.actions=Array.isArray(pr.actions)?pr.actions.slice(0,32):[];
   if(NET.role==='guest'){R.mon=Array.isArray(pr.mon)?pr.mon.slice(0,MAX_MON).map(v=>Array.isArray(v)&&v.length>=4&&v.slice(0,4).every(Number.isFinite)?[finiteNumber(v[0],0,-110,W*S+60),finiteNumber(v[1],0,-70,W*S+70),finiteNumber(v[2],0),Math.floor(v[3])&15,finiteNumber(v[4],0,-100,100)]:null):null;R.mc=Math.floor(finiteNumber(pr.mc,0,0,MAX_MON));R.el=finiteNumber(pr.el,0,0,7200);
     // host started (or restarted) a round we're not in yet
     const remoteSeed=finiteNumber(pr.seed,0,0,2147483647);
@@ -1775,10 +1787,10 @@ function hostStart(){
 }
 function startCoopRound(seed,gen){
   initAudio();
-  NET.gen=gen;NET.seed=seed;NET.inGame=true;NET.over=false;NET.myAl=true;NET.myOut=false;NET.shots=0;NET.tk=[];NET.dm=new Array(MAX_MON).fill(0);
+  NET.gen=gen;NET.seed=seed;NET.inGame=true;NET.over=false;NET.myAl=true;NET.myOut=false;NET.shots=0;NET.ff=0;NET.tk=[];NET.dm=new Array(MAX_MON).fill(0);
   avSpot.visible=true;avFlash.visible=qualityLevel!=='low';
   NET.actions=[];NET.actionSeq=0;NET.actionAck=0;NET.claimed.clear();R.actions=[];R.actionAck=0;R.grants=[];
-  R.dmApplied=new Array(MAX_MON).fill(0);R.lastSh=R.gn===gen?R.sh:0;R.seen=false;
+  R.dmApplied=new Array(MAX_MON).fill(0);R.lastSh=R.gn===gen?R.sh:0;R.ffApplied=R.gn===gen?R.ff:0;R.seen=false;
   buildMazeSeeded(seed);resetSurvivor();
   P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
   battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
@@ -1799,6 +1811,14 @@ function coopLocalDone(how){
   if(partnerIn){state='spect';
     showMsg(how==='out'?`You’re out. Watching ${R.nm} through their eyes.`:`You’re dead. Watching ${R.nm} through their eyes.`,5);}
   else coopFinish();
+}
+function hurtByPartner(d){
+  if(!localInDanger()||P.hidden)return;
+  P.health=Math.max(0,P.health-d);damageT=Math.max(damageT,.9);
+  {const dx=R.pos.x-P.pos.x,dz=R.pos.z-P.pos.z,dist=Math.max(.01,Math.hypot(dx,dz));camFX.punch((dx*Math.cos(P.yaw)-dz*Math.sin(P.yaw))/dist,.4);camFX.addTrauma(.35);}
+  if(P.health<=0){mouseDown=false;stopAudio();if(state==='pause')showScreen(null);state='play';coopLocalDone('dead');
+    if(state==='spect')showMsg(`${R.nm} shot you dead. Watching through their eyes.`,5);return;}
+  playerAudio?.hurt(d);showMsg(`${R.nm} shot you!`,2);
 }
 function coopFinish(){
   if(NET.over)return;NET.over=true;
@@ -1824,8 +1844,8 @@ function sendNet(force){
   if(!NET.g)return;
   const now=performance.now();if(!force&&now-NET.sendT<67)return;NET.sendT=now;
   const alive=state==='play'||state==='caught'||(state==='pause'&&prevState==='play');
-  const pk={gn:NET.gen,ph:NET.inGame&&!NET.over?'play':'lobby',p:[r2(P.pos.x),r2(P.pos.z),r2(P.yaw),r2(P.pitch),torchOn?1:0,P.running?1:0,r2(P.pos.y),P.crouching?1:0,P.hidden?1:0,Math.round(P.health),weaponIndex],
-    al:NET.myAl===false?0:1,out:NET.myOut?1:0,sh:NET.shots,tk:NET.tk.slice(0,32)};
+  const pk={gn:NET.gen,ph:NET.inGame&&!NET.over?'play':'lobby',p:[r2(P.pos.x),r2(P.pos.z),r2(P.yaw),r2(P.pitch),torchOn?1:0,P.running?1:0,r2(P.pos.y),P.crouching?1:0,P.hidden?1:0,Math.round(P.health),weaponIndex,reloadT>0?1:0,aiming&&!reloadT?1:0],
+    al:NET.myAl===false?0:1,out:NET.myOut?1:0,sh:NET.shots,ff:r2(NET.ff),tk:NET.tk.slice(0,32)};
   if(NET.role==='guest'){pk.dm=NET.dm.slice(0,MAX_MON).map(r2);pk.actions=NET.actions.slice(0,12);}
   if(NET.role==='host'){pk.seed=NET.seed;pk.mc=monCount;pk.el=r2(elapsed);pk.pt=R.peer||null;
     pk.mon=monsters.slice(0,monCount).map(m=>[r2(m.pos.x),r2(m.pos.z),r2(m.yaw),(m.state==='chase'?1:0)|(m.dead?2:0)|(m.stagger>0?4:0)|(m.state==='stalk'?8:0),r2(m.hp)]);
@@ -1868,13 +1888,17 @@ function netTick(dt){
     R.pos.x+=(R.raw.x-R.pos.x)*k;R.pos.z+=(R.raw.z-R.pos.z)*k;R.yaw=angLerp(R.yaw,R.raw.yaw,k);R.pitch+=(R.raw.pitch-R.pitch)*k;
     const moved=Math.hypot(R.pos.x-ox,R.pos.z-oz);
     const show=R.al&&!R.out&&state!=='spect'&&!(state==='pause'&&prevState==='spect');
-    avatar.visible=!!show;avatar.position.set(R.pos.x,R.raw.y||0,R.pos.z);avatar.scale.y=R.raw.crouch?.65:1;avatar.rotation.y=R.yaw;avPivot.rotation.x=R.pitch;
-    R.walk=(R.walk||0)+moved*3.2;avLegL.rotation.x=Math.sin(R.walk)*0.5;avLegR.rotation.x=-Math.sin(R.walk)*0.5;
+    avatar.visible=!!show;avatar.position.set(R.pos.x,R.raw.y||0,R.pos.z);avatar.rotation.y=R.yaw;
+    if(dt>0){const kv=Math.min(1,dt*8);R.vx+=((R.pos.x-ox)/dt-R.vx)*kv;R.vz+=((R.pos.z-oz)/dt-R.vz)*kv;}
+    if(show){setAvatarWeapon(R.raw.weapon||0);
+      avatar.userData.animate({vx:R.vx,vz:R.vz,yaw:R.yaw,pitch:R.pitch,crouch:R.raw.crouch,run:R.raw.run,aim:R.raw.aim,reload:R.raw.reload},dt);
+      avLabel.position.y=2.12-avatar.userData.state.crouch*.32;}
     setLight(avSpot,R.al&&!R.out&&R.raw.torch?2.4:0);
     R.stepD+=moved;if(R.stepD>(R.raw.run?1.1:0.75)){R.stepD=0;if(R.al&&!R.out)sStepAt(R.pos.x,R.pos.z,R.raw.run?0.3:0.13);}
-    if(R.sh>R.lastSh){const n=Math.min(3,R.sh-R.lastSh);R.lastSh=R.sh;for(let q=0;q<n;q++)setTimeout(()=>sShotAt(R.pos.x,R.pos.z),q*90);setLight(avFlash,preferences.effects?2.5:0);
+    if(R.sh>R.lastSh){const n=Math.min(3,R.sh-R.lastSh);R.lastSh=R.sh;for(let q=0;q<n;q++)setTimeout(()=>sShotAt(R.pos.x,R.pos.z),q*90);setLight(avFlash,preferences.effects?2.5:0);if(preferences.effects)avatar.userData.fire();
       if(NET.role==='host')alertMonsters(weaponDefs[R.raw.weapon]?.noise||30,R.raw.x,R.raw.z);}
     setLight(avFlash,avFlash.userData.level*Math.max(0,1-dt*30));
+    if(R.ff<R.ffApplied)R.ffApplied=R.ff;else if(R.ff-R.ffApplied>.01){const d=R.ff-R.ffApplied;R.ffApplied=R.ff;hurtByPartner(Math.min(d,100));}
     // ammo boxes the partner took
     for(const ix of R.tk){const b=ammoBoxes[ix];if(b&&!b.taken){b.taken=true;b.g.visible=false;}}
     // host applies the partner's hits
@@ -2331,8 +2355,8 @@ function sPickup(type){playStinger(type==='fuse'?'fuse':'pickup',type);}
 // Per pellet, once fire() has resolved it: flesh on monsters, the struck material on walls, doors and props.
 function audioBullet(hit,best,distance,wallDistance){
   if(best){
-    const m=best.m,headshot=best.y>m.stats.head,armored=m.kind==='warden';
-    if(headshot)shotHit.headshot=true;if(armored)shotHit.armored=true;
+    const m=best.m;
+    if(m){if(best.y>m.stats.head)shotHit.headshot=true;if(m.kind==='warden')shotHit.armored=true;}
     if(weaponAudio&&weaponAudio.impact('flesh',{x:hit.x,y:hit.y,z:hit.z,distance})!=null)logCue('weapon','impact','flesh');
   }else if(wallDistance<48&&weaponAudio){
     const surface=surfaceAt(hit.x+_d.x*.08,hit.y+_d.y*.08,hit.z+_d.z*.08);

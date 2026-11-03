@@ -112,6 +112,12 @@ test('two real browser peers synchronize map, monsters, fuses, doors, jumping an
     await host.evaluate(()=>HollowTest.silence());
     await guest.evaluate(()=>HollowTest.action('jump',true));await expect.poll(async()=>(await state(host)).network.partnerY).toBeGreaterThan(.1);
     await guest.evaluate(()=>HollowTest.action('crouch',true));await expect.poll(async()=>(await state(host)).network.partnerCrouching).toBe(true);await guest.evaluate(()=>HollowTest.action('crouch',false));
+    // Friendly fire: the host shoots the guest standing 1.6 m in front; the guest loses health and survives.
+    {const at=(await state(host)).position;await pose(host,{x:at.x,z:at.z,yaw:Math.PI});await pose(guest,{x:at.x,z:at.z+1.6,yaw:0});
+     await expect.poll(async()=>{const p=await host.evaluate(()=>HollowTest.snapshot().network);return p.partnerY===0&&!p.partnerCrouching;}).toBe(true);
+     await host.waitForTimeout(400);await host.evaluate(()=>{HollowTest.action('fire',true);HollowTest.action('fire',false);});
+     await expect.poll(async()=>(await state(guest)).health).toBeLessThan(100);expect((await state(guest)).health).toBeGreaterThan(50);expect((await state(guest)).state).toBe('play');
+     await guest.evaluate(()=>HollowTest.health(100));}
     const d=(await state(guest)).doors[0];await pose(guest,{x:d.x,z:d.z-2,yaw:Math.PI});await guest.evaluate(()=>HollowTest.action('interact',true));
     await expect.poll(async()=>(await state(host)).doors[0].open).toBe(false);await expect.poll(async()=>(await state(guest)).doors[0].open).toBe(false);
     await guest.evaluate(()=>HollowTest.action('interact',true));await expect.poll(async()=>(await state(host)).doors[0].locked).toBe(true);
