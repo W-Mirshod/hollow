@@ -99,7 +99,7 @@ test('different enemy damage, armor, medical aid and fuse-powered escape work',a
 });
 
 test('two real browser peers synchronize map, monsters, fuses, doors, jumping and final exit',async({browser})=>{
-  test.setTimeout(360000);
+  test.setTimeout(600000);
   const hostContext=await browser.newContext({viewport:{width:900,height:600}}),guestContext=await browser.newContext({viewport:{width:900,height:600}});
   const host=await hostContext.newPage(),guest=await guestContext.newPage();
   try{
@@ -129,7 +129,9 @@ test('two real browser peers synchronize map, monsters, fuses, doors, jumping an
           expect((await state(peer)).exitOpen).toBe(false);
           const blocked=await peer.evaluate(()=>HollowTest.collide({x:102.1,y:0,z:100.5}));expect(blocked.x).toBeLessThan(102);
         }
-        await expect.poll(async()=>(await state(host)).exitOpen,{timeout:180000}).toBe(true);
+        // The shutter opens after HollowHorror.RELEASE_SECONDS (10 s) of simulation, and a frame advances at most .05 s, so the
+        // host needs ~200 frames. Two software-rendered peers can run near 1 FPS here, so allow up to 5 minutes of wall time.
+        await expect.poll(async()=>(await state(host)).exitOpen,{timeout:300000}).toBe(true);
         await expect.poll(async()=>(await state(guest)).exitOpen).toBe(true);
         await guest.bringToFront();await guest.keyboard.down('w');
         try{await expect.poll(async()=>(await state(guest)).state,{timeout:60000}).toBe('spect');}finally{await guest.keyboard.up('w');}
