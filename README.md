@@ -72,7 +72,7 @@ Hold Fire for the automatic carbine. The sidearm and shotgun fire once per press
 
 Pause settings include adaptive/performance/balanced/high graphics, look sensitivity, master volume, camera motion, and **Disturbing effects**. Settings persist on the device. Turning off Disturbing effects disables power dips, film grain, gunfire flashes, and danger/damage flashes, and softens sudden creature cries independently of camera motion. The steady red **health** corners remain visible, including with reduced motion enabled. It does not remove monsters, prevent damage, or disable fuse/alarm attraction; atmospheric sounds and readable captions remain. Both motion and effects default to the browser's reduced-motion preference unless a saved setting overrides them.
 
-Adaptive quality adjusts rendering resolution to frame time; actual FPS depends on device, browser, screen resolution, and thermal limits. Real-hardware performance is unverified; no desktop or phone frame-rate guarantee is made. Headphones make directional monster sounds easier to locate.
+Adaptive quality measures frame time over about two seconds of play and, below roughly 48 FPS, steps down through detail tiers and render resolution (the FPS readout shows the current tier and any reduced scale, such as `MEDIUM 85%`). It remembers where it settled on the device and starts one step above that next time. Actual FPS depends on device, browser, screen resolution, and thermal limits. Real-hardware performance is unverified; no desktop or phone frame-rate guarantee is made. Headphones make directional monster sounds easier to locate.
 
 ## Play together
 

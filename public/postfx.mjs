@@ -12,7 +12,7 @@ import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 // bloomScale = bloom resolution vs. the drawing buffer, capped so the bloom chain never exceeds bloomMax pixels wide.
 const TIERS = {
   medium: { bloomScale: 0.5, bloomMax: 960, aa: false, dirt: false },
-  high: { bloomScale: 1, bloomMax: 1920, aa: true, dirt: true }
+  high: { bloomScale: 0.5, bloomMax: 1920, aa: true, dirt: true }
 };
 const TONEMAPS = { aces: acesFilmicToneMapping, agx: agxToneMapping, neutral: neutralToneMapping };
 const LUMA = vec3(0.2126, 0.7152, 0.0722);

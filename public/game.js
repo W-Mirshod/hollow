@@ -21,10 +21,18 @@ try{preferences=Object.assign(preferences,JSON.parse(localStorage.getItem('hollo
 const finiteNumber=(value,fallback,min=-1e6,max=1e6)=>{const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback;};
 preferences.quality=['auto','low','medium','high'].includes(preferences.quality)?preferences.quality:'auto';
 preferences.sensitivity=finiteNumber(preferences.sensitivity,1,.4,2.5);preferences.volume=finiteNumber(preferences.volume,.7,0,1);preferences.motion=preferences.motion!==false;preferences.effects=preferences.effects!==false;
-const qualityProfiles={low:{ratio:.8,shadows:false,shadowSize:512},medium:{ratio:1,shadows:true,shadowSize:512},high:{ratio:1.5,shadows:true,shadowSize:1024}};
+const qualityProfiles={low:{ratio:.8,shadows:false,shadowSize:512},medium:{ratio:1,shadows:true,shadowSize:512},high:{ratio:1.25,shadows:true,shadowSize:1024}};
 let qualityLevel=preferences.quality==='auto'?(IS_TOUCH?'low':'high'):preferences.quality;
 if(!qualityProfiles[qualityLevel])qualityLevel='medium';
-let renderScale=qualityProfiles[qualityLevel].ratio,frameAverage=16.7,qualityTimer=0,renderCalls=0,renderedFrames=0,renderRequested=true,lastRenderedState='';
+let renderScale=qualityProfiles[qualityLevel].ratio,frameAverage=16.7,renderCalls=0,renderedFrames=0,renderRequested=true,lastRenderedState='';
+// Auto quality walks these rungs (tier, render scale), best first. Each tier's default ratio is one of them.
+const AUTO_RUNGS=[['high',1.25],['high',1],['medium',1],['medium',.85],['medium',.75],['low',.8],['low',.7],['low',.6],['low',.55]];
+let autoBest=0,autoMs=0,autoFrames=0,autoSettle=3;
+// Auto starts one rung better than where it last settled on this device, so a slow machine skips most of the climb down.
+const autoStart=(()=>{if(preferences.quality!=='auto')return null;const top=AUTO_RUNGS.findIndex(r=>r[0]===qualityLevel);
+  let saved=NaN;try{saved=parseInt(localStorage.getItem('hollow.autoRung'),10);}catch(e){}
+  return Number.isFinite(saved)&&saved>top+1?AUTO_RUNGS[Math.min(AUTO_RUNGS.length,saved)-1]:null;})();
+if(autoStart){qualityLevel=autoStart[0];renderScale=autoStart[1];}
 
 /* ---------- renderer ---------- */
 const canvas=$('game');
@@ -296,6 +304,9 @@ function cellUV(kind){
 // Specular anti-aliasing (Toksvig): mips of a busy normal map shorten the averaged normal; widen the lobe to match.
 // Low (the test tier) stays nearly as cheap as flat albedo: roughness maps only, no relief, per-cell variation or this.
 const wardLow=qualityLevel==='low';
+// Runtime ward detail for materials built at medium/high, so auto quality can cheapen them without a rebuild:
+// 2 = per-cell variation (high), 1 = macro wear and grid contact shadows (medium), 0 = plain maps (low).
+const wardDetail=uniform(qualityLevel==='high'?2:qualityLevel==='medium'?1:0);
 function specAA(r,n){if(wardLow)return r;const len=n.mul(2).sub(1).length().max(.25),v=len.oneMinus().sub(.012).max(0).div(len).mul(2);return r.mul(r).mul(r.mul(r)).add(v).sqrt().sqrt().min(1);}
 // World-space wear on the end-state ward (medium/high): broad puddles that mirror the torch, grime and gloss drift.
 function wardMacro(kind,color){
@@ -348,17 +359,24 @@ function morphMat(luxC,hellC,rep,opts,surf){
   const m=new THREE.MeshStandardNodeMaterial(Object.assign({map:a,normalMap:wardLow?null:hn,roughnessMap:hr,roughness:1,metalness:0},opts||{}));
   m.userData.transitionMap=b;m.userData.luxMaps={normal:ln,roughness:lr};
   const flat=vec3(.5,.5,1),lux=()=>{const n=wardLow?flat:texture(ln).xyz;return {c:texture(a),n,r:specAA(texture(lr).g,n)};};
+  const plain=()=>{const n=wardLow?flat:texture(hn).xyz;return {c:texture(b),n,r:specAA(texture(hr).g,n)};};
   const hell=()=>{
-    if(!s.cells||wardLow){const n=wardLow?flat:texture(hn).xyz;return {c:texture(b),n,r:specAA(texture(hr).g,n)};}
-    const v=cellUV(s.cells),n=texture(hn,v.uv).grad(v.gx,v.gy).xyz;
-    return {c:texture(b,v.uv).grad(v.gx,v.gy),n:vec3(n.xy.sub(.5).mul(v.s).add(.5),n.z),r:specAA(texture(hr,v.uv).grad(v.gx,v.gy).g,n)};
+    if(!s.cells||wardLow)return plain();
+    const c=vec4(0).toVar(),n=vec3(0).toVar(),r=float(0).toVar();
+    If(wardDetail.greaterThan(1.5),()=>{
+      const v=cellUV(s.cells),cn=texture(hn,v.uv).grad(v.gx,v.gy).xyz;
+      c.assign(texture(b,v.uv).grad(v.gx,v.gy));n.assign(vec3(cn.xy.sub(.5).mul(v.s).add(.5),cn.z));r.assign(specAA(texture(hr,v.uv).grad(v.gx,v.gy).g,cn));
+    }).Else(()=>{const p=plain();c.assign(p.c);n.assign(p.n);r.assign(p.r);});
+    return {c,n,r};
   };
   m.colorNode=Fn(()=>{
     const color=vec4(0).toVar();burnEdge.assign(0);
     If(U.progress.greaterThan(.999),()=>{
       const h=hell();color.assign(h.c);surfN.assign(h.n);surfR.assign(h.r);
-      if(macroTex&&s.macro)wardMacro(s.macro,color);
-      if(aoTex&&s.cells)color.assign(vec4(color.rgb.mul(gridAO(s.cells)),color.a));
+      if((macroTex&&s.macro)||(aoTex&&s.cells))If(wardDetail.greaterThan(.5),()=>{
+        if(macroTex&&s.macro)wardMacro(s.macro,color);
+        if(aoTex&&s.cells)color.assign(vec4(color.rgb.mul(gridAO(s.cells)),color.a));
+      });
     }).ElseIf(U.progress.lessThan(.001),()=>{
       const l=lux();color.assign(l.c);surfN.assign(l.n);surfR.assign(l.r);
     }).Else(()=>{
@@ -1298,20 +1316,43 @@ async function restoreGraphics(){
 watchDevice(renderer);
 canvas.addEventListener('webglcontextlost',event=>{event.preventDefault();graphicsLost();});
 canvas.addEventListener('webglcontextrestored',()=>{restoreGraphics();});
-function applyQuality(level){
-  if(!Object.prototype.hasOwnProperty.call(qualityProfiles,level))return;renderRequested=true;qualityLevel=level;const profile=qualityProfiles[level];renderScale=profile.ratio;
+// scale: an auto-quality render scale; without it (a settings change, or startup) auto starts again from the top rung.
+function applyQuality(level,scale){
+  if(!Object.prototype.hasOwnProperty.call(qualityProfiles,level))return;renderRequested=true;const profile=qualityProfiles[level];renderScale=scale||profile.ratio;
+  renderer.setPixelRatio(Math.min(devicePixelRatio||1,renderScale));
+  if(!scale)autoBest=0;autoMs=autoFrames=0;autoSettle=1.5;
+  if(scale&&level===qualityLevel)return;
+  qualityLevel=level;wardDetail.value=level==='high'?2:level==='medium'?1:0;
   // Shadow settings are part of the renderer's pipeline cache key: materials need no manual rebuild.
-  renderer.setPixelRatio(Math.min(devicePixelRatio||1,renderScale));renderer.shadowMap.enabled=profile.shadows;
+  renderer.shadowMap.enabled=profile.shadows;
   if(atm)atm.setQuality(level);
   if(fx){fx.setQuality(level);if(!fx.enabled){const hell=U.progress.value>.5;$('grain').style.opacity=hell?(preferences.effects?.027:0):.03;$('vignette').style.opacity=hell?.6:.35;if(!hell)canvas.style.filter='saturate(1.06)';}}
   muzzleLight.visible=level!=='low';practicalLights.forEach((light,i)=>light.visible=level!=='low'||i===0);
   spot.shadow.mapSize.set(profile.shadowSize,profile.shadowSize);
   for(const world of [scene,fpScene])world.traverse(o=>{if(o.isMesh){const mats=Array.isArray(o.material)?o.material:[o.material];mats.forEach(m=>{for(const map of [m.map,m.normalMap,m.roughnessMap,m.userData?.transitionMap])if(map){const aniso=level==='low'?1:4;if(map.anisotropy!==aniso){map.anisotropy=aniso;map.needsUpdate=true;}}});}});
 }
+// Auto quality: average the real frame time over ~2 s of play (hitches capped at 100 ms; the start of play and each
+// change are skipped while pipelines compile). Over 21 ms (under ~48 FPS) step down a rung, two when under 25 FPS,
+// skipping rungs that look the same on this display; under 12 ms step back up, never onto a rung that was too slow.
+function autoQuality(rawDt){
+  if(preferences.quality!=='auto'||state!=='play'||document.hidden||!(rawDt>0)){autoMs=autoFrames=0;autoSettle=3;return;}
+  if(autoSettle>0){autoSettle-=Math.min(rawDt,.1);return;}
+  autoMs+=Math.min(rawDt*1000,100);autoFrames++;
+  if(autoMs<2000||autoFrames<10)return;
+  const avg=autoMs/autoFrames;autoMs=autoFrames=0;
+  const at=AUTO_RUNGS.findIndex(r=>r[0]===qualityLevel&&r[1]===renderScale);if(at<0)return;
+  const dpr=devicePixelRatio||1,looks=i=>AUTO_RUNGS[i][0]+Math.min(dpr,AUTO_RUNGS[i][1]);
+  const next=(i,d)=>{let j=i+d;while(j>=0&&j<AUTO_RUNGS.length&&looks(j)===looks(i))j+=d;return j>=0&&j<AUTO_RUNGS.length?j:i;};
+  let to=at;
+  if(avg>21){autoBest=Math.max(autoBest,next(at,1));to=next(at,1);if(avg>40)to=next(to,1);}
+  else if(avg<12){const up=next(at,-1);if(up>=autoBest)to=up;}
+  if(to===at)return;
+  applyQuality(AUTO_RUNGS[to][0],AUTO_RUNGS[to][1]);try{localStorage.setItem('hollow.autoRung',String(to));}catch(e){}
+}
 for(const [id,key] of [['settingsQuality','quality'],['settingsSensitivity','sensitivity'],['settingsVolume','volume'],['settingsMotion','motion'],['settingsEffects','effects']]){
   const el=$(id);if(!el)continue;if(el.type==='checkbox')el.checked=preferences[key];else el.value=preferences[key];
   el.addEventListener('input',()=>{preferences[key]=el.type==='checkbox'?el.checked:key==='quality'?el.value:Number(el.value);try{localStorage.setItem('hollow.settings',JSON.stringify(preferences));}catch(e){}
-    if(key==='quality')applyQuality(preferences.quality==='auto'?(IS_TOUCH?'low':'high'):preferences.quality);
+    if(key==='quality'){try{localStorage.removeItem('hollow.autoRung');}catch(e){}applyQuality(preferences.quality==='auto'?(IS_TOUCH?'low':'high'):preferences.quality);}
     if(key==='volume'&&master)master.gain.value=preferences.volume;
     if((key==='effects'||key==='motion')&&fx)fx.setOptions({effects:preferences.effects,motion:preferences.motion});
     if(key==='effects'&&atm)atm.setPreferences({effects:preferences.effects});
@@ -1916,7 +1957,7 @@ function updateHUD(){
   const remaining=roomLoot.filter(l=>l.type==='fuse'&&!l.taken).sort((a,b)=>Math.hypot(a.x-P.pos.x,a.z-P.pos.z)-Math.hypot(b.x-P.pos.x,b.z-P.pos.z));
   const nearest=remaining[0];
   $('objectiveText').textContent=exitOpen?'EVACUATE · east loading exit':exitPowered?'THE ALARM IS DRAWING THEM HERE':fuses===3?'3 / 3 FUSES · power the east loading shutter':`${fuses} / 3 FUSES · ${nearest?nearest.room.name.slice(5):'search marked rooms'}`;
-  $('fpsText').textContent=Math.round(1000/frameAverage)+' FPS · '+qualityLevel.toUpperCase();
+  $('fpsText').textContent=Math.round(1000/frameAverage)+' FPS · '+qualityLevel.toUpperCase()+(renderScale<1?' '+Math.round(renderScale*100)+'%':'');
   $('weaponName').textContent=w.name;$('magTxt').textContent=mag;$('resTxt').textContent='/ '+reserve;$('magTxt').style.color=mag===0?'var(--ember)':'';
   $('ammoLbl').textContent=reloadT>0?`RELOADING · ${reloadT.toFixed(1)}s`:aiming?'AIMING':w.automatic?'AUTOMATIC':w.id==='shotgun'?'PUMP ACTION':'SEMI-AUTOMATIC';
   if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+['AR','M9','SG'][i];slot.title=v.name;$('weaponSlots').appendChild(slot);});}
@@ -1949,13 +1990,7 @@ function loop(){
   timer.update();const rawDt=timer.getDelta(),dt=Math.min(.05,rawDt);t+=dt;frame++;
   const sdt=dopaFrame(rawDt,dt);
   if(rawDt>0&&!document.hidden)frameAverage=lerp(frameAverage,Math.min(rawDt*1000,1000),.065);
-  qualityTimer+=Math.min(rawDt,1);
-  if(preferences.quality==='auto'&&state==='play'&&qualityTimer>6){
-    qualityTimer=0;
-    if(frameAverage>30&&qualityLevel==='high')applyQuality('medium');
-    else if(frameAverage>38&&qualityLevel==='medium')applyQuality('low');
-    else if(frameAverage>40&&qualityLevel==='low'&&renderScale>.56){renderScale=Math.max(.55,renderScale-.1);renderer.setPixelRatio(Math.min(devicePixelRatio||1,renderScale));}
-  }
+  autoQuality(rawDt);
   if(state==='outside'){
     updatePlayer(dt);
     if(P.pos.x>-3.0&&Math.abs(P.pos.z-DZC)<2.4)startCutscene();
@@ -2853,7 +2888,7 @@ function snapshot(){return {
     lighting:practicalLights.map(l=>({visible:l.visible,intensity:l.userData.level,candela:l.intensity,x:l.position.x,z:l.position.z})),
     notes:captionText,
     ...dopaSnapshot(),
-  performance:{fps:Math.round(1000/frameAverage),drawCalls:renderCalls,frames:renderedFrames,triangles:renderer.info.render.triangles,quality:qualityLevel,renderScale,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,backend:window.HollowBackend},
+  performance:{fps:Math.round(1000/frameAverage),drawCalls:renderCalls,frames:renderedFrames,triangles:renderer.info.render.triangles,quality:qualityLevel,renderScale,pixelRatio:renderer.getPixelRatio(),wardDetail:wardDetail.value,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,backend:window.HollowBackend},
   rooms:specialRooms.map(r=>({id:r.id,name:r.name,x:r.x,z:r.z,w:r.w,d:r.d,shelter:!!r.shelter,fuse:!!r.fuse})),
   doors:roomDoors.map(d=>({id:d.id,x:d.box.x,z:d.box.z,open:d.open,locked:d.locked,health:d.health})),
   loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending})),
@@ -2871,6 +2906,8 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     silence:()=>{hideMonsters();grace=100000;},
     enemy:(index,pose)=>{const m=monsters[index];m.pos.set(pose.x,0,pose.z);m.g.position.copy(m.pos);m.hp=m.stats.hp;m.dead=false;m.spawned=true;m.g.visible=true;m.state=pose.state||'wander';m.path=[];m.yaw=pose.yaw||0;m.g.rotation.set(0,m.yaw,0);m.lastSeen.copy(P.pos);m.attackT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;m.stalkT=0;m.watchT=0;m.lost=0;m.spotCD=0;m.repath=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;m.voiceT=3;grace=0;},
     freezeAI:value=>{aiFrozen=!!value;},
+    // Feed the auto-quality governor `count` frames of `ms` each, starting a fresh window with no settle time.
+    autoQualityFrames:(ms,count)=>{const n=finiteNumber(count,0,0,2000),dt=finiteNumber(ms,16,1,1000)/1000;autoMs=autoFrames=autoSettle=0;for(let i=0;i<n;i++)autoQuality(dt);return {quality:qualityLevel,renderScale,wardDetail:wardDetail.value,autoBest};},
     health:value=>{P.health=finiteNumber(value,100,0,100);damageT=0;},torch:value=>{torchOn=value;},
     advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateCameraRig(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));}updateHUD();updateHealthVignette();},
     hit:(index,damage)=>hitMonster(monsters[index],damage),
@@ -2888,7 +2925,7 @@ buildExterior();buildStatic();
 exterior.traverse(o=>{o.updateMatrix();o.matrixAutoUpdate=false;});
 hall.traverse(o=>{if(o.isMesh){o.updateMatrix();o.matrixAutoUpdate=false;}});hall.updateMatrix();hall.matrixAutoUpdate=false;
 newGame(true);state='menu';P.yaw=-Math.PI/2+0.25;P.pitch=0.08;$('msg').style.opacity=0;msgTimer=0;
-applyQuality(qualityLevel);
+applyQuality(qualityLevel);if(autoStart)applyQuality(autoStart[0],autoStart[1]);
 if(playerName){$('whoName').textContent=playerName;openMenu();}else openNameScreen();
 initBoard();initNet();renderBoards();
 loop();
