@@ -33,19 +33,31 @@ async function chase(page){
     const room=G.snapshot().rooms.filter(r=>!r.shelter).sort((a,b)=>b.w*b.d-a.w*a.d)[0];
     const x=(room.x+room.w/2)*cell,z=(room.z+room.d/2)*cell;
     T.pose({x,z,yaw:0});T.advance(.3);
+    const start=G.snapshot(),audio=[];let heard=start.audioLog.at(-1)?.n||0;
+    // audioLog is a short ring: new cues are collected every step.
+    const listen=s=>{for(const e of s.audioLog)if(e.n>heard){audio.push(e);heard=e.n;}};
     T.enemy(1,{x,z:z-4.5,state:'chase',yaw:0});
     const samples=[],banners=new Set();
     for(let i=0;i<70;i++){
       T.health(100);T.advance(.1);
-      const s=G.snapshot();
+      const s=G.snapshot();listen(s);
       samples.push({lights:s.chaosLights,visible:s.lighting.map(l=>l.visible),chasing:s.chaos.chasing,emergency:s.dopamine.emergency,live:s.dopamine.liveEmissive,
         tinted:s.dopamine.tintedCones,sparks:s.atmosphere?s.atmosphere.sparks:0});
       if(s.hud.banner)banners.add(s.hud.banner);
     }
-    const end=G.snapshot();T.silence();
+    const end=G.snapshot();listen(end);T.silence();
+    const events={};for(const k of ['chases','surges','sparks','blackouts','scares'])events[k]=end.chaos[k]-start.chaos[k];
     return {room:room.id,samples,banners:[...banners],chaos:end.chaos,intensity:end.chaosIntensity,beacons:end.beacons,liveBase:end.dopamine.liveBase,state:end.state,
-      cones:end.atmosphere?end.atmosphere.cones:0};
+      cones:end.atmosphere?end.atmosphere.cones:0,events,audio};
   },CELL);
+}
+const cues=(log,src,cue)=>log.filter(e=>e.src===src&&e.cue===cue).length;
+// Every chaos event sounds once, through audioChaosEvent: one chase stinger per chaseStart, one crackle per sparks event.
+function oneSoundPerEvent(run){
+  expect(cues(run.audio,'player','chase'),'one chase stinger per chase start').toBe(run.events.chases);
+  expect(cues(run.audio,'world','sparks'),'one crackle per sparks event').toBe(run.events.sparks);
+  expect(cues(run.audio,'player','surge')).toBeLessThanOrEqual(run.events.surges);
+  expect(cues(run.audio,'world','blackout')).toBe(run.events.blackouts);
 }
 
 test('chases make the practical lights stutter within bounds, without visibility toggles, and announce the threat',async({page})=>{
@@ -74,6 +86,7 @@ test('chases make the practical lights stutter within bounds, without visibility
     expect(Math.max(...run.samples.map(s=>s.sparks)),'chaos sparks reach the atmosphere').toBeGreaterThan(0);
     expect(Math.max(...run.samples.map(s=>s.tinted)),'light shafts take the emergency tint').toBeGreaterThan(0);
   }
+  oneSoundPerEvent(run);
   console.log('chase room',run.room,'events',JSON.stringify({surges:run.chaos.surges,blackouts:run.chaos.blackouts,sparks:run.chaos.sparks}),
     'stutters',levels.filter(k=>k<.5).length,'of',levels.length,'range',Math.min(...levels).toFixed(3),Math.max(...levels).toFixed(3));
 });
@@ -91,6 +104,7 @@ test('with effects off the lights hold their exact base level, nothing blacks ou
   }
   expect(run.chaos.blackouts).toBe(0);
   expect(run.chaos.blackoutLevel).toBe(0);
+  oneSoundPerEvent(run);
   expect(run.beacons[0].intensity).toBeLessThanOrEqual(.35+1e-6);
   const banner=await page.evaluate(()=>{
     const T=HollowTest,fuse=HollowGame.snapshot().loot.find(l=>l.type==='fuse');
@@ -111,10 +125,12 @@ test('a real shotgun headshot kills a crawler with HEADSHOT, points, score and s
       T.pose({x,z,yaw:0,pitch:0});const eye=G.snapshot().position.y+1.6;
       T.pose({x,z,yaw:0,pitch:Math.atan((.72-eye)/(z-crawlerZ-.43))});
       T.enemy(index,{x,z:crawlerZ,state:'wander',yaw:0});
+      const n0=G.snapshot().audioLog.at(-1)?.n||0;
       T.action('fire',true);T.advance(.05);T.action('fire',false);
       const s=G.snapshot();
       return {weapon:s.weapon,dead:s.enemies[index].dead,streak:s.streak,label:s.hud.label,score:s.hud.score,pops:s.hud.active.pops,
-        markers:s.hud.active.markers,hitstop:s.hitstop,dopamine:s.dopamine,message:document.getElementById('msg').textContent};
+        markers:s.hud.active.markers,hitstop:s.hitstop,dopamine:s.dopamine,message:document.getElementById('msg').textContent,
+        audio:s.audioLog.filter(e=>e.n>n0)};
     };
     const first=shoot(2);T.advance(.9);const second=shoot(5);T.action('aim',false);T.silence();
     return {first,second};
@@ -140,6 +156,15 @@ test('a real shotgun headshot kills a crawler with HEADSHOT, points, score and s
   expect(second.label).toBe('DOUBLE KILL');
   expect(second.score).toBeGreaterThan(first.score);
   expect(second.streak.points).toBe(second.score);
+  // One hit tick per volley and one kill stinger per kill (8 pellets each); the second kill adds the streak stinger.
+  for(const shot of [first,second]){
+    expect(cues(shot.audio,'weapon','hitMarker')).toBe(1);
+    expect(cues(shot.audio,'player','kill')+cues(shot.audio,'player','headshot')).toBe(1);
+    expect(cues(shot.audio,'creature','death')).toBe(1);
+  }
+  expect(cues(first.audio,'player','headshot')).toBe(1);
+  expect(cues(first.audio,'player','streak')).toBe(0);
+  expect(cues(second.audio,'player','streak')).toBe(1);
   await expect.poll(()=>page.evaluate(()=>HollowGame.snapshot().hitstop),{message:'real frames consume the hitstop'}).toBe(0);
 });
 
