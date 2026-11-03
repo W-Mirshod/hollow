@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 try {
-if(!window.THREE||!window.TSL||!window.HollowRenderer||!window.HollowSystems||!window.HollowLocomotion||!window.HollowCameraFX||!window.HollowMonsterAnim||!window.HollowVisuals||!window.HollowNavigation||!window.HollowHorror||!window.HollowAudio)throw new Error('A local game asset could not be loaded.');
+if(!window.THREE||!window.TSL||!window.HollowRenderer||!window.HollowSystems||!window.HollowLocomotion||!window.HollowCameraFX||!window.HollowMonsterAnim||!window.HollowVisuals||!window.HollowNavigation||!window.HollowHorror||!window.HollowAudio||!window.HollowChaos||!window.HollowHUDFX)throw new Error('A local game asset could not be loaded.');
 const $=id=>document.getElementById(id);
 const clamp01=v=>v<0?0:v>1?1:v;
 const lerp=(a,b,k)=>a+(b-a)*k;
@@ -610,6 +610,7 @@ function buildRooms(){
     horror=HollowHorror.create(worldSeed);caseNotes=[];readNotes=new Set();captionText='';captionT=0;simulationTime=0;
     const ward=HollowVisuals.decorateWard(THREE,{grid,cellSize:S,height:H,rooms:specialRooms,seed:worldSeed});
     dynamicWorld.add(ward);roomLights.push(...ward.userData.practicals);
+    chaosWorldBuilt(ward);
   const own=o=>{o.userData.own=true;return o;};
   for(const r of specialRooms){
     const cx=(r.x+r.w/2)*S,cz=(r.z+r.d/2)*S;
@@ -701,6 +702,7 @@ function refreshRoomLights(){
   for(const f of roomLights)if(f.cone)f.cone.setIntensity(0);
   practicalLights.forEach((l,i)=>{l.userData.cone=null;l.visible=qualityLevel!=='low'||i===0;const info=nearest[i];if(!info||info.d>24||state==='outside'||state==='menu'){setLight(l,0);return;}l.color.setHex(info.color,THREE.LinearSRGBColorSpace);l.position.set(info.x,2.85,info.z);setLight(l,(info.shelter?1.45:1.75)*(info.shelter?1:horror.snapshot().lighting));l.userData.cone=info.cone||null;
       if(exitPowered&&!exitOpen&&!info.shelter)l.color.lerp(exitTint,.35);});
+  chaosLightsRefreshed(nearest);
 }
 function currentShelter(){return specialRooms.find(r=>r.shelter&&RULES.insideRoom(r,P.pos.x,P.pos.z));}
 function doorAction(d,action){
@@ -1430,6 +1432,7 @@ function damagePlayer(m){
   P.health=Math.max(0,P.health-m.stats.damage);damageT=1.05;m.lungeT=.3;m.anim.attack();
   {const dx=m.pos.x-P.pos.x,dz=m.pos.z-P.pos.z,dist=Math.max(.01,Math.hypot(dx,dz));camFX.punch((dx*Math.cos(P.yaw)-dz*Math.sin(P.yaw))/dist,.5);camFX.addTrauma(.45);}
   sCreature(m,'attack');sThud(P.pos.x,1,P.pos.z,.16,90);
+  dopaHurt(m);
   if(P.health<=0){caught(m);return;}
   showMsg(m.kind==='warden'?'The Warden hits hard. Run, lock a door, hide.':`${m.stats.name} attack · find cover or a medical kit.`,2.5);
   playerAudio?.hurt(m.stats.damage);
@@ -1600,6 +1603,7 @@ function fire(){
   _o.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
   _shotQuat.setFromEuler(_shotEuler.set(P.pitch,P.yaw,0,'YXZ'));_shotDir.set(0,0,-1).applyQuaternion(_shotQuat);
   const spread=w.spread*(aiming?.4:1)*(P.crouching?.65:1)+(P.moving?.008:0);
+  dopaShotBegin();
   let didHit=false;
   if(atm&&gun.userData.muzzlePosition)_atmMz.copy(gun.userData.muzzlePosition).applyEuler(gun.rotation).add(gun.position);
   if(w.pellets>1)fxFlash=.55;
@@ -1620,6 +1624,7 @@ function fire(){
     if(best){
       didHit=true;if(atm)atm.blood(hit.x,hit.y,hit.z,{dir:_d,amount:w.pellets>1?.4:1});else puff(hit,true);
       const damage=RULES.weaponDamage(w.id,best.y>best.m.stats.head,distance,best.m.kind);
+      dopaShotHit(best.m,best.y>best.m.stats.head,distance);
       if(NET.inGame&&NET.role==='guest'){const k=monsters.indexOf(best.m);NET.dm[k]=(NET.dm[k]||0)+damage;best.m.stagger=.2;best.m.anim.hit({dirX:_d.x,dirZ:_d.z,yaw:best.m.yaw,headshot:best.y>best.m.stats.head});}
       else hitMonster(best.m,damage,null,best.y>best.m.stats.head,w.pellets>1?.35:1);
     }else if(wallDistance<48&&atm){
@@ -1629,6 +1634,7 @@ function fire(){
     }else if(wallDistance<48)puff(hit,false);
     audioBullet(hit,best,distance,wallDistance);
   }
+  dopaShotEnd();
   if(didHit){hitMarkerT=.16;audioHitTick();}
   const recoil=w.recoil*(aiming?.65:1);camFX.kick(recoil,rnd(-1,1)*w.recoil*.25);
   P.pitch=Math.min(1.35,P.pitch+recoil*.35);P.yaw+=rnd(-.001,.001);
@@ -1853,10 +1859,12 @@ function updateHUD(){
 function stepSurvival(dt){
   simulationTime+=dt;updatePlayer(dt);updateRooms(dt);updateHorror(dt);updateThreats(dt);
   updateTorch(dt);updatePickups();markVisited();
+  chaosStep(dt);
 }
 function loop(){
   requestAnimationFrame(loop);
   timer.update();const rawDt=timer.getDelta(),dt=Math.min(.05,rawDt);t+=dt;frame++;
+  const sdt=dopaFrame(rawDt,dt);
   if(rawDt>0&&!document.hidden)frameAverage=lerp(frameAverage,Math.min(rawDt*1000,1000),.065);
   qualityTimer+=Math.min(rawDt,1);
   if(preferences.quality==='auto'&&state==='play'&&qualityTimer>6){
@@ -1873,7 +1881,7 @@ function loop(){
     updateCutscene(dt);
     if(cs<3){birdT-=dt;if(birdT<=0){birdT=rnd(0.8,2.6);sBird();}}
   }else if(state==='play'){
-    elapsed+=rawDt;stepSurvival(dt);
+    elapsed+=rawDt;stepSurvival(sdt);
     if(exitOpen&&NET.inGame&&P.pos.x>W*S+.6){coopLocalDone('out');}
     else if(exitOpen&&P.pos.x>W*S+.6){
       state='win';const m=Math.floor(elapsed/60),s=Math.floor(elapsed%60);
@@ -1889,7 +1897,7 @@ function loop(){
     if(state!=='play'&&state!=='caught'&&state!=='coopEnd'){elapsed+=rawDt;simulationTime+=dt;updateRooms(dt);updateThreats(dt);}
     netTick(dt);
   }
-  if(state==='play'||state==='caught'||(NET.inGame&&state!=='coopEnd'))monsters.forEach(m=>animateMonster(m,dt));
+  if(state==='play'||state==='caught'||(NET.inGame&&state!=='coopEnd'))monsters.forEach(m=>animateMonster(m,sdt));
   if(state==='caught')camFX.addTrauma(1);
   if(state==='cutscene'){const sp=dt>0?Math.hypot(P.pos.x-csPrevX,P.pos.z-csPrevZ)/dt:0;updateCameraRig(dt,sp,true);}
   else if(!['menu','pause','dead','win','coopEnd'].includes(state))updateCameraRig(dt);
@@ -1933,7 +1941,7 @@ function loop(){
     for(const r of specialRooms)r.group.visible=Math.hypot(r.group.position.x-camera.position.x,r.group.position.z-camera.position.z)<38;
     for(const m of monsters)m.g.visible=!!m.spawned&&(!m.dead&&Math.hypot(m.pos.x-camera.position.x,m.pos.z-camera.position.z)<42||m.dead&&m.deadT<18&&Math.hypot(m.pos.x-camera.position.x,m.pos.z-camera.position.z)<25);
   }
-  updateAtmosphere(dt);updatePostFX(dt);
+  updateAtmosphere(sdt);updatePostFX(dt);
   renderer.info.reset();
   if(warming&&state==='menu')return;
   if(state==='menu'&&!warmed&&renderedFrames>0&&frame>20)warmPlayPipelines();
@@ -2235,6 +2243,219 @@ function openMenu(){state='menu';$('whoName').textContent=playerName||'Guest';sh
 let localScores=[];try{localScores=JSON.parse(lsGet(LS_SCORES)||'[]');if(!Array.isArray(localScores))localScores=[];}catch(e){localScores=[];}
 localScores=localScores.map(cleanRow).filter(Boolean);
 let sharedRows=null,sharedState='loading',myId=null,canPost=null,lastMine=null,scoresCol=null,amOwner=false;
+// ===== I1b: chaos, streaks, HUDFX =====
+// Chaos director (practical lights that stutter, surge and black out, emergency mood, beacons, scare cues), kill
+// streaks, hitstop and the HUDFX layer. Existing code calls in through one-line hooks only: chaosWorldBuilt
+// (buildRooms), chaosLightsRefreshed (refreshRoomLights), chaosStep (stepSurvival), dopaFrame (loop; returns the
+// hitstop-scaled simulation dt), dopaShotBegin/dopaShotHit/dopaShotEnd (fire), dopaHurt (damagePlayer), dopaSnapshot.
+// The streak gets the live effects preference with every kill (a creation-time option would pin it).
+const chaos=HollowChaos.create(worldSeed),streak=HollowChaos.createStreak();
+const hud=HollowHUDFX.create({root:$('hud'),document,motion:preferences.motion,effects:preferences.effects,touch:dopaTouch()});
+const HITSTOP_SCALE=.08,EMERGENCY_RED=lin(0xff2414),SPARK_DOWN=new THREE.Vector3(0,-1,0),SPARK_CLEAR=2.2,coneTint=new THREE.Color();
+let hitstopT=0,chaosLive=false;
+// chaos.beacon(0..1), refreshed every simulation step. The atmosphere beacons read chaos.beacon(i) in updateAtmosphere.
+const beacons=[chaos.beacon(0),chaos.beacon(1)];
+const chaosIn={active:false,danger:0,chasers:0,nearest:99,alarm:false,sheltered:false,effects:true,health:100,lights:0,yaw:0,cue:false};
+const dopa={state:'',motion:preferences.motion,effects:preferences.effects,touch:dopaTouch(),snap:chaos.snapshot(),
+  hEvents:0,hFuses:0,fuses:0,powered:false,open:false,chasers:0,chaseT:-1e9,lostT:-1e9,emergency:0,shock:0,hemi:-1,
+  live:null,liveBase:.45,liveColor:new THREE.Color(),livePhase:0,cones:new Map(),shot:{id:0,hits:0,head:false,list:[],flash0:0},
+  flashCD:0,hitstops:0,lastHitstop:0,kills:0,lastKill:null,damage:null,damageHits:0};
+function dopaTouch(){return !!(controls?controls.touch:IS_TOUCH);}
+function dopaTrauma(amount){const rig=typeof camFX!=='undefined'?camFX:null;if(rig&&typeof rig.addTrauma==='function')rig.addTrauma(amount);}
+function chaosWorldBuilt(ward){
+  chaos.reset(worldSeed);streak.reset();hud.clear();hitstopT=0;chaosLive=false;chaosHemiRestore();chaosBeacons();
+  const h=horror.snapshot();dopa.hEvents=h.events;dopa.hFuses=h.fuses;dopa.snap=chaos.snapshot();
+  dopa.fuses=fuses;dopa.powered=exitPowered;dopa.open=exitOpen;dopa.chasers=0;dopa.chaseT=dopa.lostT=-1e9;dopa.emergency=dopa.shock=0;
+  dopa.hitstops=dopa.lastHitstop=dopa.kills=dopa.damageHits=dopa.flashCD=0;dopa.lastKill=dopa.damage=null;dopa.cones.clear();
+  for(const m of monsters){m.dopaHitT=-1e9;m.dopaHead=false;m.dopaDown=!!m.dead;m.dopaShot=-1;}
+  for(const l of practicalLights){l.userData.base=undefined;l.userData.shelter=false;}
+  // The shared ward:live strip material (re-armed by decorateWard on every build) flickers with light channel 0.
+  let live=ward&&ward.userData.liveMaterial||null;
+  if(!live&&ward)ward.traverse(o=>{if(live||!o.isMesh)return;for(const m of Array.isArray(o.material)?o.material:[o.material])if(m&&m.emissive&&m.emissiveIntensity>0&&m.emissive.r+m.emissive.g+m.emissive.b>0){live=m;break;}});
+  dopa.live=live;if(live){dopa.liveBase=live.emissiveIntensity;dopa.liveColor.copy(live.emissive);}
+  const practicals=ward&&ward.userData.practicals;dopa.livePhase=practicals&&practicals.length?practicals[0].phase:0;
+}
+function chaosLightsRefreshed(nearest){
+  practicalLights.forEach((l,i)=>{const u=l.userData,info=nearest[i];u.base=u.level;u.shelter=!!(info&&info.shelter);u.phase=info?info.phase:undefined;u.hex=info?info.color:0;(u.tint||(u.tint=new THREE.Color())).copy(l.color);});
+}
+function chaosStep(dt){
+  const h=horror.snapshot(),cue=h.events!==dopa.hEvents||h.fuses!==dopa.hFuses;dopa.hEvents=h.events;dopa.hFuses=h.fuses;
+  let chasers=0,lights=0;
+  for(let i=0;i<monCount;i++){const m=monsters[i];if(!m.dead&&m.state==='chase')chasers++;}
+  for(const l of practicalLights)if(l.visible&&l.userData.base>0)lights++;
+  chaosLive=state==='play';dopa.chasers=chasers;
+  const c=chaosIn;c.active=chaosLive;c.danger=danger;c.chasers=chasers;c.nearest=nearestD;c.alarm=exitPowered&&!exitOpen;c.sheltered=!!currentShelter();
+  c.effects=preferences.effects;c.health=P.health;c.lights=lights;c.yaw=P.yaw;c.cue=cue;
+  const events=chaos.update(dt,c);dopa.snap=chaos.snapshot();chaosBeacons();
+  for(let i=0;i<events.length;i++)chaosEvent(events[i]);
+  // Emergency mood: chases, the exit alarm and blackouts pull the practicals and live strips toward red.
+  const s=dopa.snap,target=preferences.effects&&chaosLive?Math.min(1,(s.chasing?.85:0)+(c.alarm?.45:0)+.3*s.blackoutLevel):0;
+  dopa.emergency+=(target-dopa.emergency)*(1-Math.exp(-dt*(target>dopa.emergency?2.5:.8)));
+  chaosLights();dopaObjectives();
+  if(NET.inGame&&NET.role==='guest')dopaGuestKills();
+}
+// Lights only change intensity and colour here, never .visible. Effects off, shelters and an idle director keep the
+// exact base level that refreshRoomLights set.
+function chaosLights(){
+  const effects=preferences.effects,k=effects?.42*dopa.emergency:0;
+  for(let i=0;i<practicalLights.length;i++){
+    const l=practicalLights[i],u=l.userData;if(u.base===undefined)continue;
+    const steady=!effects||!chaosLive||u.shelter||!(u.base>0);
+    setLight(l,steady?u.base:u.base*chaos.lightLevel(i,u.phase));
+    if(u.tint){if(steady||k<.002)l.color.copy(u.tint);else l.color.copy(u.tint).lerp(EMERGENCY_RED,k);}
+    // The fixture's light shaft (atmosphere cone, assigned in refreshRoomLights) takes the same emergency tint.
+    const cone=u.cone;
+    if(cone&&typeof cone.setColor==='function'){
+      if(!steady&&k>=.002){if(!dopa.cones.has(cone))dopa.cones.set(cone,u.hex);cone.setColor(coneTint.set(u.hex).lerp(EMERGENCY_RED,k));}
+      else if(dopa.cones.has(cone)){cone.setColor(dopa.cones.get(cone));dopa.cones.delete(cone);}
+    }
+  }
+  const live=dopa.live;
+  if(live){
+    const on=effects&&chaosLive;
+    live.emissiveIntensity=on?dopa.liveBase*chaos.lightLevel(0,dopa.livePhase):dopa.liveBase;
+    if(on&&dopa.emergency>.002)live.emissive.copy(dopa.liveColor).lerp(EMERGENCY_RED,.5*dopa.emergency);else live.emissive.copy(dopa.liveColor);
+  }
+  // Without the post pipeline a blackout also takes most of the ambient fill (postfx darkens through its own uniform).
+  const post=typeof fx!=='undefined'?fx:null,black=effects&&chaosLive&&!(post&&post.enabled)?dopa.snap.blackoutLevel:0;
+  if(black>.002){if(dopa.hemi<0)dopa.hemi=hemi.userData.level;setLight(hemi,dopa.hemi*(1-.55*black));}
+  else chaosHemiRestore();
+}
+function chaosHemiRestore(){if(dopa.hemi>=0){setLight(hemi,dopa.hemi);dopa.hemi=-1;}}
+function chaosEvent(e){
+  if(!e||typeof e!=='object')return;
+  // Scares use the HollowHorror convention: x += cos(bearing)*distance, z += sin(bearing)*distance.
+  if(e.bearing!=null&&e.x===undefined){const d=e.distance||3;e.x=P.pos.x+Math.cos(e.bearing)*d;e.z=P.pos.z+Math.sin(e.bearing)*d;}
+  if(e.type==='chaseStart'){
+    dopa.chaseT=simulationTime;dopa.shock=Math.max(dopa.shock,.35);
+    hud.banner(dopa.chasers>1?'THEY SEE YOU':'IT SEES YOU',{tone:'danger',duration:1.6});dopaTrauma(.25);
+  }else if(e.type==='chaseEnd'){
+    if(simulationTime-dopa.chaseT-HollowChaos.LIMITS.chaseEndHold>4&&simulationTime-dopa.lostT>30){dopa.lostT=simulationTime;hud.banner('YOU LOST IT',{tone:'info',duration:1.8});}
+  }else if(e.type==='surge'){
+    // The postfx surge and blackout uniforms follow the director's levels (chaosVisuals).
+    dopa.shock=Math.max(dopa.shock,.3*(e.intensity||0));
+  }else if(e.type==='blackout'){
+    dopa.shock=Math.max(dopa.shock,.5);
+  }else if(e.type==='sparks'){
+    chaosSparks(e);
+  }else if(HollowChaos.SCARES.includes(e.type)){
+    if(e.type==='slam')dopaTrauma(.35);
+    dopa.shock=Math.max(dopa.shock,e.type==='slam'||e.type==='scream'?.5:.25);
+    chaosCaption(e);
+  }
+  // Every event's sound (stingers, the surge, the breaker, spark crackle, scare voices) is audioChaosEvent's (I2).
+  if(typeof audioChaosEvent==='function')audioChaosEvent(e);
+}
+function chaosCaption(e){
+  if(captionT>0&&captionText[0]!=='[')return;
+  const a=HollowHUDFX.bearing(P.pos.x,P.pos.z,P.yaw,e.x,e.z),r=Math.abs(a);
+  const where=r<Math.PI/4?'ahead':r>Math.PI*3/4?'behind you':a>0?'to your right':'to your left';
+  captionText=e.type==='scream'?`[A scream, somewhere ${where}.]`:e.type==='slam'?`[Metal slams ${where}.]`:e.type==='whisper'?`[Something whispers ${where}.]`:`[Soft laughter ${where}.]`;
+  captionT=4;
+}
+// Sparks rain from the light that cut out, or from the nearest ceiling fixture during a blackout (never a refuge).
+// A fixture within SPARK_CLEAR of the player is passed over: sparks falling past the eye smear into screen-tall streaks.
+function chaosSparks(e){
+  const l=e.light!=null?practicalLights[e.light]:null;let x,z;
+  if(l&&l.userData.level>0&&!l.userData.shelter&&Math.hypot(l.position.x-P.pos.x,l.position.z-P.pos.z)>=SPARK_CLEAR){x=l.position.x;z=l.position.z;}
+  else{let near=Infinity;for(const f of roomLights){if(f.shelter)continue;const d=Math.hypot(f.x-P.pos.x,f.z-P.pos.z);if(d>=SPARK_CLEAR&&d<near){near=d;x=f.x;z=f.z;}}}
+  if(x===undefined)return;
+  e.x=x;e.y=2.9;e.z=z;
+  const a=typeof atm!=='undefined'?atm:null;
+  if(a&&typeof a.sparks==='function')a.sparks(x,2.9,z,{dir:SPARK_DOWN,count:28,speed:3});
+}
+function chaosBeacons(){for(let i=0;i<beacons.length;i++)beacons[i]=chaos.beacon(i);}
+function chaosVisuals(){
+  const post=typeof fx!=='undefined'?fx:null;if(!post||!post.uniforms)return;
+  const u=post.uniforms,s=dopa.snap,on=preferences.effects&&chaosLive&&state==='play';
+  if(u.blackout)u.blackout.value=on?.75*s.blackoutLevel:0;
+  if(u.surge)u.surge.value=on?s.surgeLevel:0;
+  if(u.aberration)u.aberration.value=on?Math.min(1,.3*s.intensity+dopa.shock):0;
+  if(u.slowmo)u.slowmo.value=preferences.motion&&state==='play'?Math.min(1,hitstopT/.05):0;
+}
+function dopaFrame(rawDt,dt){
+  hud.update(rawDt);
+  const touch=dopaTouch();
+  if(preferences.motion!==dopa.motion||preferences.effects!==dopa.effects||touch!==dopa.touch){
+    const relight=preferences.effects!==dopa.effects;
+    dopa.motion=preferences.motion;dopa.effects=preferences.effects;dopa.touch=touch;
+    hud.setOptions({motion:dopa.motion,effects:dopa.effects,touch});if(relight)chaosLights();
+  }
+  if(state!==dopa.state){dopa.state=state;if(state==='caught'||state==='dead'||state==='win'||state==='coopEnd')hud.clear();}
+  if(chaosLive&&state!=='play'&&state!=='pause'){chaosLive=false;chaosIn.active=false;chaos.update(0,chaosIn);dopa.snap=chaos.snapshot();dopa.emergency=0;chaosBeacons();chaosLights();}
+  dopa.shock=Math.max(0,dopa.shock-rawDt*1.6);dopa.flashCD=Math.max(0,dopa.flashCD-rawDt);
+  let sdt=dt;
+  if(NET.inGame||state!=='play')hitstopT=0;
+  else if(hitstopT>0){const frozen=Math.min(dt,hitstopT);hitstopT-=frozen;sdt=dt-frozen*(1-HITSTOP_SCALE);}
+  chaosVisuals();
+  return sdt;
+}
+function dopaObjectives(){
+  if(fuses!==dopa.fuses){if(fuses>dopa.fuses)hud.banner(`FUSE ${fuses}/3`,{tone:'objective',kicker:fuses>=3?'All fuses · reach the exit':'Power fuse'});dopa.fuses=fuses;}
+  if(exitPowered!==dopa.powered){if(exitPowered)hud.banner('POWER RESTORED',{tone:'objective',kicker:'Shutter releasing'});dopa.powered=exitPowered;}
+  if(exitOpen!==dopa.open){if(exitOpen)hud.banner('SHUTTER OPEN · RUN',{tone:'objective',duration:2.8});dopa.open=exitOpen;}
+}
+// One marker, one streak hit and at most one hitstop per shot, however many pellets land. fire() never targets a
+// dead monster, so a monster hit by this shot that is dead at the end of it was killed by it.
+function dopaShotBegin(){const s=dopa.shot;s.id++;s.hits=0;s.head=false;s.list.length=0;s.flash0=typeof fxKill!=='undefined'?fxKill:0;}
+function dopaShotHit(m,headshot,distance){
+  const s=dopa.shot;
+  if(m.dopaShot!==s.id){m.dopaShot=s.id;m.dopaShotHead=false;if(s.list.length<12)s.list.push(m);}
+  if(headshot){m.dopaShotHead=true;s.head=true;}
+  s.hits++;m.dopaDist=distance;m.dopaHitT=simulationTime;m.dopaHead=m.dopaShotHead;
+}
+function dopaShotEnd(){
+  const s=dopa.shot;if(!s.hits)return;
+  let killed=null,armored=false,result=null;
+  for(const m of s.list){if(m.dead){if(!killed)killed=m;}else if(m.kind==='warden')armored=true;}
+  const hit=streak.hit(simulationTime,{headshot:s.head});dopaHitstop(hit.hitstop);
+  hud.hit({headshot:s.head,kill:!!killed,armored:armored&&!killed});
+  let flash=0;
+  for(const m of s.list)if(m.dead){m.dopaResult=dopaKill(m,m.dopaShotHead,m.dopaDist);result=m.dopaResult;flash=Math.max(flash,result.flash);}
+  if(killed)dopaKillFlash(flash,s.flash0);
+  if(typeof audioOnHit==='function')audioOnHit({m:killed||s.list[0],headshot:s.head,kill:!!killed,armored:armored&&!killed,result});
+  if(typeof audioOnKill==='function')for(const m of s.list)if(m.dead)audioOnKill({m,headshot:!!m.dopaShotHead,kill:true,armored:false,result:m.dopaResult});
+}
+function dopaKill(m,headshot,distance){
+  const r=streak.kill(simulationTime,{headshot:!!headshot,kind:m.kind,distance,effects:preferences.effects});
+  hud.kill({...r,kind:m.kind,headshot:!!headshot});hud.score(streak.snapshot().points);dopaHitstop(r.hitstop);
+  if(m.kind==='warden')dopaTrauma(.3);
+  dopa.kills++;dopa.lastKill={kind:m.kind,headshot:!!headshot,label:r.label,count:r.count,points:r.points,hitstop:r.hitstop,flash:r.flash};
+  return r;
+}
+// Co-op guests only send damage: a host-confirmed death shortly after a local hit counts as the guest's kill.
+function dopaGuestKills(){
+  for(let i=0;i<monCount;i++){
+    const m=monsters[i];
+    if(!m.dead){m.dopaDown=false;continue;}
+    if(m.dopaDown)continue;m.dopaDown=true;
+    if(!(simulationTime-m.dopaHitT<=1.6))continue;
+    hud.hit({headshot:!!m.dopaHead,kill:true});
+    const r=dopaKill(m,m.dopaHead,m.dopaDist);dopaKillFlash(r.flash,typeof fxKill!=='undefined'?fxKill:0);
+    if(typeof audioOnKill==='function')audioOnKill({m,headshot:!!m.dopaHead,kill:true,armored:false,result:r});
+  }
+}
+// The postfx kill flash (fxKill, set to 1 by hitMonster) scales with the streak's flash and starts at most ~3 times a
+// second; inside the cooldown the earlier flash just keeps fading. Effects off: the streak flash is 0, so no new flash.
+function dopaKillFlash(flash,before){
+  if(typeof fxKill==='undefined')return;
+  if(flash>0&&dopa.flashCD<=0){fxKill=Math.max(before,.45+.55*flash);dopa.flashCD=.34;}
+  else fxKill=before;
+}
+// Hitstop only slows local solo simulation (stepSurvival and monster animation), never look, HUD, audio or co-op.
+function dopaHitstop(seconds){if(NET.inGame||!(seconds>0))return;hitstopT=Math.max(hitstopT,seconds);dopa.hitstops++;dopa.lastHitstop=seconds;}
+function dopaHurt(m){
+  const bearing=HollowHUDFX.bearing(P.pos.x,P.pos.z,P.yaw,m.pos.x,m.pos.z),amount=Math.min(1,m.stats.damage/50);
+  hud.damage(bearing,amount);dopa.damage={bearing,amount,kind:m.kind};dopa.damageHits++;
+}
+function dopaSnapshot(){
+  return {chaos:chaos.snapshot(),chaosIntensity:chaos.intensity(),streak:streak.snapshot(simulationTime),hud:hud.snapshot(),hitstop:hitstopT,
+    beacons:beacons.map(b=>({on:b.on,angle:b.angle,intensity:b.intensity})),
+    chaosLights:practicalLights.map((l,i)=>({index:i,visible:l.visible,base:l.userData.base===undefined?null:l.userData.base,level:l.userData.level,shelter:!!l.userData.shelter})),
+    dopamine:{hitstops:dopa.hitstops,lastHitstop:dopa.lastHitstop,emergency:dopa.emergency,shock:dopa.shock,kills:dopa.kills,lastKill:dopa.lastKill,
+      damage:dopa.damage,damageHits:dopa.damageHits,liveEmissive:dopa.live?dopa.live.emissiveIntensity:null,liveBase:dopa.liveBase,
+      killFlash:typeof fxKill!=='undefined'?fxKill:null,tintedCones:dopa.cones.size}};
+}
 function fnv(str){let h=0x811c9dc5;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,0x01000193)>>>0;}return h.toString(36);}
 function encodeResult(r){const j=JSON.stringify({n:r.name,t:r.time,k:r.kills,a:r.at});const b=btoa(unescape(encodeURIComponent(j))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');return 'HOLLOW-'+b+'-'+fnv('hollow|'+j);}
 function decodeResult(code){
@@ -2268,7 +2489,7 @@ const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
 const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,crouching:false,danger:0,chase:false,health:100,effects:true,hidden:false};
 // A threat call ducks the player's body bus (breathing, heartbeat, chase music): [max distance m, gain, hold s].
 const DUCK={scream:[30,.4,1.4],notice:[20,.65,.9],laugh:[12,.7,1],whisper:[10,.7,1.2]};
-let reloadEmpty=false,audioChase=false,chaseStingT=0,audioFault=false,audioSeq=0,bodyBus=null,duckFree=0,duckDepth=1,duckEnd=0;
+let reloadEmpty=false,audioFault=false,audioSeq=0,bodyBus=null,duckFree=0,duckDepth=1,duckEnd=0;
 // Master safety limiter: a fast high-ratio compressor (its automatic makeup gain trimmed back out), then a soft
 // ceiling at -0.63 dBFS, so a pile-up of shots, screams and stingers never clips. Returns the chain's input.
 function masterOut(){
@@ -2357,7 +2578,7 @@ function audioOnLunge(m){
   const v=vox(m);if(v.lungeCD>0||t-v.said.attack<.8)return;
   v.lungeCD=m.kind==='shrieker'?8:3;sCreature(m,m.kind==='shrieker'?'scream':'growl');
 }
-// I1b's hitMonster reports every shot result here: info={m,headshot,kill,armored,result}.
+// I1b's fire() hook (dopaShotEnd) reports each shot's result here once: info={m,headshot,kill,armored,result}.
 function audioOnHit(info){
   const m=info&&info.m;if(!m||m.dead||info.kill)return;
   const v=vox(m);if(t-v.painAt<1.5)return;
@@ -2423,8 +2644,6 @@ function audioBullet(hit,best,distance,wallDistance){
     const m=best.m,headshot=best.y>m.stats.head,armored=m.kind==='warden';
     if(headshot)shotHit.headshot=true;if(armored)shotHit.armored=true;
     if(weaponAudio&&weaponAudio.impact('flesh',{x:hit.x,y:hit.y,z:hit.z,distance})!=null)logCue('weapon','impact','flesh');
-    // Until I1b's hitMonster reports hits and kills itself.
-    if(typeof chaosEvent!=='function'){const info={m,headshot,kill:m.dead,armored,result:null};if(m.dead)audioOnKill(info);else audioOnHit(info);}
   }else if(wallDistance<48&&weaponAudio){
     const surface=surfaceAt(hit.x+_d.x*.08,hit.y+_d.y*.08,hit.z+_d.z*.08);
     if(weaponAudio.impact(surface,{x:hit.x,y:hit.y,z:hit.z,distance:wallDistance})!=null)logCue('weapon','impact',surface);
@@ -2451,10 +2670,6 @@ function audioFrame(dt){
     const active=state==='play';
     let chase=false;
     if(active)for(const m of monsters)if(!m.dead&&m.state==='chase'&&Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z)<32){chase=true;break;}
-    // Until I1b's chaos director reports chaseStart.
-    chaseStingT=Math.max(0,chaseStingT-dt);
-    if(typeof chaos==='undefined'&&chase&&!audioChase&&chaseStingT<=0){chaseStingT=8;audioChaosEvent({type:'chaseStart'});}
-    audioChase=chase;
     if(!playerAudio)return;
     bodyIn.active=active;bodyIn.stamina=P.stamina;bodyIn.exhausted=P.exhausted;bodyIn.running=P.running;bodyIn.moving=P.moving;bodyIn.crouching=P.crouching;
     bodyIn.danger=danger;bodyIn.chase=chase;bodyIn.health=P.health;bodyIn.effects=preferences.effects;bodyIn.hidden=P.hidden;
@@ -2554,6 +2769,7 @@ function snapshot(){return {
     atmosphere:atm?atm.snapshot():null,postfx:fx?fx.snapshot():null,
     lighting:practicalLights.map(l=>({visible:l.visible,intensity:l.userData.level,candela:l.intensity,x:l.position.x,z:l.position.z})),
     notes:captionText,
+    ...dopaSnapshot(),
   performance:{fps:Math.round(1000/frameAverage),drawCalls:renderCalls,frames:renderedFrames,triangles:renderer.info.render.triangles,quality:qualityLevel,renderScale,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,backend:window.HollowBackend},
   rooms:specialRooms.map(r=>({id:r.id,name:r.name,x:r.x,z:r.z,w:r.w,d:r.d,shelter:!!r.shelter,fuse:!!r.fuse})),
   doors:roomDoors.map(d=>({id:d.id,x:d.box.x,z:d.box.z,open:d.open,locked:d.locked,health:d.health})),
