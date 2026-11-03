@@ -88,25 +88,26 @@ test('the engines start on the first click; shots, hits, impacts, kills, equips 
   expect(cues(wall,'weapon','hitMarker')).toEqual([]);
 });
 
-test('sprinting into exhaustion gasps, then breathes hard and ragged',async({page})=>{
+test('sprinting into exhaustion makes no breathing or gasp sounds, but the heart races',async({page})=>{
   await ready(page);await start(page);
   const calm=await snapshot(page);
-  expect(calm.playerAudio.breathing.exhausted).toBe(false);
+  expect(calm.playerAudio.breathing,'The player has no breathing voice').toBeUndefined();
   await page.evaluate(()=>HollowTest.pose({x:45,z:30,yaw:Math.PI}));
   await page.keyboard.down('KeyW');await page.keyboard.down('ShiftLeft');
   try{
-    // The gasp belongs to the simulation step that empties the bar (onExhausted), not to a rendered frame.
     const spent=await page.evaluate(()=>{
-      for(let i=0;i<240&&!HollowGame.snapshot().player.exhausted;i++)HollowTest.advance(.05);
-      return HollowGame.snapshot();
+      const kinds=new Set();
+      for(let i=0;i<240&&!HollowGame.snapshot().player.exhausted;i++){HollowTest.advance(.05);for(const v of HollowGame.snapshot().playerAudio.voices)kinds.add(v.kind);}
+      return {s:HollowGame.snapshot(),kinds:[...kinds]};
     });
-    expect(spent.player.exhausted).toBe(true);
-    expect(spent.stamina,'Sprinting empties the stamina bar').toBe(0);
-    expect(cues(spent.audioLog,'player','gasp','exhausted'),'The exhaustion step gasps').toHaveLength(1);
+    expect(spent.s.player.exhausted).toBe(true);
+    expect(spent.s.stamina,'Sprinting empties the stamina bar').toBe(0);
     let heard;
-    await expect.poll(async()=>{heard=await snapshot(page);const b=heard.playerAudio.breathing;return b.exhausted&&b.rate>35;},{intervals:[50,100,250]}).toBe(true);
-    expect(heard.playerAudio.breathing.level,'Exhausted breathing is audible').toBeGreaterThan(0);
-    expect(cues(heard.audioLog,'player','gasp','exhausted'),'Exhaustion starts with one gasp').toHaveLength(1);
+    await expect.poll(async()=>{heard=await snapshot(page);return heard.playerAudio.heart.bpm;},{intervals:[50,100,250]}).toBeGreaterThan(80);
+    expect(heard.playerAudio.heart.level,'The exhausted heart is audible').toBeGreaterThan(0);
+    const voices=[...spent.kinds,...heard.playerAudio.voices.map(v=>v.kind)];
+    expect(voices.filter(kind=>kind==='breath'||kind==='gasp'),'No breaths or gasps while sprinting or exhausted').toEqual([]);
+    expect(heard.audioLog.filter(e=>e.src==='player'&&(e.cue==='gasp'||e.cue==='breath'))).toEqual([]);
   }finally{await page.keyboard.up('ShiftLeft');await page.keyboard.up('KeyW');}
 });
 
@@ -185,7 +186,7 @@ test('with effects off, screams and laughs become quiet breaths',async({page})=>
   expect(cues(creature,'creature','breath','stalker'),'The chaos laugh falls back to a breath').toHaveLength(1);
 });
 
-test('threat calls duck the player\'s breathing and chase bed; a stinger is never ducked',async({page})=>{
+test('threat calls duck the player\'s heartbeat and chase bed; a stinger is never ducked',async({page})=>{
   await ready(page);await start(page);
   const duck=await page.evaluate(()=>{
     try{
@@ -222,7 +223,7 @@ test('pausing stops every engine; resuming picks the reload foley back up',async
   expect(paused.state).toBe('pause');expect(paused.reloadT).toBeGreaterThan(0);
   expect(paused.audio.activeVoices,'Creature voices stop').toBe(0);
   expect(paused.playerAudio.activeVoices,'Player body audio stops').toBe(0);
-  expect(paused.playerAudio.music.level).toBe(0);expect(paused.playerAudio.breathing.level).toBe(0);
+  expect(paused.playerAudio.music.level).toBe(0);expect(paused.playerAudio.heart.level).toBe(0);
   expect(paused.weaponAudio.activeVoices,'Weapon audio stops').toBe(0);expect(paused.weaponAudio.reloading).toBe(false);
   await page.locator('#resumeBtn').click();
   await expect.poll(async()=>(await snapshot(page)).state).toBe('play');

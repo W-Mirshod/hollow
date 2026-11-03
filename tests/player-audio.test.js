@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const playerAudio = require('../public/player-audio');
 const script = readFileSync(require.resolve('../public/player-audio'), 'utf8');
 const STINGERS = ['chase', 'kill', 'headshot', 'streak', 'fuse', 'pickup', 'scare'];
-const METHODS = ['update', 'gasp', 'hurt', 'stinger', 'surge', 'land', 'stop', 'snapshot'];
+const METHODS = ['update', 'hurt', 'stinger', 'surge', 'land', 'stop', 'snapshot'];
 const FPS = 60, DT = 1 / FPS;
 
 // Fakes follow tests/audio.test.js, extended with AudioParam inputs, setTargetAtTime, detune and looping
@@ -152,16 +152,9 @@ function fixture({ api = playerAudio, duration = 2, seed = 7, random, ...options
   };
   return setup;
 }
-const starts = voices => voices.map(voice => voice.startedAt).sort((a, b) => a - b);
 const mean = values => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
-function spread(values) {
-  const average = mean(values);
-  return Math.sqrt(mean(values.map(value => (value - average) ** 2))) / average;
-}
-// Inhale-to-inhale (and exhale-to-exhale) cycle lengths.
-const cycles = times => times.slice(2).map((time, index) => time - times[index]);
 const body = (overrides = {}) => ({ active: true, stamina: 1, exhausted: false, running: false, moving: false,
-  crouching: false, danger: 0, chase: false, health: 100, effects: true, hidden: false, ...overrides });
+  danger: 0, chase: false, health: 100, effects: true, hidden: false, ...overrides });
 const live = context => context.nodes.filter(node => node.connections.length);
 const voicesOf = (context, filterFn) => context.sources.filter(filterFn);
 function near(actual, expected, epsilon = 1e-8) { assert.ok(Math.abs(actual - expected) < epsilon, `${actual} != ${expected}`); }
@@ -218,79 +211,50 @@ test('dependencies are validated without touching the supplied output or noise',
   assert.equal(setup.owned().length, 0);
   assert.equal(setup.noiseBuffer.getChannelData(0)[0], .375);
   const snapshot = setup.instance.snapshot();
-  assert.deepEqual(Object.keys(snapshot).slice(0, 5), ['breathing', 'heart', 'music', 'activeVoices', 'maxVoices']);
-  assert.deepEqual(Object.keys(snapshot.breathing), ['rate', 'level', 'exhausted']);
+  assert.deepEqual(Object.keys(snapshot).slice(0, 4), ['heart', 'music', 'activeVoices', 'maxVoices']);
   assert.deepEqual(Object.keys(snapshot.heart), ['bpm', 'level']);
   assert.deepEqual(Object.keys(snapshot.music), ['level', 'intensity']);
   assert.equal(snapshot.maxVoices, 12);
   assert.doesNotThrow(() => JSON.stringify(snapshot));
 });
 
-test('breathing rate and loudness climb from calm to sprint to exhaustion; exhaustion is ragged and voiced', () => {
+test('the player never breathes or gasps: calm, sprinting, exhausted, hidden or hurt', () => {
+  assert.equal(fixture().instance.gasp, undefined, 'No gasp API');
   const calm = fixture({ seed: 11 });
-  const calmState = calm.run(30, body());
-  const calmBreaths = calm.of('breath');
-  near(calmState.breathing.rate, 14, 1e-9);
-  assert.equal(calmState.breathing.exhausted, false);
-  assert.ok(calmBreaths.length >= 12 && calmBreaths.length <= 17, `~14 breaths per 30 s, got ${calmBreaths.length}`);
-  assert.ok(calmBreaths.every(voice => voice.level < .03), 'Calm breathing is nearly inaudible');
-  assert.equal(calm.context.sources.filter(source => source.type === 'custom').length, 0, 'Calm breaths are unvoiced');
-  assert.ok(spread(cycles(starts(calmBreaths))) < .08, 'Calm breathing is steady');
-
-  const sprint = fixture({ seed: 11 });
-  const sprintState = sprint.run(6, time => body({ running: true, moving: true, stamina: 1 - time / 8 }));
-  const sprintBreaths = sprint.of('breath', 3);
-
-  const spent = fixture({ seed: 11 });
-  spent.run(4, time => body({ running: true, moving: true, stamina: .5 - time / 8 }));
-  const marker = spent.context.currentTime, voicedBefore = spent.context.sources.filter(source => source.type === 'custom').length;
-  const spentState = spent.run(20, body({ exhausted: true, moving: true, stamina: 0 }));
-  const spentBreaths = spent.of('breath', marker + 1);
-
-  assert.ok(calmState.breathing.rate < sprintState.breathing.rate && sprintState.breathing.rate < spentState.breathing.rate);
-  assert.ok(calmState.breathing.level < sprintState.breathing.level && sprintState.breathing.level < spentState.breathing.level);
-  assert.ok(sprintState.breathing.rate > 25 && sprintState.breathing.rate < 45, `sprint ${sprintState.breathing.rate}`);
-  assert.ok(spentState.breathing.rate >= 45 && spentState.breathing.rate <= 55, `exhausted ${spentState.breathing.rate}`);
-  assert.equal(spentState.breathing.exhausted, true);
-  assert.ok(mean(calmBreaths.map(voice => voice.level)) < mean(sprintBreaths.map(voice => voice.level)));
-  assert.ok(mean(sprintBreaths.map(voice => voice.level)) < mean(spentBreaths.map(voice => voice.level)));
-  assert.ok(mean(spentBreaths.map(voice => voice.level)) > .14, 'Exhaustion is clearly audible');
-  assert.ok(spentBreaths.every(voice => voice.level <= .24), 'but never drowns the monsters');
-  // ~50 breaths per minute: ~17 cycles (34 breath events) in 20 s, with uneven timing.
-  assert.ok(spentBreaths.length >= 26 && spentBreaths.length <= 40, `exhausted breaths ${spentBreaths.length}`);
-  const calmSpread = spread(cycles(starts(calmBreaths))), spentSpread = spread(cycles(starts(spentBreaths)));
-  assert.ok(spentSpread > .05 && spentSpread > 2 * calmSpread, `Exhausted breathing is irregular (${spentSpread} vs ${calmSpread})`);
-  const edges = spent.context.sources.slice(0).filter(source => source.type === 'custom').length - voicedBefore;
-  assert.ok(edges >= spentBreaths.length * .35, 'Winded exhales carry a faint voiced edge');
-  for (const setup of [calm, sprint, spent]) settle(setup);
+  const calmState = calm.run(30, body({ moving: true }));
+  assert.equal(calm.owned().length, 0, 'A calm walk is silent');
+  assert.equal(calmState.heart.level, 0);
+  const runs = {
+    sprint: time => body({ running: true, moving: true, stamina: 1 - time / 8 }),
+    exhausted: body({ exhausted: true, moving: true, stamina: 0 }),
+    hidden: body({ exhausted: true, stamina: 0, hidden: true })
+  };
+  const bpm = {};
+  for (const [name, state] of Object.entries(runs)) {
+    const setup = fixture({ seed: 11 });
+    bpm[name] = setup.run(name === 'sprint' ? 6 : 20, state).heart.bpm;
+    if (name === 'exhausted') { setup.instance.hurt(40); setup.run(4, state); }
+    const kinds = new Set(Array.from(setup.seen.values(), voice => voice.kind));
+    assert.ok([...kinds].every(kind => kind === 'heart' || kind === 'hurt'), `${name}: only heartbeats and grunts, got ${[...kinds]}`);
+    assert.ok(kinds.has('heart'), `${name}: the heart still pounds`);
+    assert.equal(setup.instance.snapshot().breathing, undefined);
+    settle(setup);
+  }
+  assert.ok(bpm.sprint > 70 && bpm.sprint < bpm.exhausted, `exertion raises the heart rate: ${JSON.stringify(bpm)}`);
+  assert.ok(bpm.exhausted > 100 && bpm.exhausted <= 105.1, `exhausted ${bpm.exhausted}`);
+  settle(calm);
 });
 
-test('recovery slows breathing gradually; hiding holds it in and crouching softens it', () => {
+test('after exhaustion the heart settles gradually without rebounding', () => {
   const setup = fixture({ seed: 5 });
   setup.run(6, body({ exhausted: true, stamina: 0, moving: true }));
   const rates = [];
   setup.run(16, time => body({ stamina: Math.min(1, time / 6), exhausted: time < 2.1 }),
-    time => { if (Math.abs(time % 1) < DT / 2) rates.push(setup.instance.snapshot().breathing.rate); });
-  for (let index = 1; index < rates.length; index++) assert.ok(rates[index] <= rates[index - 1] + 1e-3, 'No rebound while recovering');
-  assert.ok(rates[0] > 44 && rates[3] > 30, 'Still winded seconds after the sprint');
-  assert.ok(rates[rates.length - 1] < 17, 'Back near calm once stamina has refilled');
+    time => { if (Math.abs(time % 1) < DT / 2) rates.push(setup.instance.snapshot().heart.bpm); });
+  for (let index = 1; index < rates.length; index++) assert.ok(rates[index] <= rates[index - 1] + .05, 'No rebound while recovering');
+  assert.ok(rates[0] > 100 && rates[5] > 95, `Still racing seconds after the sprint: ${rates.slice(0, 6)}`);
+  assert.ok(rates[rates.length - 1] < 70, `Back near rest once stamina has refilled: ${rates.at(-1)}`);
   settle(setup);
-
-  const levels = {};
-  for (const [name, overrides] of Object.entries({ open: {}, hidden: { hidden: true }, crouched: { crouching: true } })) {
-    const run = fixture({ seed: 5 });
-    const state = run.run(8, body({ stamina: .3, ...overrides }));
-    levels[name] = { level: state.breathing.level, rate: state.breathing.rate, voices: run.of('breath', 4) };
-    if (name === 'hidden') {
-      const muffles = run.context.nodes.filter(node => node.type === 'lowpass' && node.frequency.value === 1500);
-      assert.ok(muffles.length >= levels.hidden.voices.length, 'Held breaths are muffled through the nose');
-    }
-    settle(run);
-  }
-  assert.ok(levels.hidden.level < levels.open.level * .35);
-  assert.ok(levels.crouched.level < levels.open.level * .7 && levels.crouched.level > levels.hidden.level);
-  assert.ok(levels.hidden.rate < levels.open.rate, 'Hiding slows and holds the breath');
-  assert.ok(mean(levels.hidden.voices.map(voice => voice.level)) < mean(levels.open.voices.map(voice => voice.level)) * .4);
 });
 
 test('the heartbeat is silent at rest and pounds lub-dub from 60 to 150 bpm with danger or injury', () => {
@@ -354,14 +318,14 @@ test('the chase bed is absent at rest, swells with danger, ticks only in a chase
   const hits = band.connections[0];
   assert.equal(hits.gain.events.length, 0, 'No ticking without a chase');
 
-  const before = context.nodes.length, beforeBreaths = setup.seen.size;
+  const before = context.nodes.length, beforeVoices = setup.seen.size;
   state = setup.run(6, body({ danger: .85, chase: true }));
   const chase = state.music;
   assert.ok(chase.level > creep.level * 2 && chase.intensity > .8, JSON.stringify(chase));
   assert.deepEqual(continuous(), layers, 'A chase only automates the existing layers');
   const created = context.nodes.slice(before);
   assert.ok(created.every(node => node.kind !== 'oscillator' || node.stops.length), 'No new continuous sources');
-  assert.ok(created.length < (setup.seen.size - beforeBreaths + 1) * 26, 'Only one-shot voices allocate nodes');
+  assert.ok(created.length < (setup.seen.size - beforeVoices + 1) * 26, 'Only one-shot voices allocate nodes');
   const ticks = hits.gain.events.filter(event => event.method === 'set');
   assert.ok(ticks.length >= 24 && ticks.length <= 27, `8ths at 130 bpm, got ${ticks.length}`);
   const period = 30 / 130;
@@ -498,7 +462,7 @@ test('quick multi-kills climb a pentatonic ladder and reset after a lull', () =>
   settle(setup);
 });
 
-test('hurt, gasp, land and surge are short synthesized one-shots scaled by their argument', () => {
+test('hurt, land and surge are short synthesized one-shots scaled by their argument', () => {
   const setup = fixture(), { context, instance } = setup;
   const shot = (call) => {
     const id = call();
@@ -518,14 +482,6 @@ test('hurt, gasp, land and surge are short synthesized one-shots scaled by their
   assert.ok(Math.max(...pitch) > pitch[0] && pitch.at(-1) < pitch[0], 'Pain rises then sags');
   assert.ok(context.nodes.filter(node => node.type === 'bandpass' && node.Q.value >= 5).length >= 3);
 
-  context.advanceTo(context.currentTime + 1);
-  const big = shot(() => instance.gasp()), cooldown = instance.gasp(1);
-  assert.equal(cooldown, null, 'A second gasp right away is swallowed');
-  context.advanceTo(context.currentTime + 1);
-  const small = shot(() => instance.gasp(.2));
-  assert.ok(small.level < big.level && small.length < big.length);
-  assert.ok(big.sources.some(source => source.type === 'custom') && !small.sources.some(source => source.type === 'custom'),
-    'Only a strong gasp catches the voice');
 
   assert.equal(instance.land(0), null);
   assert.equal(instance.land(.015), null, 'Ordinary steps belong to the footstep system');
@@ -551,22 +507,7 @@ test('hurt, gasp, land and surge are short synthesized one-shots scaled by their
     assert.equal(instance.hurt(value), null);
     assert.equal(instance.land(value), null);
     assert.equal(instance.surge(value), null);
-    assert.equal(instance.gasp(value), null);
   }
-  settle(setup);
-});
-
-test('grunts and gasps interrupt the breathing cycle instead of overlapping it', () => {
-  const setup = fixture(), { instance } = setup;
-  setup.run(3, body({ stamina: .2, moving: true }));
-  const hurt = instance.hurt(40), hurtVoice = instance.snapshot().voices.find(voice => voice.id === hurt);
-  setup.run(3, body({ stamina: .2, moving: true }));
-  const afterHurt = setup.of('breath', hurtVoice.startedAt);
-  assert.ok(afterHurt.length && afterHurt[0].startedAt >= hurtVoice.endsAt + .1, 'Breath waits for the grunt');
-  const gasp = instance.gasp(.8), gaspVoice = instance.snapshot().voices.find(voice => voice.id === gasp);
-  setup.run(3, body({ stamina: .2, moving: true }));
-  const afterGasp = setup.of('breath', gaspVoice.startedAt);
-  assert.ok(afterGasp.length && afterGasp[0].startedAt >= gaspVoice.endsAt + .07, 'The gasp is followed by an exhale');
   settle(setup);
 });
 
@@ -593,7 +534,7 @@ test('twelve-voice cap fades out the oldest lowest-priority voice and protects s
   for (let index = 0; index < 12; index++) instance.stinger('kill');
   assert.ok(instance.snapshot().voices.every(voice => voice.kind === 'kill'));
   const before = context.nodes.length;
-  for (const call of [() => instance.gasp(), () => instance.land(1), () => instance.surge(1), () => instance.stinger('pickup')]) {
+  for (const call of [() => instance.land(1), () => instance.surge(1), () => instance.stinger('pickup')]) {
     assert.equal(call(), null);
   }
   assert.equal(context.nodes.length, before, 'Dropped cues allocate nothing');
@@ -601,7 +542,7 @@ test('twelve-voice cap fades out the oldest lowest-priority voice and protects s
   assert.equal(typeof instance.stinger('scare'), 'number');
   assert.ok(instance.snapshot().voices.every(voice => voice.id !== oldest));
 
-  const kinds = [() => instance.stinger(STINGERS[0]), () => instance.hurt(30), () => instance.gasp(), () => instance.surge(.5),
+  const kinds = [() => instance.stinger(STINGERS[0]), () => instance.hurt(30), () => instance.surge(.5),
     () => instance.land(.6), ...STINGERS.map(kind => () => instance.stinger(kind))];
   for (let index = 0; index < 120; index++) {
     kinds[index % kinds.length]();
@@ -621,7 +562,7 @@ test('stop() silences everything within a short fade, is idempotent, and update(
   setup.run(4, body({ danger: .9, chase: true, exhausted: true, stamina: 0, health: 30 }));
   instance.stinger('chase'); instance.stinger('streak'); instance.hurt(30);
   const busy = instance.snapshot();
-  assert.ok(busy.activeVoices >= 3 && busy.music.level > 0 && busy.heart.level > 0 && busy.breathing.level > 0);
+  assert.ok(busy.activeVoices >= 3 && busy.music.level > 0 && busy.heart.level > 0);
   const sources = context.sources.filter(source => !source.ended);
   const mix = context.nodes.find(node => node.connections.some(target => target.kind === 'compressor'));
   const now = context.currentTime;
@@ -629,7 +570,7 @@ test('stop() silences everything within a short fade, is idempotent, and update(
   const silent = instance.snapshot();
   assert.equal(silent.activeVoices, 0);
   assert.equal(silent.music.level, 0); assert.equal(silent.music.intensity, 0);
-  assert.equal(silent.heart.level, 0); assert.equal(silent.breathing.level, 0);
+  assert.equal(silent.heart.level, 0);
   const fade = mix.gain.events;
   assert.equal(fade.at(-1).value, 0); assert.ok(fade.at(-1).time <= now + .03);
   assert.ok(sources.every(source => source.stops.at(-1) <= now + .03 + 1e-9), 'Every layer, including future ones, is cut');
@@ -641,7 +582,7 @@ test('stop() silences everything within a short fade, is idempotent, and update(
   context.advanceTo(now + .1);
   assertReleased(setup);
   const restarted = setup.run(3, body({ danger: .9, chase: true, exhausted: true, stamina: 0 }));
-  assert.ok(restarted.breathing.level > 0 && restarted.music.level > 0 && setup.of('breath', now + .1).length > 0);
+  assert.ok(restarted.heart.level > 0 && restarted.music.level > 0 && setup.of('heart', now + .1).length > 0);
   settle(setup);
 });
 
@@ -651,10 +592,10 @@ test('invalid inputs are sanitised and inactive contexts stay silent without thr
     [DT, { active: true, stamina: '1', danger: '1', health: '20', exhausted: 'yes' }], [DT, []], [DT, { active: true, danger: -4 }]]) {
     assert.doesNotThrow(() => instance.update(dt, state));
     const snapshot = instance.snapshot();
-    for (const value of [snapshot.breathing.rate, snapshot.breathing.level, snapshot.heart.bpm, snapshot.heart.level,
-      snapshot.music.level, snapshot.music.intensity]) assert.ok(Number.isFinite(value) && value >= 0);
+    for (const value of [snapshot.heart.bpm, snapshot.heart.level, snapshot.music.level, snapshot.music.intensity]) {
+      assert.ok(Number.isFinite(value) && value >= 0);
+    }
     assert.ok(snapshot.heart.bpm >= 60 && snapshot.heart.bpm <= 150);
-    assert.ok(snapshot.breathing.rate >= 8 && snapshot.breathing.rate <= 55);
   }
   assert.deepEqual(context.errors, []);
   settle(setup);
@@ -663,12 +604,12 @@ test('invalid inputs are sanitised and inactive contexts stay silent without thr
     const idle = fixture();
     idle.context.state = state;
     idle.run(2, body({ danger: 1, chase: true, exhausted: true, stamina: 0 }));
-    for (const call of [() => idle.instance.gasp(), () => idle.instance.hurt(50), () => idle.instance.land(1),
+    for (const call of [() => idle.instance.hurt(50), () => idle.instance.land(1),
       () => idle.instance.surge(1), ...STINGERS.map(kind => () => idle.instance.stinger(kind))]) assert.equal(call(), null);
     assert.equal(idle.owned().length, 0, `${state}: nothing allocated`);
     const snapshot = idle.instance.snapshot();
     assert.equal(snapshot.activeVoices, 0);
-    assert.equal(snapshot.breathing.level, 0);
+    assert.equal(snapshot.heart.level, 0);
     idle.instance.stop();
   }
   const offline = fixture();
@@ -696,8 +637,7 @@ test('a failing context during a build releases the partial graph and returns qu
   assert.equal(instance.stinger('chase'), null);
   assert.ok(context.sources.length > 0, 'Exercise a partial build');
   assert.doesNotThrow(() => setup.run(2, body({ danger: 1, chase: true, health: 10 })));
-  assert.ok(setup.of('breath').length > 0, 'Noise-only breathing survives');
-  assert.ok(instance.snapshot().voices.every(voice => voice.kind === 'breath'), 'Failed heartbeats and the bed leave nothing behind');
+  assert.equal(instance.snapshot().activeVoices, 0, 'Failed heartbeats and the bed leave nothing behind');
   assert.ok(context.sources.every(source => source.kind === 'buffer' || source.stops.length), 'No orphaned oscillators keep running');
   context.createOscillator = original;
   assert.equal(typeof instance.stinger('kill'), 'number');
@@ -717,7 +657,7 @@ function session(setup, { checks = true } = {}) {
     if (time < 40) return body({ moving: true, stamina: Math.min(1, (time - 27) / 6), danger: .3 });
     if (time < 90) return body({ moving: true, running: time % 9 < 5, stamina: .5, danger: Math.min(1, (time - 38) / 6),
       chase: true, health: Math.max(20, 100 - (time - 40) * 2) });
-    return body({ hidden: true, crouching: true, danger: .3, health: 20 });
+    return body({ hidden: true, danger: .3, health: 20 });
   }, time => {
     const frame = Math.round(time * FPS);
     if (frame === 70 * FPS) instance.stop();
@@ -729,8 +669,7 @@ function session(setup, { checks = true } = {}) {
       if (frame % 240 === 77) instance.land(.4 + (frame % 5) / 10);
     }
     if (frame === 40 * FPS) instance.stinger('chase');
-    if (frame === 17 * FPS) instance.gasp(.9);
-    if (frame === 95 * FPS) { instance.stinger('scare'); instance.gasp(); }
+    if (frame === 95 * FPS) instance.stinger('scare');
     if (frame % 600 === 300) instance.stinger(frame % 1200 === 300 ? 'fuse' : 'pickup');
     if (!checks || frame % 15) return;
     const state = instance.snapshot();
@@ -753,7 +692,7 @@ test('a two-minute session with events, a pause and a resume keeps the graph bou
   assert.ok(Math.max(...perSecond) < 250 && mean(perSecond) < 80, `allocation rate ${mean(perSecond)}/s, peak ${Math.max(...perSecond)}`);
   assert.equal(stats.created[72], stats.created[70], 'Nothing is allocated while paused');
   const kinds = new Set(Array.from(setup.seen.values(), voice => voice.kind));
-  for (const kind of ['breath', 'heart', 'kill', 'headshot', 'hurt', 'surge', 'streak', 'land', 'chase', 'scare', 'gasp', 'fuse', 'pickup']) {
+  for (const kind of ['heart', 'kill', 'headshot', 'hurt', 'surge', 'streak', 'land', 'chase', 'scare', 'fuse', 'pickup']) {
     assert.ok(kinds.has(kind), `${kind} played during the session`);
   }
   for (const node of context.nodes) {
@@ -762,7 +701,7 @@ test('a two-minute session with events, a pause and a resume keeps the graph bou
     }
   }
   assert.deepEqual(context.errors, []);
-  assert.ok(instance.snapshot().breathing.level < .05, 'Hidden breathing ends the session quietly');
+  assert.ok(!kinds.has('breath') && !kinds.has('gasp'), 'Two minutes of sprinting and fright without a breath or gasp');
   settle(setup);
 });
 
@@ -804,9 +743,9 @@ test('update() at rest is allocation-free and an inactive player only fades what
   setup.run(4, body({ danger: 1, chase: true }));
   const count = context.nodes.length;
   const state = setup.run(20, { active: false, danger: 1, chase: true });
-  assert.equal(context.nodes.length, count, 'No new breaths, beats or layers once inactive');
+  assert.equal(context.nodes.length, count, 'No new beats or layers once inactive');
   assert.equal(state.music.level, 0);
-  assert.equal(state.breathing.level, 0); assert.equal(state.heart.level, 0);
+  assert.equal(state.heart.level, 0);
   assert.equal(instance.snapshot().activeVoices, 0);
   assertReleased(setup);
 });
@@ -824,6 +763,6 @@ test('stop() on a suspended context drops the graph at once, and resuming starts
   assert.ok(context.sources.every(source => source.onended === null));
   context.state = 'running';
   const state = setup.run(2, body({ danger: 1, chase: true }));
-  assert.ok(state.music.level > 0 && setup.of('breath', context.currentTime - 2).length > 0);
+  assert.ok(state.music.level > 0 && setup.of('heart', context.currentTime - 2).length > 0);
   settle(setup);
 });
