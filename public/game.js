@@ -294,7 +294,7 @@ function cellUV(kind){
   return {uv:mix(f,f.oneMinus(),mir).add(shift.div(tiles)),gx:dFdx(p).mul(s),gy:dFdy(p).mul(s),s};
 }
 // Specular anti-aliasing (Toksvig): mips of a busy normal map shorten the averaged normal; widen the lobe to match.
-// Low keeps the maps but skips this and the per-cell variation (cellUV): the test tier stays as cheap as possible.
+// Low (the test tier) stays nearly as cheap as flat albedo: roughness maps only, no relief, per-cell variation or this.
 const wardLow=qualityLevel==='low';
 function specAA(r,n){if(wardLow)return r;const len=n.mul(2).sub(1).length().max(.25),v=len.oneMinus().sub(.012).max(0).div(len).mul(2);return r.mul(r).mul(r.mul(r)).add(v).sqrt().sqrt().min(1);}
 // World-space wear on the end-state ward (medium/high): broad puddles that mirror the torch, grime and gloss drift.
@@ -341,15 +341,15 @@ function gridAO(kind){
   return occ.mul(kind==='floor'?.5:.4).add(aoSync).oneMinus();
 }
 // surf: {lux:{normal,roughness}, hell:{normal,roughness}} canvases, plus optional cells/macro ('wall'|'floor'|'ceiling')
-// and hellRep. Every material carries real normal and roughness maps (the hell set on normalMap/roughnessMap).
+// and hellRep. Every material carries real roughness maps, and on medium/high normal maps (the hell set on normalMap/roughnessMap).
 function morphMat(luxC,hellC,rep,opts,surf){
   const s=surf,hrep=s.hellRep||rep,a=tex(luxC,rep),b=tex(hellC,hrep);
   const ln=tex(s.lux.normal,rep,false),lr=tex(s.lux.roughness,rep,false),hn=tex(s.hell.normal,hrep,false),hr=tex(s.hell.roughness,hrep,false);
-  const m=new THREE.MeshStandardNodeMaterial(Object.assign({map:a,normalMap:hn,roughnessMap:hr,roughness:1,metalness:0},opts||{}));
+  const m=new THREE.MeshStandardNodeMaterial(Object.assign({map:a,normalMap:wardLow?null:hn,roughnessMap:hr,roughness:1,metalness:0},opts||{}));
   m.userData.transitionMap=b;m.userData.luxMaps={normal:ln,roughness:lr};
-  const lux=()=>{const n=texture(ln).xyz;return {c:texture(a),n,r:specAA(texture(lr).g,n)};};
+  const flat=vec3(.5,.5,1),lux=()=>{const n=wardLow?flat:texture(ln).xyz;return {c:texture(a),n,r:specAA(texture(lr).g,n)};};
   const hell=()=>{
-    if(!s.cells||wardLow){const n=texture(hn).xyz;return {c:texture(b),n,r:specAA(texture(hr).g,n)};}
+    if(!s.cells||wardLow){const n=wardLow?flat:texture(hn).xyz;return {c:texture(b),n,r:specAA(texture(hr).g,n)};}
     const v=cellUV(s.cells),n=texture(hn,v.uv).grad(v.gx,v.gy).xyz;
     return {c:texture(b,v.uv).grad(v.gx,v.gy),n:vec3(n.xy.sub(.5).mul(v.s).add(.5),n.z),r:specAA(texture(hr,v.uv).grad(v.gx,v.gy).g,n)};
   };
@@ -373,7 +373,7 @@ function morphMat(luxC,hellC,rep,opts,surf){
     return color;
   })();
   m.roughnessNode=surfR;
-  m.normalNode=normalMap(surfN);
+  if(!wardLow)m.normalNode=normalMap(surfN);
   m.emissiveNode=materialEmissive.add(vec3(1,.32,.06).mul(burnEdge.pow(3)).mul(U.ember));
   return m;
 }

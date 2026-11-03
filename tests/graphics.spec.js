@@ -120,7 +120,8 @@ for(const backend of ['webgpu','webgl'])for(const quality of ['high','low']){
     const info=await inspect(page);
     // floor, ceiling, wall instances, runner, both door leaves and the pedestal
     expect(info.surfaces.length).toBeGreaterThanOrEqual(6);
-    for(const surface of info.surfaces)expect(surface).toEqual(expect.objectContaining({normal:true,roughness:true,normalNode:true,roughnessNode:true,colorNode:true,emissiveNode:true,lux:true}));
+    // Low keeps the roughness maps but drops the relief, so the test tier costs about what flat albedo did.
+    for(const surface of info.surfaces)expect(surface).toEqual(expect.objectContaining({normal:quality!=='low',roughness:true,normalNode:quality!=='low',roughnessNode:true,colorNode:true,emissiveNode:true,lux:true}));
     // Corridor blood, claw marks, footprints and hazard paint: one alpha-tested (unsorted) PBR decal batch.
     expect(info.decals.length).toBe(1);
     expect(info.decals[0]).toEqual(expect.objectContaining({map:true,normal:true,roughness:true,transparent:false}));
