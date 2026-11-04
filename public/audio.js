@@ -27,7 +27,13 @@
     moan: { gain: .27, priority: 2, ref: 2.8, rolloff: 1.1 },
     growl: { gain: .34, priority: 3, ref: 2.2, rolloff: 1.25 },
     laugh: { gain: .3, priority: 3, ref: 1.8, rolloff: 1.35 },
-    scream: { gain: .46, priority: 4, ref: 3.2, rolloff: 1 }
+    scream: { gain: .46, priority: 4, ref: 3.2, rolloff: 1 },
+    // Hunting cues: a sleeper's waking roar, a howl that carries across a whole floor, a snarl at arm's length and
+    // teeth chattering somewhere in the dark.
+    wake: { gain: .44, priority: 4, ref: 3, rolloff: 1.05 },
+    howl: { gain: .4, priority: 3, ref: 4.5, rolloff: .9 },
+    snarl: { gain: .38, priority: 3, ref: 2, rolloff: 1.3 },
+    chatter: { gain: .25, priority: 2, ref: 1.6, rolloff: 1.4 }
   };
   // Uneven openings/closures replace steady buzzes and metronomic tremolo.
   const ENVELOPES = {
@@ -46,7 +52,11 @@
     roughen: [[.18, .2], [.38, .72], [.58, 1], [.8, .55], [1, 0]],
     growl: [[.05, .7], [.14, 1], [.3, .8], [.5, .95], [.7, .74], [.86, .5], [1, 0]],
     stutter: [[.04, 1], [.17, .72], [.23, .08], [.3, .92], [.49, .76], [.55, .1], [.62, .86], [.85, .45], [1, 0]],
-    scream: [[.04, .55], [.12, 1], [.35, .84], [.55, .96], [.75, .7], [.9, .33], [1, 0]]
+    scream: [[.04, .55], [.12, 1], [.35, .84], [.55, .96], [.75, .7], [.9, .33], [1, 0]],
+    // A howl swells in, holds through the break and dies away slowly.
+    howl: [[.1, .25], [.24, .8], [.36, 1], [.55, .88], [.72, .6], [.88, .26], [1, 0]],
+    // A snarl bares its teeth at once and is bitten off.
+    snarl: [[.03, .8], [.1, 1], [.28, .7], [.45, .95], [.7, .8], [.9, .35], [1, 0]]
   };
   // F1–F3 of a neutral throat; formant paths interpolate between these targets.
   const VOWELS = {
@@ -87,6 +97,33 @@
     stalker: { trim: 1.15, lead: 0, span: [1.15, 1.45], contour: [1.2, 2.3, 2.1, 1.4], layers: [[1, .75], [1.031, .55], [.5, .3]], path: ['uh', 'a', 'e', 'a', 'o'], drive: 4, noise: .55 },
     crawler: { trim: .54, lead: 0, span: [.9, 1.2], contour: [1.5, 2.8, 2.6, 1.8], layers: [[1, .75], [1.045, .55]], path: ['e', 'a', 'i', 'e', 'a'], drive: 6, flutter: [40, 45], noise: .65 },
     shrieker: { trim: .65, lead: .24, span: [1.6, 1.95], contour: [.85, 1.55, 1.45, 1.05], layers: [[1, .7], [1.067, .5], [1.414, .4]], path: ['u', 'a', 'i', 'a', 'u'], drive: 4, noise: .7 }
+  };
+  // contour: pitch multiples at phases 0, .12, .4, .7 and 1 of the roar that follows the gasp.
+  const WAKES = {
+    warden: { trim: 2.6, gasp: [.32, .42], span: [1.25, 1.45], contour: [.55, .7, 1.35, 1.25, .85], layers: [[1, .8], [.5, .5], [1.018, .4]], drive: 5, flutter: [24, 30], rattle: .5 },
+    stalker: { trim: 1.55, gasp: [.26, .36], span: [1.05, 1.35], contour: [.7, .85, 2.2, 2, 1.3], layers: [[1, .75], [1.031, .55]], drive: 5, flutter: [30, 38], rattle: .55 },
+    crawler: { trim: 1.15, gasp: [.18, .26], span: [.8, 1.05], contour: [1, 1.2, 2.8, 2.5, 1.7], layers: [[1, .75], [1.045, .55]], drive: 6, flutter: [38, 45], rattle: .6 },
+    shrieker: { trim: 1.2, gasp: [.3, .4], span: [1.2, 1.45], contour: [.7, .8, 1.6, 1.5, 1.05], layers: [[1, .7], [1.067, .5], [1.414, .4]], drive: 4, flutter: [32, 40], rattle: .5 }
+  };
+  // contour: pitch multiples at phases 0, .3, the break at .42, .7 and 1; ring: tremolo rate (Hz) or 0.
+  const HOWLS = {
+    warden: { trim: 2.4, span: [1.7, 1.95], contour: [.8, 1.5, 1.95, 1.4, .75], layers: [[1, .8], [.5, .55], [1.012, .4]], ring: [29, 35], breath: .35 },
+    stalker: { trim: 1.5, span: [1.6, 1.95], contour: [.9, 2, 2.6, 1.9, 1.1], layers: [[1, .8], [1.021, .5]], ring: 0, breath: .4 },
+    crawler: { trim: 1.1, span: [1.4, 1.75], contour: [1.1, 2.2, 2.9, 2.1, 1.3], layers: [[1, .8], [1.035, .5]], ring: [19, 25], breath: .35 },
+    shrieker: { trim: .95, span: [1.65, 1.95], contour: [.85, 1.45, 1.9, 1.35, .8], layers: [[1, .75], [1.067, .5], [1.414, .35]], ring: 0, breath: .3 }
+  };
+  const SNARLS = {
+    warden: { trim: 2, span: [.75, .95], pitch: .9, drive: 4, flutter: [26, 32], hiss: .45, sub: .45 },
+    stalker: { trim: 1.4, span: [.6, .85], pitch: .95, drive: 6, flutter: [34, 42], hiss: .6, sub: 0 },
+    crawler: { trim: 1.2, span: [.5, .7], pitch: 1, drive: 7, flutter: [40, 48], hiss: .7, sub: 0 },
+    shrieker: { trim: 1.1, span: [.6, .85], pitch: .7, drive: 6, flutter: [36, 44], hiss: .55, sub: 0 }
+  };
+  // clicks: teeth per cue; gap: seconds between them; trill: the wet tremolo under them (Hz).
+  const CHATTERS = {
+    warden: { trim: 1.8, span: [1, 1.3], clicks: [9, 13], gap: [.05, .11], pitch: .9, trill: [18, 24] },
+    stalker: { trim: 1.9, span: [.9, 1.25], clicks: [12, 17], gap: [.035, .08], pitch: 1.1, trill: [24, 30] },
+    crawler: { trim: 1.8, span: [.8, 1.15], clicks: [14, 20], gap: [.025, .06], pitch: 1, trill: [30, 38] },
+    shrieker: { trim: 1.9, span: [.9, 1.2], clicks: [11, 15], gap: [.04, .09], pitch: .75, trill: [22, 28] }
   };
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const random = (min, max) => min + Math.random() * (max - min);
@@ -190,7 +227,8 @@
       } else panner.setPosition(x, y, z);
       gain.connect(wall); wall.connect(panner); panner.connect(bus.input);
       // Static makeup levels each synthesized vocal so the CUES table alone sets relative loudness.
-      const vocal = { whisper: WHISPERS, moan: MOANS, growl: GROWLS, laugh: LAUGHS, scream: SCREAMS }[voice.cue];
+      const vocal = { whisper: WHISPERS, moan: MOANS, growl: GROWLS, laugh: LAUGHS, scream: SCREAMS,
+        wake: WAKES, howl: HOWLS, snarl: SNARLS, chatter: CHATTERS }[voice.cue];
       const mixdown = vocal ? vca(vocal[voice.kind].trim, gain) : gain;
 
       // One automated gain per source; `shape` is a named or generated [phase, amount] list.
@@ -585,6 +623,67 @@
           modulator(lead, span, .35, rates, body.gain, 'roughen', true);
         }
       }
+      // Flutter rates for a glottal rattle: an uneven list of [phase, Hz] points across the whole layer.
+      function rattle(range) {
+        const rates = [];
+        for (let phase = 0; phase < 1; phase += random(.1, .18)) rates.push([phase, random(...range)]);
+        rates.push([1, random(...range)]);
+        return rates;
+      }
+      // A sleeper waking: a ragged ingressive gasp, then a distorted roar that climbs out of the chest.
+      function wake() {
+        const setting = WAKES[voice.kind], lead = random(...setting.gasp), span = random(...setting.span), total = lead + span;
+        const contour = setting.contour.map((value, index) => [[0, .12, .4, .7, 1][index], profile.pitch * value]);
+        const mouth = tract(total, [[0, 'u'], [lead / total, 'o'], [(lead + span * .35) / total, 'a'], [(lead + span * .7) / total, 'e'], [1, 'o']],
+          [5, 8, 10], [1, .7, .45]);
+        const body = vca(.6, grit(setting.drive, mouth));
+        air(0, lead, .8, band(profile.air * .9, 1.2), 'swell');
+        for (const [ratio, level] of setting.layers) {
+          voiced(lead, span, level, contour.map(([phase, value]) => [phase, value * ratio]), body, 'scream', 14, .04);
+        }
+        air(lead, span, setting.rattle, body, 'roughen');
+        modulator(lead, span, .35, rattle(setting.flutter), body.gain, 'roughen', true);
+      }
+      // A hunting howl that carries across the floor: it climbs, cracks upward at its peak and sags away.
+      function howl() {
+        const setting = HOWLS[voice.kind], span = random(...setting.span);
+        const contour = setting.contour.map((value, index) => [[0, .3, .42, .7, 1][index], profile.pitch * value, index === 2]);
+        const mouth = tract(span, [[0, 'u'], [.3, 'o'], [.48, 'a'], [.75, 'o'], [1, 'u']], [6, 9, 11], [1, .6, .35]);
+        const tremble = setting.ring ? vca(.55, mouth) : mouth;
+        for (const [ratio, level] of setting.layers) {
+          voiced(0, span, level, contour.map(([phase, value, jump]) => [phase, value * ratio, jump]), tremble, 'howl', 6, .025);
+        }
+        if (setting.ring) modulator(0, span, .4, [[0, random(...setting.ring)], [1, random(...setting.ring)]], tremble.gain, 'roughen');
+        air(0, span, setting.breath, mouth, 'exhale');
+      }
+      // A snarl at arm's length: a bared-teeth hiss, then a short rattling voice driven hard and bitten off.
+      function snarl() {
+        const setting = SNARLS[voice.kind], span = random(...setting.span), pitch = profile.pitch * setting.pitch;
+        const contour = [[0, pitch * 1.1], [.12, pitch * 1.3], [.5, pitch * 1.15], [1, pitch * .9]];
+        const mouth = tract(span, [[0, 'i'], [.15, 'a'], [.6, 'e'], [1, 'uh']], [4, 6, 8], [1, .65, .4], profile.tract * 1.1);
+        const flutter = vca(.55, grit(setting.drive, mouth));
+        air(0, span * .35, setting.hiss, band(profile.air * 1.3, 2.2), 'hiss');
+        voiced(.04, span - .04, .85, contour, flutter, 'snarl', 14, .04);
+        if (setting.sub) voiced(.05, span - .06, setting.sub, contour.map(([phase, value]) => [phase, value * .5]), flutter, 'snarl', 9, .04);
+        air(.04, span - .04, .5, flutter, 'snarl');
+        modulator(.04, span - .04, .45, rattle(setting.flutter), flutter.gain, 'roughen', true);
+      }
+      // Teeth chattering in the dark: uneven runs of clicks over a wet, trilling murmur.
+      function chatter() {
+        const setting = CHATTERS[voice.kind], span = random(...setting.span), count = integer(setting.clicks), clicks = [];
+        let at = random(.02, .06);
+        for (let index = 0; index < count && at < span - .03; index++) {
+          clicks.push([at / span, 0], [(at + .002) / span, random(.6, 1)], [(at + .012) / span, 0]);
+          at += random(...setting.gap) * (index % 4 === 3 ? 2.4 : 1);
+        }
+        clicks.push([1, 0]);
+        air(0, span, .9, band(profile.claw * setting.pitch, 5), clicks);
+        const pitch = profile.pitch * setting.pitch, mouth = tract(span, [[0, 'uh'], [.5, 'e'], [1, 'uh']], [5, 7, 9], [1, .5, .3]);
+        const trill = vca(.5, mouth);
+        voiced(0, span, .5, [[0, pitch], [.5, pitch * 1.08], [1, pitch * .9]], trill, 'moan', 10, .03);
+        modulator(0, span, .45, [[0, random(...setting.trill)], [1, random(...setting.trill)]], trill.gain, 'roughen');
+        chirps(.05, span - .1, integer([5, 8]), .3, 900, 2400);
+      }
 
       if (voice.cue === 'breath') {
         noise(0, profile.breath, .78, [profile.air], 'breath', .65, .62);
@@ -630,6 +729,10 @@
       else if (voice.cue === 'growl') growl();
       else if (voice.cue === 'laugh') laugh();
       else if (voice.cue === 'scream') scream();
+      else if (voice.cue === 'wake') wake();
+      else if (voice.cue === 'howl') howl();
+      else if (voice.cue === 'snarl') snarl();
+      else if (voice.cue === 'chatter') chatter();
     }
 
     // Returns a voice id, or null for a muted/invalid cue, inactive realtime context

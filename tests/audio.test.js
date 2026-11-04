@@ -9,9 +9,13 @@ const script = readFileSync(require.resolve('../public/audio'), 'utf8');
 const KINDS = ['warden', 'stalker', 'crawler', 'shrieker'];
 const CUES = ['breath', 'notice', 'attack', 'death', 'step'];
 const VOCALS = ['whisper', 'moan', 'growl', 'laugh', 'scream'];
-const RANGES = { whisper: [1.2, 2.6], moan: [1.5, 3], growl: [.6, 1.4], laugh: [.6, 2.2], scream: [.8, 2.5] };
+// Hunting cues: a sleeper waking, a howl that carries across a floor, a close snarl and chattering teeth.
+const HUNTS = ['wake', 'howl', 'snarl', 'chatter'];
+const RANGES = { whisper: [1.2, 2.6], moan: [1.5, 3], growl: [.6, 1.4], laugh: [.6, 2.2], scream: [.8, 2.5],
+  wake: [.85, 2.1], howl: [1.25, 2.15], snarl: [.45, 1.05], chatter: [.7, 1.45] };
 // Tiers mirror the module: breath < step < ambient voices < engagement < violence.
-const TIERS = { breath: 0, step: 1, whisper: 2, moan: 2, notice: 3, growl: 3, laugh: 3, attack: 4, death: 4, scream: 4 };
+const TIERS = { breath: 0, step: 1, whisper: 2, moan: 2, chatter: 2, notice: 3, growl: 3, laugh: 3, howl: 3, snarl: 3,
+  attack: 4, death: 4, scream: 4, wake: 4 };
 
 class FakeParam {
   constructor(value, context) { this.value = value; this.events = []; this.context = context; }
@@ -162,7 +166,7 @@ function assertReleased(setup) {
 test('CommonJS, browser global and AMD load without audio hardware, DOM or timers', () => {
   assert.deepEqual(Object.keys(audio), ['create', 'CUE_NAMES', 'KIND_NAMES']);
   assert.ok(Object.isFrozen(audio));
-  assert.deepEqual(audio.CUE_NAMES, [...CUES.slice(0, 1), 'step', 'notice', 'attack', 'death', ...VOCALS]);
+  assert.deepEqual(audio.CUE_NAMES, [...CUES.slice(0, 1), 'step', 'notice', 'attack', 'death', ...VOCALS, ...HUNTS]);
   assert.deepEqual(audio.KIND_NAMES, KINDS);
   assert.ok(Object.isFrozen(audio.CUE_NAMES) && Object.isFrozen(audio.KIND_NAMES));
   assert.throws(() => { 'use strict'; audio.CUE_NAMES.push('loop'); }, TypeError);
@@ -304,7 +308,7 @@ function assertVocal(setup, cue, voice, nodes = setup.owned()) {
   assert.equal(context.nodes.filter(node => node.connections.includes(output)).length, 1, 'No unprotected dry path');
 }
 
-for (const kind of KINDS) for (const cue of VOCALS) {
+for (const kind of KINDS) for (const cue of [...VOCALS, ...HUNTS]) {
   test(`${kind} ${cue}: vocal one-shots keep finite schedules, one envelope per layer and full cleanup`, () => {
     const setup = fixture(), { context, instance } = setup;
     const id = instance.play(kind, cue, { x: -5, y: 1.4, z: 6 });
@@ -324,7 +328,7 @@ for (const kind of KINDS) for (const cue of VOCALS) {
 test('vocal lengths, layer budgets and envelopes hold across many random seeds', () => {
   for (let seed = 1; seed <= 24; seed++) {
     const setup = fixture({ api: browserAPI(seed * 7919) }), { context, instance } = setup;
-    for (const kind of KINDS) for (const cue of VOCALS) {
+    for (const kind of KINDS) for (const cue of [...VOCALS, ...HUNTS]) {
       const before = context.nodes.length;
       instance.play(kind, cue);
       const voice = instance.snapshot().voices[0];
@@ -772,7 +776,7 @@ test('rendered loudness: screams lead, whispers stay intimate, nothing is silent
   const seeds = [5, 29];
   for (const kind of KINDS) {
     const level = {};
-    for (const cue of [...CUES, ...VOCALS]) {
+    for (const cue of [...CUES, ...VOCALS, ...HUNTS]) {
       const runs = seeds.map(seed => measure(kind, cue, seed));
       for (const { signal, peak, loud } of runs) {
         assert.ok(signal.every(Number.isFinite), `${kind} ${cue} renders finite samples`);
@@ -954,6 +958,61 @@ test('screams stack detuned voices and noise, distorted, with formants sweeping 
     }
     assert.equal(context.nodes.find(node => node.kind === 'panner').refDistance, 3.2);
     instance.stop();
+  }
+});
+
+test('hunting cues: a gasp before the waking roar, a howl that breaks upward, a bitten-off snarl and uneven chattering teeth', () => {
+  for (const kind of KINDS) for (const seed of [7, 41]) {
+    const play = cue => {
+      const setup = fixture({ api: browserAPI(seed) });
+      setup.instance.play(kind, cue);
+      return { ...setup, voice: setup.instance.snapshot().voices[0], panner: setup.context.nodes.find(node => node.kind === 'panner') };
+    };
+    const wake = play('wake'), gasp = wake.context.sources.find(source => source.kind === 'buffer');
+    const roar = wake.context.sources.filter(source => source.type === 'custom' && !modulators(wake.context).includes(source));
+    assert.equal(gasp.starts[0].time, wake.voice.startedAt, `${kind} wakes with a gasp`);
+    assert.ok(peakTime(layerOf(wake.context, gasp)) > .85 * (gasp.stops[0] - gasp.starts[0].time), 'An ingressive swell, cut off');
+    assert.ok(roar.length >= 2 && roar.every(source => source.starts[0].time >= gasp.stops[0] - .02), 'The roar follows the gasp');
+    const climb = roar[0].frequency.events.map(event => event.value);
+    assert.ok(Math.max(...climb) > climb[0] * 1.6, `${kind} roar climbs out of the chest`);
+    assert.ok(wake.context.nodes.some(node => node.kind === 'shaper' && node.curve && node.curve.length === 1025 && !node.connections.includes(wake.output)), 'Driven raw');
+
+    const howl = play('howl'), voices = howl.context.sources.filter(source => source.type === 'custom');
+    const pitch = voices[0].frequency.events;
+    assert.ok(pitch.some((event, index) => index && event.method === 'set' && event.value > pitch[index - 1].value * 1.1), `${kind} howl cracks upward`);
+    assert.ok(pitch[pitch.length - 1].value < Math.max(...pitch.map(event => event.value)) * .6, 'and sags away');
+    assert.ok(howl.panner.refDistance > 4 && howl.panner.rolloffFactor < 1, 'A howl carries across the floor');
+
+    const snarl = play('snarl'), length = snarl.voice.endsAt - snarl.voice.startedAt;
+    assert.ok(length < 1.05, `${kind} snarl is short (${length.toFixed(2)} s)`);
+    const hiss = snarl.context.sources.find(source => source.kind === 'buffer');
+    assert.equal(hiss.starts[0].time, snarl.voice.startedAt, 'Teeth bared with a hiss first');
+    const [flutter] = modulators(snarl.context);
+    assert.ok(flutter.frequency.events.every(event => event.value >= 25 && event.value <= 50), 'A rattling snarl');
+
+    const chatter = play('chatter'), click = chatter.context.sources.find(source => source.kind === 'buffer');
+    const onsets = startsAt(layerOf(chatter.context, click), .4), gaps = onsets.slice(1).map((time, index) => time - onsets[index]);
+    assert.ok(onsets.length >= 8, `${kind} chatters ${onsets.length} teeth`);
+    assert.ok(Math.max(...gaps) > Math.min(...gaps) * 1.8, 'Uneven runs, not a clock');
+    assert.ok(chatter.panner.refDistance < 2, 'Chattering is heard close');
+    for (const setup of [wake, howl, snarl, chatter]) { setup.instance.stop(); assertReleased(setup); }
+  }
+});
+
+test('rendered loudness of the hunting cues: a waking roar hits like a scream, chatter stays under a notice', () => {
+  for (const kind of KINDS) {
+    const level = {};
+    for (const cue of ['notice', 'growl', 'scream', ...HUNTS]) {
+      const runs = [5, 29].map(seed => measure(kind, cue, seed));
+      for (const { signal, peak, loud } of runs) {
+        assert.ok(signal.every(Number.isFinite) && peak < .6 && loud > .012, `${kind} ${cue}: finite, audible, headroom`);
+      }
+      level[cue] = runs.reduce((sum, run) => sum + run.loud, 0) / runs.length;
+    }
+    assert.ok(level.wake >= .7 * level.scream, `${kind} wake ${level.wake.toFixed(3)} vs scream ${level.scream.toFixed(3)}`);
+    assert.ok(level.wake > level.notice && level.howl > level.notice * .9, `${kind} the hunt is louder than a notice`);
+    assert.ok(level.snarl >= level.growl * .9, `${kind} snarl ${level.snarl.toFixed(3)} vs growl ${level.growl.toFixed(3)}`);
+    assert.ok(level.chatter < level.notice && level.chatter < .6 * level.scream, `${kind} chatter stays sly`);
   }
 });
 
