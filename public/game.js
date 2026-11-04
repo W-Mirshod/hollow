@@ -772,7 +772,7 @@ function resetSurvivor(){
   mag=weapons[0].mag;reserve=weapons[0].reserve;reloadT=0;fireT=.3;gunKick=0;mouseDown=false;fireQueued=false;flashT=0;hitMarkerT=0;setLight(muzzleLight,0);setLight(fpFlash,0);
 }
 function newGame(){
-  if(NET.g)leaveRoom();NET.inGame=false;avatar.visible=false;
+  if(NET.g)leaveRoom();NET.inGame=false;avatar.visible=false;runToken++;
   avSpot.visible=avFlash.visible=false;
   // A dark run started from the title reuses the world the menu prebuilt and warmed (warmPlayPipelines).
   if(!prebuiltSeed){worldSeed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);}
@@ -934,11 +934,11 @@ $('menuCopy').addEventListener('click',()=>copyCode($('menuCode'),$('menuCopy'))
 $('importForm').addEventListener('submit',async e=>{e.preventDefault();
   const msg=$('importMsg'),r=decodeResult($('importCode').value);
   if(!r){msg.textContent='That code isn’t valid. Ask the player to copy it again, all of it.';return;}
-  const id='n_'+fnv(r.name.toLowerCase());
-  const cur=sharedRows&&sharedRows.find(x=>x.uid===id);
-  if(cur&&cur.time<=r.time){msg.textContent=`${r.name} already has a better time on the board (${fmtTime(cur.time)}).`;return;}
-  try{await scoresCol.doc(id).set({name:r.name,time:r.time,kills:r.kills,at:r.at,uid:id,imported:true});
-    msg.textContent=`Added ${r.name} — ${fmtTime(r.time)}.`;$('importCode').value='';}
+  const id='n_'+fnv(r.name.toLowerCase())+(r.mode==='coop'?'_coop':'');
+  const cur=sharedRows&&sharedRows.find(x=>x.uid===id&&x.mode===r.mode);
+  if(cur&&compareRuns(cur,r)<=0){msg.textContent=`${r.name} already has a better run on the board (${runSummary(cur)}).`;return;}
+  try{await scoresCol.doc(id).set({name:r.name,time:r.time,kills:r.kills,score:r.score,mode:r.mode,partner:r.partner,escaped:r.escaped,at:r.at,uid:id,imported:true});
+    msg.textContent=`Added ${r.name} — ${runSummary(r)}.`;$('importCode').value='';}
   catch(err){msg.textContent='The board didn’t accept it. Try again in a moment.';}});
 $('nameForm').addEventListener('submit',e=>{e.preventDefault();
   const v=$('playerName').value.replace(/\s+/g,' ').trim();
@@ -1458,9 +1458,9 @@ function updateCaught(dt){
   if(caughtT>1.6&&NET.inGame){coopLocalDone('dead');return;}
   if(caughtT>1.6){
     state='dead';hideMonsters();setLight(spot,0);$('flash').style.opacity=0;gun.visible=false;
-    const m=Math.floor(elapsed/60),s=Math.floor(elapsed%60),kills=monsters.length-0;
+    const lasted=Math.round(elapsed*10)/10,m=Math.floor(lasted/60),s=Math.floor(lasted%60),own=streak.snapshot();
     $('deadText').textContent=`You lasted ${m}:${String(s).padStart(2,'0')} in the dark. The corridors are quiet again.`;
-    showScreen('dead');renderBoards();try{document.exitPointerLock();}catch(e){}
+    showScreen('dead');recordRun({mode:'solo',escaped:false,time:elapsed,kills:own.kills,score:own.points},'deadRank');try{document.exitPointerLock();}catch(e){}
   }
 }
 /* ---------- grain ---------- */
@@ -1593,7 +1593,8 @@ function loop(){
       const kills=monsters.filter((o,i)=>i<monCount&&o.dead).length;
       $('winText').textContent=`Cold air on your face. You got out in ${fmtTime(elapsed)}. Behind you, ${kills>=monCount?'nothing is walking any more':'something keeps walking'}.`;
       $('winRank').textContent='';
-      showScreen('win');recordWin(elapsed,kills);try{document.exitPointerLock();}catch(e){}
+      const own=streak.snapshot();
+      showScreen('win');recordRun({mode:'solo',escaped:true,time:elapsed,kills:own.kills,score:own.points},'winRank');try{document.exitPointerLock();}catch(e){}
       stopAudio();if(droneGain)fadeTo(droneGain,0,2);mouseDown=false;
     }
     if(droneGain){const target=preferences.effects?.025+fuses*.006:.014;droneGain.gain.setTargetAtTime(target,AC.currentTime,1.2);}
@@ -1658,7 +1659,7 @@ function loop(){
 }
 
 /* ---------- co-op (two players over the live room) ---------- */
-const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false,gen:0,seed:0,shots:0,tk:[],dm:[],ff:0,myPeer:null,sendT:0,joinT:0,over:false,unsubs:[],actions:[],actionSeq:0,actionAck:0,claimed:new Set(),joining:false,joinToken:0};
+const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false,recorded:false,gen:0,seed:0,shots:0,tk:[],dm:[],ff:0,myPeer:null,sendT:0,joinT:0,over:false,unsubs:[],actions:[],actionSeq:0,actionAck:0,claimed:new Set(),joining:false,joinToken:0};
 const R={present:false,peer:null,nm:'Partner',gn:-1,al:1,out:0,sh:0,lastSh:0,ff:0,ffApplied:0,tk:[],dm:[],dmApplied:[],ph:'',seed:0,mc:0,mon:null,
   raw:{x:0,z:0,y:0,yaw:0,pitch:0,torch:false,run:false,crouch:false,hidden:false,reload:false,aim:false},pos:new THREE.Vector3(),vx:0,vz:0,yaw:0,pitch:0,stepD:0,seen:false,actions:[],actionAck:0,grants:[]};
 function seeded(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -1784,7 +1785,8 @@ function hostStart(){
 }
 function startCoopRound(seed,gen){
   initAudio();
-  NET.gen=gen;NET.seed=seed;NET.inGame=true;NET.over=false;NET.myAl=true;NET.myOut=false;NET.shots=0;NET.ff=0;NET.tk=[];NET.dm=new Array(MAX_MON).fill(0);
+  NET.gen=gen;NET.seed=seed;NET.inGame=true;NET.over=false;NET.myAl=true;NET.myOut=false;NET.recorded=false;NET.shots=0;NET.ff=0;NET.tk=[];NET.dm=new Array(MAX_MON).fill(0);
+  runToken++;$('ceRank').textContent='';
   avSpot.visible=true;avFlash.visible=qualityLevel!=='low';
   NET.actions=[];NET.actionSeq=0;NET.actionAck=0;NET.claimed.clear();R.actions=[];R.actionAck=0;R.grants=[];
   R.dmApplied=new Array(MAX_MON).fill(0);R.lastSh=R.gn===gen?R.sh:0;R.ffApplied=R.gn===gen?R.ff:0;R.seen=false;
@@ -1801,6 +1803,8 @@ function startCoopRound(seed,gen){
 }
 function coopLocalDone(how){
   NET.myAl=how!=='dead';NET.myOut=how==='out';
+  // Each partner records their own result once a round, as soon as they get out or fall.
+  if(!NET.recorded){NET.recorded=true;const own=streak.snapshot();recordRun({mode:'coop',escaped:how==='out',time:elapsed,kills:own.kills,score:own.points,partner:R.nm},'ceRank');}
   mouseDown=false;setLight(spot,0);setLight(bounce,0);setLight(fpTorchLight,0);setLight(muzzleLight,0);
   torch.visible=false;gun.visible=false;gunOut=false;$('flash').style.opacity=0;
   sendNet(true);
@@ -1953,7 +1957,7 @@ function openMenu(){state='menu';$('whoName').textContent=playerName||'Guest';sh
 
 let localScores=[];try{localScores=JSON.parse(lsGet(LS_SCORES)||'[]');if(!Array.isArray(localScores))localScores=[];}catch(e){localScores=[];}
 localScores=localScores.map(cleanRow).filter(Boolean);
-let sharedRows=null,sharedState='loading',myId=null,canPost=null,lastMine=null,scoresCol=null,amOwner=false;
+let sharedRows=null,sharedState='loading',myId=null,canPost=null,lastMine=null,scoresCol=null,amOwner=false,runToken=0;
 // ===== I1b: chaos, streaks, HUDFX =====
 // Chaos director (practical lights that stutter, surge and black out, emergency mood, beacons, scare cues), kill
 // streaks, hitstop and the HUDFX layer. Existing code calls in through one-line hooks only: chaosWorldBuilt
@@ -2168,13 +2172,14 @@ function dopaSnapshot(){
       killFlash:typeof fxKill!=='undefined'?fxKill:null,tintedCones:dopa.cones.size}};
 }
 function fnv(str){let h=0x811c9dc5;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,0x01000193)>>>0;}return h.toString(36);}
-function encodeResult(r){const j=JSON.stringify({n:r.name,t:r.time,k:r.kills,a:r.at});const b=btoa(unescape(encodeURIComponent(j))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');return 'HOLLOW-'+b+'-'+fnv('hollow|'+j);}
+function encodeResult(r){const o={n:r.name,t:r.time,k:r.kills,a:r.at};if(r.score)o.s=r.score;if(r.mode==='coop'){o.m='coop';if(r.partner)o.p=r.partner;}if(r.escaped===false)o.e=0;
+  const j=JSON.stringify(o);const b=btoa(unescape(encodeURIComponent(j))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');return 'HOLLOW-'+b+'-'+fnv('hollow|'+j);}
 function decodeResult(code){
   const m=String(code).trim().match(/^HOLLOW-([A-Za-z0-9_-]+)-([a-z0-9]+)$/);if(!m)return null;
   try{let b=m[1].replace(/-/g,'+').replace(/_/g,'/');while(b.length%4)b+='=';const j=decodeURIComponent(escape(atob(b)));
-    if(fnv('hollow|'+j)!==m[2])return null;const o=JSON.parse(j);return cleanRow({name:o.n,time:o.t,kills:o.k,at:o.a});}catch(e){return null;}
+    if(fnv('hollow|'+j)!==m[2])return null;const o=JSON.parse(j);return cleanRow({name:o.n,time:o.t,kills:o.k,at:o.a,score:o.s,mode:o.m,partner:o.p,escaped:o.e!==0});}catch(e){return null;}
 }
-function localBest(){const mine=localScores.map(cleanRow).filter(r=>r&&(!playerName||r.name===playerName)).sort((a,b)=>a.time-b.time);return mine[0]||null;}
+function localBest(){const me=nameKey(playerName);return localScores.map(cleanRow).filter(r=>r&&(!me||nameKey(r.name)===me)).sort(compareRuns)[0]||null;}
 function copyCode(codeEl,btn){const txt=codeEl.textContent;
   const done=()=>{btn.textContent='Copied';setTimeout(()=>btn.textContent='Copy code',1600);};
   const sel=()=>{try{const r=document.createRange();r.selectNodeContents(codeEl);const s=getSelection();s.removeAllRanges();s.addRange(r);btn.textContent='Press Ctrl+C';}catch(e){}};
@@ -2182,13 +2187,20 @@ function copyCode(codeEl,btn){const txt=codeEl.textContent;
 function updateShare(){
   const posting=sharedRows!==null&&canPost!==false;
   const best=localBest();
-  const onBoard=best&&sharedRows&&sharedRows.some(r=>r.name===best.name&&r.time<=best.time);
+  const onBoard=best&&sharedRows&&sharedRows.some(r=>nameKey(r.name)===nameKey(best.name)&&r.mode===best.mode&&compareRuns(r,best)<=0);
   const show=!posting&&sharedState!=='loading'&&best&&!onBoard;
   $('menuShare').hidden=!show;if(show)$('menuCode').textContent=encodeResult(best);
   $('importForm').hidden=!(amOwner&&scoresCol);
 }
-function cleanRow(r){if(!r||typeof r!=='object')return null;const time=Number(r.time);if(!isFinite(time)||time<=0)return null;
-  return {name:String(r.name||'Someone').slice(0,18),time,kills:Math.max(0,Math.min(12,Number(r.kills)||0)),at:Number(r.at)||0,uid:r.uid||null,imported:!!r.imported};}
+// Rows without the newer fields are solo escapes, the only results the board used to keep.
+function cleanRow(r){if(!r||typeof r!=='object')return null;const time=Number(r.time),escaped=r.escaped!==false,mode=r.mode==='coop'?'coop':'solo';if(!isFinite(time)||time<0||(escaped&&time<=0))return null;
+  return {name:String(r.name||'Someone').slice(0,18),time,kills:Math.max(0,Math.min(12,Number(r.kills)||0)),score:Math.max(0,Math.min(1e6,Math.floor(Number(r.score)||0))),
+    mode,partner:mode==='coop'?String(r.partner||'').slice(0,18):'',escaped,at:Number(r.at)||0,uid:r.uid||null,imported:!!r.imported};}
+// Same order as the server: escapes first, then higher score, then the faster escape or longer survival.
+function compareRuns(a,b){return (b.escaped-a.escaped)||(b.score-a.score)||(a.escaped?a.time-b.time:b.time-a.time)||(a.at-b.at);}
+function nameKey(n){return String(n||'').replace(/\s+/g,' ').trim().toLowerCase();}
+function fmtScore(n){return String(Math.max(0,Math.floor(Number(n)||0))).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
+function runSummary(r){return [(r.escaped?'escaped in ':'lasted ')+fmtTime(r.time),r.score?fmtScore(r.score)+' pts':'',r.mode==='coop'?'co-op'+(r.partner?' with '+r.partner:''):''].filter(Boolean).join(' · ');}
 // ===== I2: audio integration =====
 // Creature voices (audio.js), the player's body (player-audio.js) and the weapons (weapon-audio.js) are driven from
 // here; call sites elsewhere only make short calls into this section.
@@ -2396,28 +2408,34 @@ function resumeAudio(){const w=weaponDefs[weaponIndex];if(weaponAudio&&state==='
 
 function renderBoards(){
   const shared=sharedRows!==null;
-  const all=(shared?sharedRows:localScores.map(cleanRow).filter(Boolean)).slice().sort((a,b)=>a.time-b.time);
-  const isMine=r=>shared?((myId&&r.uid===myId)||(r.imported&&playerName&&r.name===playerName)):(playerName&&r.name===playerName);
-  const myIdx=all.findIndex(isMine);
+  const all=(shared?sharedRows:localScores.map(cleanRow).filter(Boolean)).slice().sort(compareRuns);
+  const me=nameKey(playerName);
+  const isMine=r=>!!me&&nameKey(r.name)===me&&(!shared||(!!myId&&r.uid===myId)||r.imported);
+  // The player's best solo and best co-op runs are marked, and still listed when they fall outside the top ten.
+  const mineAt=['solo','coop'].map(mode=>all.findIndex(r=>r.mode===mode&&isMine(r))).filter(i=>i>=0).sort((a,b)=>a-b);
+  const myIdx=mineAt.length?mineAt[0]:-1;
   const top=all.slice(0,10);
-  const mkRow=(r,rank)=>{const li=document.createElement('li');if(isMine(r)&&rank===myIdx+1)li.className='me';
-    const cells=[['rk',String(rank)],['nm',r.name],['tm',fmtTime(r.time)],['kl',r.kills?r.kills+(r.kills===1?' kill':' kills'):'no kills']];
+  const mkRow=(r,rank)=>{const li=document.createElement('li');if(mineAt.includes(rank-1))li.className='me';
+    li.title=r.name+': '+runSummary(r);
+    const cells=[['rk',String(rank)],['nm',r.name],['tg',[r.mode==='coop'?'co-op':'',r.escaped?'':'fell'].filter(Boolean).join(' · ')],
+      ['sc',fmtScore(r.score)],['tm',fmtTime(r.time)],['kl',r.kills?r.kills+(r.kills===1?' kill':' kills'):'no kills']];
     for(const [c,t] of cells){const sp=document.createElement('span');sp.className=c;sp.textContent=t;li.appendChild(sp);}return li;};
   document.querySelectorAll('.board').forEach(b=>{
     b.querySelector('.boardScope').textContent=sharedState==='loading'?'Loading':shared?'All players':'This browser';
     const mine=b.querySelector('.boardMine');mine.textContent='';
     if(playerName&&sharedState!=='loading'){
-      if(myIdx>=0){mine.append('Your best: ');const bb=document.createElement('b');bb.textContent='#'+(myIdx+1);mine.append(bb,` of ${all.length} · ${fmtTime(all[myIdx].time)}`);}
-      else{const lb=localBest();mine.textContent=lb?`Your best on this browser: ${fmtTime(lb.time)} \u2014 not on the shared board yet.`:`${playerName}, you haven\u2019t escaped yet.`;}
+      if(myIdx>=0){mine.append('Your best: ');const bb=document.createElement('b');bb.textContent='#'+(myIdx+1);mine.append(bb,` of ${all.length} · ${runSummary(all[myIdx])}`);}
+      else{const lb=localBest();mine.textContent=lb?`Your best on this browser: ${runSummary(lb)} \u2014 ${all.length>=100?'not in the top 100 yet':'not on the shared board yet'}.`:`${playerName}, finish a run to get on the board.`;}
     }
     const ol=b.querySelector('.boardList');ol.textContent='';
-    if(!all.length){const p=document.createElement('p');p.className='empty';p.textContent='Nobody has escaped yet. Be the first.';ol.appendChild(p);}
+    if(!all.length){const p=document.createElement('p');p.className='empty';p.textContent='No scores yet. Be the first to go in.';ol.appendChild(p);}
     top.forEach((r,i)=>ol.appendChild(mkRow(r,i+1)));
-    if(myIdx>=10){const g=document.createElement('li');g.className='gap';g.textContent='⋮';ol.appendChild(g);ol.appendChild(mkRow(all[myIdx],myIdx+1));}
+    const below=mineAt.filter(i=>i>=10);
+    if(below.length){const g=document.createElement('li');g.className='gap';g.textContent='⋮';ol.appendChild(g);for(const i of below)ol.appendChild(mkRow(all[i],i+1));}
     let foot='';
     if(shared&&canPost===false)foot='Only the owner\u2019s account can post directly. Other players send the owner a result code from the win screen or main menu.';
-    else if(!shared&&sharedState==='none')foot='Times are saved on this browser.';
-    else if(shared)foot='Each player’s best time is kept.';
+    else if(!shared&&sharedState==='none')foot='Scores are saved on this browser.';
+    else if(shared)foot='Escapes rank first, then score. Every player keeps a best solo and a best co-op run.';
     b.querySelector('.boardFoot').textContent=foot;
   });
   updateShare();
@@ -2430,32 +2448,42 @@ async function initBoard(){
     if(user){try{myId=await user.id();}catch(e){myId=null;}try{canPost=await user.can('data.write');}catch(e){canPost=null;}try{amOwner=await user.isOwner();}catch(e){amOwner=false;}}
     if(!myId)canPost=false;
     scoresCol=db.collection('scores');
-    scoresCol.orderBy('time','asc').limit(50).onSnapshot(snap=>{
+    scoresCol.orderBy('time','asc').limit(100).onSnapshot(snap=>{
       sharedState='live';
       sharedRows=snap.docs.map(d=>{const r=cleanRow(d.data()||{});if(r&&!r.uid)r.uid=d.id;return r;}).filter(Boolean);
       renderBoards();
     },()=>{sharedState='none';sharedRows=null;renderBoards();});
   }catch(e){sharedState='none';renderBoards();}
 }
-async function recordWin(time,kills){
-  const row={name:playerName||'Guest',time:Math.round(time*10)/10,kills,at:Date.now()};
-  lastMine=row;localScores.push(row);localScores.sort((a,b)=>a.time-b.time);localScores=localScores.slice(0,50);lsSet(LS_SCORES,JSON.stringify(localScores));
-  const rankIn=list=>list.slice().sort((a,b)=>a.time-b.time).findIndex(r=>r===row||(r.at===row.at&&r.time===row.time))+1;
-  let note='';
+// Two co-op partners on one network share an IP, and the server accepts one score per IP every few seconds.
+async function postRun(ref,data){
+  for(let attempt=0;;attempt++){
+    try{return await ref.set(data);}
+    catch(e){if(!e||e.code!=='rate_limited'||attempt>=3)throw e;await new Promise(done=>setTimeout(done,Math.min(10,Math.max(1,Number(e.retryAfter)||3))*1000+Math.random()*400));}
+  }
+}
+// Every finished run is recorded: solo or co-op, escaped or not. noteId is the result screen's rank line.
+async function recordRun(run,noteId){
+  const row=cleanRow({...run,name:playerName||'Guest',time:Math.min(7200,Math.round(run.time*10)/10),at:Date.now()});if(!row)return;
+  const token=++runToken,note=text=>{if(token===runToken)$(noteId).textContent=`Score ${fmtScore(row.score)}.`+(text?' '+text:'');};
+  lastMine=row;localScores.push(row);localScores.sort(compareRuns);localScores=localScores.slice(0,50);lsSet(LS_SCORES,JSON.stringify(localScores));
+  note('');renderBoards();
+  let text='';
   if(scoresCol&&myId&&canPost!==false){
     try{
-      const ref=scoresCol.doc(myId),cur=sharedRows&&sharedRows.find(r=>r.uid===myId);
-      if(!cur||row.time<cur.time||cur.name!==row.name){
-        const best=cur&&cur.time<row.time?cur.time:row.time;
-        await ref.set({name:row.name,time:best,kills:best===row.time?kills:cur.kills,at:best===row.time?row.at:cur.at,uid:myId});
+      const cur=sharedRows&&sharedRows.find(r=>r.uid===myId&&r.mode===row.mode&&nameKey(r.name)===nameKey(row.name)),kept=!!cur&&compareRuns(cur,row)<=0;
+      let best=kept?cur:null;
+      if(!kept||cur.name!==row.name){
+        const send=kept?cur:row;
+        const res=await postRun(scoresCol.doc(myId+'_'+row.mode+'_'+fnv(nameKey(row.name))),{name:row.name,time:send.time,kills:send.kills,score:send.score,mode:send.mode,partner:send.partner,escaped:send.escaped,at:send.at,uid:myId});
+        // A best run outside the cached top 100 is only known to the server.
+        if(!kept&&res&&res.improved===false&&res.best)best=cleanRow({...row,...res.best,partner:''});
       }
-      if(cur&&cur.time<row.time)note=`Your best is still ${fmtTime(cur.time)}.`;
-      else note='New personal best, posted to the board.';
-    }catch(e){note='Saved on this browser. Shared board temporarily unavailable.';}
-  }else{const r=rankIn(localScores);note=r?`Rank ${r} on this browser.`:'';}
-  const showCode=canPost===false||!scoresCol;
-  $('winShare').hidden=!showCode;if(showCode)$('winCode').textContent=encodeResult(row);
-  $('winRank').textContent=note;renderBoards();
+      text=best?`Your best ${row.mode==='coop'?'co-op ':''}run is still: ${runSummary(best)}.`:'New personal best, posted to the board.';
+    }catch(e){text='Saved on this browser. Shared board temporarily unavailable.';}
+  }else{const r=localScores.indexOf(row)+1;text=r?`Rank ${r} on this browser.`:'';}
+  if(noteId==='winRank'){const showCode=canPost===false||!scoresCol;$('winShare').hidden=!showCode;if(showCode)$('winCode').textContent=encodeResult(row);}
+  note(text);renderBoards();
 }
 
 // Read-only instrumentation is useful for profiling; deterministic test controls

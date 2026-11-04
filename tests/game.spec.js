@@ -96,6 +96,7 @@ test('different enemy damage, armor, medical aid and fuse-powered escape work',a
   await page.keyboard.down('w');
   try{await expect.poll(async()=>(await state(page)).state,{timeout:60000}).toBe('win');}finally{await page.keyboard.up('w');}
   await expect(page.locator('#win')).toBeVisible();
+  await expect(page.locator('#winRank')).toHaveText(/^Score [\d,]+\. New personal best, posted to the board\.$/);
 });
 
 test('two real browser peers synchronize map, monsters, fuses, doors, jumping and final exit',async({browser})=>{
@@ -146,7 +147,8 @@ test('two real browser peers synchronize map, monsters, fuses, doors, jumping an
           await expect.poll(async()=>(await state(host)).state,{timeout:60000}).toBe('coopEnd');
           await expect.poll(async()=>(await state(guest)).state).toBe('coopEnd');
         }finally{await host.keyboard.up('w');}
-        for(const peer of [host,guest]){await expect(peer.locator('#ceTitle')).toHaveText('Outside');await expect(peer.locator('#ceText')).toContainText('You both made it out');}
+        for(const peer of [host,guest]){await expect(peer.locator('#ceTitle')).toHaveText('Outside');await expect(peer.locator('#ceText')).toContainText('You both made it out');
+          await expect(peer.locator('#ceRank')).toHaveText(/^Score [\d,]+\. New personal best, posted to the board\.$/);}
   }finally{await hostContext.close();await guestContext.close();}
 });
 

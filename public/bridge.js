@@ -32,9 +32,18 @@
   var listeners = new Set(), pollTimer = null, pollPromise = null, pollController = null;
   var pollEpoch = 0, pollAgain = false, cachedSnapshot = null, lastPollError = null, pageHidden = false;
 
+  // The 8 s request limit is counted in 250 ms timer steps, not wall time. A step that runs late because the page
+  // was busy (shader compiles on a slow phone) still counts 250 ms, so a reply that arrived meanwhile is read, not
+  // aborted: an abort there would report a score the server already saved as not posted.
+  function deadline(controller, ms) {
+    var left = ms, timer = null;
+    function step() { timer = setTimeout(function () { left -= 250; if (left > 0) step(); else controller.abort(); }, 250); }
+    step();
+    return function () { clearTimeout(timer); };
+  }
   async function requestJSON(options, controller) {
     controller = controller || new AbortController();
-    var timeout = setTimeout(function () { controller.abort(); }, 8000);
+    var stop = deadline(controller, 8000);
     try {
       var response = await fetch(apiURL, Object.assign({ cache: 'no-store' }, options, { signal: controller.signal }));
       if (!response.ok) {
@@ -43,7 +52,7 @@
         throw failure;
       }
       return await response.json();
-    } finally { clearTimeout(timeout); }
+    } finally { stop(); }
   }
 
   function schedulePoll(delay) {
@@ -122,7 +131,10 @@
       doc: function () { return {
         set: async function (data) {
           if (!object(data)) throw error('invalid_score', 'A score must be an object');
-          var result = await requestJSON({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uid: uid, name: data.name, time: data.time, kills: data.kills }) });
+          var result = await requestJSON({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+            uid: uid, name: data.name, time: data.time, kills: data.kills,
+            score: data.score, mode: data.mode, escaped: data.escaped, partner: data.partner
+          }) });
           refreshSoon();
           return result;
         }

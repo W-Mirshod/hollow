@@ -56,7 +56,8 @@ test('menu keeps actions in view, leaderboard visible and help in a dialog acros
   await ready(page,'Menu QA');
   const help=page.locator('#howTo'),opener=page.locator('#howToBtn'),board=page.locator('#menu .scores-detail .board');
   await expect(board.locator('.boardScope')).toHaveText('All players');
-  await expect(board.locator('.empty')).toContainText('Nobody has escaped yet');
+  await expect(board.locator('h2')).toHaveText('Scoreboard');
+  await expect(board.locator('.empty')).toContainText('No scores yet');
   for(const viewport of viewports){
     await expectMenuLayout(page,viewport);
     await expect(help).toBeHidden();
@@ -130,15 +131,45 @@ for(const source of ['shared','local fallback']){
     await expect(board.locator('.boardList .gap')).toHaveCount(1);
     await expect(board.locator('.boardList .me .nm')).toHaveText(name);
     await expect(board.locator('.boardList .me .tm')).toHaveText('2:50.0');
-    await expect(board.locator('.boardMine')).toHaveText('Your best: #12 of 12 · 2:50.0');
+    await expect(board.locator('.boardMine')).toHaveText('Your best: #12 of 12 · escaped in 2:50.0');
     if(source==='local fallback'){
-      await expect(board.locator('.boardFoot')).toHaveText('Times are saved on this browser.');
+      await expect(board.locator('.boardFoot')).toHaveText('Scores are saved on this browser.');
       await expect(page.locator('#menuShare')).toBeVisible();
       await expect(page.locator('#menuCode')).toHaveText(/^HOLLOW-/);
     }
     for(const viewport of viewports)await expectMenuLayout(page,viewport);
   });
 }
+
+test('co-op and fallen runs show on the main screen with scores, and both of the player\u2019s bests stay listed',async({page})=>{
+  const name='Board QA',uid='menu_board_qa';
+  const run=(i,fields)=>({uid:'menu_other_'+i,name:'Player '+i,mode:'solo',partner:'',escaped:false,time:300,kills:0,score:900-(i-3)*50,at:i,...fields});
+  const served=[
+    run(1,{name:'Alice',mode:'coop',partner:'Bob',escaped:true,time:252.3,kills:6,score:1250}),
+    run(2,{name:'Bob',mode:'coop',partner:'Alice',escaped:true,time:252.3,kills:4,score:900}),
+    ...Array.from({length:9},(_,i)=>run(3+i,{})),
+    {uid,name,mode:'coop',partner:'Alice',escaped:false,time:61.5,kills:1,score:120,at:20},
+    {uid,name,mode:'solo',partner:'',escaped:false,time:45,kills:0,score:40,at:21},
+    // Another player on this browser is not this player.
+    {uid,name:'Sibling',mode:'solo',partner:'',escaped:false,time:20,kills:0,score:10,at:22}
+  ];
+  await page.addInitScript(uid=>localStorage.setItem('hollow.uid',uid),uid);
+  await page.route('**/api/scores',route=>route.fulfill({json:served.slice().reverse()}));
+  await ready(page,name);
+  const board=page.locator('#menu .scores-detail .board'),rows=board.locator('.boardList li:not(.gap)');
+  await expect(board.locator('.boardScope')).toHaveText('All players');
+  await expect(rows.locator('.rk')).toHaveText(['1','2','3','4','5','6','7','8','9','10','12','13']);
+  await expect(rows.locator('.nm')).toHaveText(['Alice','Bob',...Array.from({length:8},(_,i)=>'Player '+(3+i)),name,name]);
+  await expect(rows.locator('.tg')).toHaveText(['co-op','co-op',...Array(8).fill('fell'),'co-op · fell','fell']);
+  await expect(rows.locator('.sc')).toHaveText(['1,250','900','900','850','800','750','700','650','600','550','120','40']);
+  await expect(rows.first().locator('.tm')).toHaveText('4:12.3');
+  await expect(rows.first()).toHaveAttribute('title','Alice: escaped in 4:12.3 · 1,250 pts · co-op with Bob');
+  await expect(board.locator('.boardList .gap')).toHaveCount(1);
+  await expect(board.locator('.boardList .me .nm')).toHaveText([name,name]);
+  await expect(board.locator('.boardMine')).toHaveText('Your best: #12 of 14 · lasted 1:01.5 · 120 pts · co-op with Alice');
+  await expect(board.locator('.boardFoot')).toContainText('best solo and a best co-op run');
+  for(const viewport of viewports)await expectMenuLayout(page,viewport);
+});
 
 test('short name entry, name changes, co-op and immediate entry preserve navigation',async({page})=>{
   await page.setViewportSize({width:390,height:844});await ready(page,null);

@@ -31,6 +31,14 @@ function clock() {
         task.callback();
       }
       throw new Error('Timer loop did not settle');
+    },
+    // The page was busy for `duration`: the timers that came due meanwhile then run late, once each, before
+    // anything that arrived during the stall.
+    async stall(duration) {
+      await flush();
+      now += duration;
+      const overdue = [...timers].filter(([, task]) => task.at <= now).sort((a, b) => a[1].at - b[1].at || a[0] - b[0]);
+      for (const [id, task] of overdue) if (timers.delete(id)) task.callback();
     }
   };
 }
@@ -146,7 +154,40 @@ test('HTTP request timeouts notify scoreboard subscribers and posting preserves 
   });
   const sent = JSON.parse(h.requests[h.requests.length - 1].options.body);
   assert.equal(sent.uid, await (await h.use('user')).id());
+  assert.deepEqual(Object.keys(sent).sort(), ['kills', 'name', 'time', 'uid'], 'an escape-only result keeps the original request shape');
   assert.equal(h.timer.timers.size, 0);
+});
+
+test('a reply that arrives while the page is stalled is read, not timed out; a silent server still times out', async () => {
+  const h = harness();
+  let reply;
+  h.fetchWith((url, options) => new Promise((resolve, reject) => {
+    reply = resolve;
+    options.signal.addEventListener('abort', () => reject(new Error('timed out')));
+  }));
+  const db = await h.use('db'), run = { name: 'Guest', time: 38.8, kills: 0, score: 0, mode: 'coop', escaped: false, partner: 'Host' };
+  const posted = db.collection('scores').doc().set(run);
+  // Nine busy seconds (switching to spectating can compile shaders for that long on a slow device), then the reply.
+  await h.timer.stall(9000);
+  reply(response({ ok: true, improved: true }));
+  assert.deepEqual(await posted, { ok: true, improved: true });
+  assert.equal(h.timer.timers.size, 0);
+
+  const unanswered = assert.rejects(db.collection('scores').doc().set(run), /timed out/);
+  await h.timer.tick(7750);
+  assert.equal(h.requests[h.requests.length - 1].options.signal.aborted, false);
+  await h.timer.tick(250);
+  await unanswered;
+  assert.equal(h.timer.timers.size, 0);
+});
+
+test('posting a run forwards its score, mode, outcome and co-op partner', async () => {
+  const h = harness();
+  h.fetchWith(async () => response({ ok: true }));
+  const db = await h.use('db');
+  await db.collection('scores').doc().set({ name: 'Guest', time: 42.5, kills: 2, score: 290, mode: 'coop', escaped: false, partner: 'Host', at: 7, uid: 'ignored' });
+  const sent = JSON.parse(h.requests[h.requests.length - 1].options.body);
+  assert.deepEqual(sent, { uid: await (await h.use('user')).id(), name: 'Guest', time: 42.5, kills: 2, score: 290, mode: 'coop', escaped: false, partner: 'Host' });
 });
 
 test('concurrent joins wait for the server acknowledgement and use one WebSocket', async () => {

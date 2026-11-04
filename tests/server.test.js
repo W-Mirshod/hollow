@@ -222,20 +222,58 @@ test('scoreboard sanitizes names, keeps the best time and supports twelve kills'
   const f = await fixture(t);
   const initial = await f.score({ ...validScore, name: '  Alice\t \u0000 Pilot  ', time: 60.06 });
   assert.equal(initial.status, 200);
-  assert.deepEqual(initial.json(), { ok: true, best: 60.1 });
+  assert.deepEqual(initial.json(), { ok: true, improved: true, best: { escaped: true, time: 60.1, score: 0, kills: 12 } });
   let records = (await f.request('/api/scores')).json();
   assert.equal(records[0].name, 'Alice Pilot');
   assert.equal(records[0].kills, 12);
   assert.ok(records[0].at > 0);
-  const slower = await f.score({ ...validScore, name: 'Renamed', time: 100, kills: 0 });
-  assert.equal(slower.json().best, 60.1);
+  // Without the newer fields a submission is a solo escape, as older clients sent.
+  assert.deepEqual([records[0].mode, records[0].escaped, records[0].score, records[0].partner], ['solo', true, 0, '']);
+  const slower = await f.score({ ...validScore, name: 'alice PILOT', time: 100, kills: 0 });
+  assert.equal(slower.json().improved, false);
+  assert.equal(slower.json().best.time, 60.1);
   records = (await f.request('/api/scores')).json();
-  assert.equal(records[0].name, 'Renamed');
+  assert.equal(records.length, 1, 'a change of letter case is the same player');
+  assert.equal(records[0].name, 'alice PILOT');
   assert.equal(records[0].kills, 12);
-  await f.score({ ...validScore, time: 55.11, kills: 100 });
+  await f.score({ ...validScore, name: 'Alice Pilot', time: 55.11, kills: 100 });
   await f.score({ ...validScore, uid: 'player_002', time: 40, kills: -3 });
   records = (await f.request('/api/scores')).json();
   assert.deepEqual(records.map(record => [record.uid, record.time, record.kills]), [['player_002', 40, 0], ['player_001', 55.1, 12]]);
+  // Another name on the same browser is another player and keeps its own entry.
+  await f.score({ ...validScore, name: 'Sibling', time: 300, kills: 1 });
+  records = (await f.request('/api/scores')).json();
+  assert.deepEqual(records.map(record => [record.uid, record.name, record.time]), [['player_002', 'Explorer', 40], ['player_001', 'Alice Pilot', 55.1], ['player_001', 'Sibling', 300]]);
+});
+
+test('runs that end in the ward and co-op runs are recorded for every player', async t => {
+  const f = await fixture(t);
+  const coop = { mode: 'coop', escaped: false };
+  for (const run of [
+    { ...coop, uid: 'player_001', name: 'Host', partner: 'Guest', time: 8.04, kills: 2, score: 290 },
+    { ...coop, uid: 'player_002', name: 'Guest', partner: ' Host\u0007 ', time: 30, kills: 1, score: 150 },
+    { uid: 'player_001', name: 'Host', partner: 'Nobody', time: 200, kills: 3, score: 450 },
+    { uid: 'player_003', name: 'Loner', escaped: false, time: 300, kills: 2, score: 290 }
+  ]) assert.equal((await f.score(run)).json().improved, true, run.name);
+  let records = (await f.request('/api/scores')).json();
+  // Escapes first, then the highest score, then the longer survival.
+  assert.deepEqual(records.map(record => [record.name, record.mode, record.escaped, record.score, record.time]), [
+    ['Host', 'solo', true, 450, 200], ['Loner', 'solo', false, 290, 300], ['Host', 'coop', false, 290, 8], ['Guest', 'coop', false, 150, 30]
+  ]);
+  assert.deepEqual(records.map(record => [record.partner, record.kills]), [['', 3], ['', 2], ['Guest', 2], ['Host', 1]]);
+  const worse = await f.score({ ...coop, uid: 'player_001', name: 'Host', partner: 'Guest', time: 900, kills: 0, score: 100 });
+  assert.deepEqual(worse.json(), { ok: true, improved: false, best: { escaped: false, time: 8, score: 290, kills: 2 } });
+  // Getting out beats any run that ended inside, whatever its score.
+  const escaped = await f.score({ ...coop, uid: 'player_001', name: 'Host', partner: 'Guest', escaped: true, time: 500, kills: 0, score: 0 });
+  assert.deepEqual(escaped.json(), { ok: true, improved: true, best: { escaped: true, time: 500, score: 0, kills: 0 } });
+  records = (await f.request('/api/scores')).json();
+  assert.deepEqual(records.slice(0, 2).map(record => [record.name, record.mode, record.time]), [['Host', 'solo', 200], ['Host', 'coop', 500]]);
+  assert.equal(records.length, 4);
+  // Scores are whole points within bounds; a run that ends inside may be short.
+  await f.score({ uid: 'player_004', name: 'Quick', escaped: false, time: 3, score: 2e9 });
+  await f.score({ uid: 'player_005', name: 'Unlucky', escaped: false, time: 0, score: -40 });
+  records = (await f.request('/api/scores')).json();
+  assert.deepEqual(records.filter(record => ['Quick', 'Unlucky'].includes(record.name)).map(record => [record.name, record.score, record.time]), [['Quick', 1000000, 3], ['Unlucky', 0, 0]]);
 });
 
 test('invalid, oversized and malformed score submissions cannot damage the board', async t => {
@@ -243,7 +281,9 @@ test('invalid, oversized and malformed score submissions cannot damage the board
   const invalid = [
     null, [], {}, { ...validScore, uid: 'short' }, { ...validScore, uid: '<bad-player>' },
     { ...validScore, name: 'a' }, { ...validScore, name: {} }, { ...validScore, time: 14.99 },
-    { ...validScore, time: 7200.01 }, { ...validScore, time: 'Infinity' }, { ...validScore, kills: 'invalid' }
+    { ...validScore, time: 7200.01 }, { ...validScore, time: 'Infinity' }, { ...validScore, kills: 'invalid' },
+    { ...validScore, mode: 'versus' }, { ...validScore, mode: ['coop'] }, { ...validScore, escaped: 'yes' }, { ...validScore, escaped: 1 },
+    { ...validScore, score: 'lots' }, { ...validScore, escaped: false, time: -1 }, { ...validScore, escaped: false, time: 7200.01 }
   ];
   for (const body of invalid) assert.equal((await f.score(body)).status, 400, JSON.stringify(body));
   assert.equal((await f.score('{')).status, 400);
@@ -284,7 +324,7 @@ test('shutdown flushes pending scores atomically and a new server reloads them',
   await f.app.close();
   const saved = JSON.parse(await fs.readFile(path.join(f.dataDir, 'scores.json'), 'utf8'));
   assert.equal(Object.keys(saved).length, 20);
-  assert.equal(saved.player_000.time, 30);
+  assert.equal(saved['player_000|solo|explorer'].time, 30);
   await assert.rejects(fs.stat(path.join(f.dataDir, 'scores.json.tmp')), { code: 'ENOENT' });
   const second = createGameServer(f.configuration);
   f.apps.push(second);
@@ -302,6 +342,26 @@ test('startup ignores corrupt records and returns at most the fastest 100 scores
   assert.equal(records.length, 100);
   assert.equal(records[0].time, 30);
   assert.equal(records[99].time, 129);
+});
+
+test('older per-browser score files load as solo escapes alongside newer records', async t => {
+  const f = await fixture(t, { initialScores: {
+    player_001: { name: 'Veteran', time: 50, kills: 3, at: 1 },
+    'player_002|coop|guest': { uid: 'player_002', name: 'Guest', mode: 'coop', partner: 'Host', escaped: false, time: 20, kills: 1, score: 120, at: 2 },
+    'not a uid|coop|x': { name: 'No identity', mode: 'coop', escaped: false, time: 20, score: 5 },
+    player_003: { name: 'Lost', mode: 'coop', escaped: false, time: 'soon' },
+    player_004: { name: 'Odd mode', mode: 'arena', time: 90 }
+  } });
+  const records = (await f.request('/api/scores')).json();
+  assert.deepEqual(records, [
+    { uid: 'player_001', name: 'Veteran', mode: 'solo', partner: '', escaped: true, time: 50, kills: 3, score: 0, at: 1 },
+    { uid: 'player_002', name: 'Guest', mode: 'coop', partner: 'Host', escaped: false, time: 20, kills: 1, score: 120, at: 2 }
+  ]);
+  await f.score({ uid: 'player_001', name: 'Veteran', time: 45, kills: 4, score: 150 });
+  await f.app.close();
+  const saved = JSON.parse(await fs.readFile(path.join(f.dataDir, 'scores.json'), 'utf8'));
+  assert.deepEqual(Object.keys(saved).sort(), ['player_001|solo|veteran', 'player_002|coop|guest']);
+  assert.equal(saved['player_001|solo|veteran'].score, 150);
 });
 
 test('an unreadable scoreboard does not crash startup or erase the original file', async t => {

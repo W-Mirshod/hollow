@@ -13,6 +13,8 @@ const UID_RE = /^[A-Za-z0-9_-]{8,40}$/;
 const THREE_BUILD = new Set(['three.webgpu.js', 'three.tsl.js', 'three.core.js']);
 const THREE_ADDON_RE = /^\/vendor\/three\/addons\/((?:[A-Za-z0-9_-]+\/){0,8}[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.js)$/;
 const MAX_KILLS = 12;
+const MAX_SCORE = 1000000;
+const MODES = new Set(['solo', 'coop']);
 const MIME = Object.freeze({
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -32,6 +34,38 @@ function cleanName(value) {
   return typeof value === 'string'
     ? value.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 18)
     : '';
+}
+
+// Escapes rank above runs that ended in the ward; then higher score, then the faster escape or the
+// longer survival, then the earlier run. public/game.js sorts the board with the same order.
+function compareRuns(a, b) {
+  return (b.escaped - a.escaped) || (b.score - a.score) || (a.escaped ? a.time - b.time : b.time - a.time) || (a.at - b.at);
+}
+
+// One best run is kept per browser identity, mode and (case-insensitive) player name, so players who
+// share a browser and both co-op partners each keep their own entry.
+function recordKey(run) {
+  return run.uid + '|' + run.mode + '|' + run.name.toLowerCase();
+}
+
+// A run as submitted or saved; missing fields describe the original solo escape. Returns null if invalid.
+function cleanRun(uid, record, at) {
+  if (!UID_RE.test(uid) || !record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const name = cleanName(record.name);
+  const mode = record.mode == null ? 'solo' : record.mode;
+  const escaped = record.escaped == null ? true : record.escaped;
+  const time = Number(record.time);
+  const kills = record.kills == null ? 0 : Number(record.kills);
+  const score = record.score == null ? 0 : Number(record.score);
+  if (name.length < 2 || !MODES.has(mode) || typeof escaped !== 'boolean' || !Number.isFinite(time) ||
+    time < (escaped ? 15 : 0) || time > 7200 || !Number.isFinite(kills) || !Number.isFinite(score)) return null;
+  return {
+    uid, name, mode, partner: mode === 'coop' ? cleanName(record.partner) : '', escaped,
+    time: Math.round(time * 10) / 10,
+    kills: Math.max(0, Math.min(MAX_KILLS, Math.floor(kills))),
+    score: Math.max(0, Math.min(MAX_SCORE, Math.floor(score))),
+    at
+  };
 }
 
 function readBody(req, limit) {
@@ -108,16 +142,15 @@ function createGameServer(options = {}) {
   try {
     const saved = JSON.parse(fs.readFileSync(scoresFile, 'utf8'));
     if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
-      for (const [uid, record] of Object.entries(saved)) {
-        if (!UID_RE.test(uid) || !record || typeof record !== 'object') continue;
-        const name = cleanName(record.name);
-        const time = Number(record.time);
-        if (name.length < 2 || !Number.isFinite(time) || time < 15 || time > 7200) continue;
-        scores[uid] = {
-          name, time: Math.round(time * 10) / 10,
-          kills: Math.max(0, Math.min(MAX_KILLS, Math.floor(Number(record.kills) || 0))),
-          at: Number.isFinite(Number(record.at)) ? Number(record.at) : 0
-        };
+      for (const [key, record] of Object.entries(saved)) {
+        if (!record || typeof record !== 'object') continue;
+        // Older files were keyed by browser identity alone and held solo escapes.
+        const uid = typeof record.uid === 'string' ? record.uid : key;
+        const run = cleanRun(uid, { ...record, kills: Number(record.kills) || 0, score: Number(record.score) || 0 },
+          Number.isFinite(Number(record.at)) ? Number(record.at) : 0);
+        if (!run) continue;
+        const id = recordKey(run);
+        if (!scores[id] || compareRuns(run, scores[id]) < 0) scores[id] = run;
       }
     }
   } catch (error) {
@@ -152,10 +185,7 @@ function createGameServer(options = {}) {
   }
 
   function topScores() {
-    return Object.entries(scores)
-      .map(([uid, record]) => ({ uid, ...record }))
-      .sort((a, b) => a.time - b.time || a.at - b.at)
-      .slice(0, 100);
+    return Object.values(scores).sort(compareRuns).slice(0, 100);
   }
 
   function requestIP(req) {
@@ -237,20 +267,16 @@ function createGameServer(options = {}) {
         try { body = JSON.parse(await readBody(req, 2048)); }
         catch (error) { throw error instanceof RequestError ? error : new RequestError(400, 'bad request'); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RequestError(400, 'invalid score');
-        const uid = typeof body.uid === 'string' ? body.uid : '';
-        const name = cleanName(body.name);
-        const rawTime = Number(body.time);
-        const rawKills = body.kills == null ? 0 : Number(body.kills);
-        if (!UID_RE.test(uid) || name.length < 2 || !Number.isFinite(rawTime) || rawTime < 15 || rawTime > 7200 || !Number.isFinite(rawKills)) {
-          throw new RequestError(400, 'invalid score');
-        }
-        const time = Math.round(rawTime * 10) / 10;
-        const kills = Math.max(0, Math.min(MAX_KILLS, Math.floor(rawKills)));
-        const current = scores[uid];
-        if (!current || time < current.time) scores[uid] = { name, time, kills, at: now };
-        else if (current.name !== name) current.name = name;
+        const run = cleanRun(typeof body.uid === 'string' ? body.uid : '', body, now);
+        if (!run) throw new RequestError(400, 'invalid score');
+        const id = recordKey(run);
+        const current = scores[id];
+        const improved = !current || compareRuns(run, current) < 0;
+        if (improved) scores[id] = run;
+        else if (current.name !== run.name) current.name = run.name;
         scheduleSave();
-        return json(req, res, 200, { ok: true, best: scores[uid].time });
+        const best = scores[id];
+        return json(req, res, 200, { ok: true, improved, best: { escaped: best.escaped, time: best.time, score: best.score, kills: best.kills } });
       }
       if (pathname === '/health' && (req.method === 'GET' || req.method === 'HEAD')) return send(req, res, 200, 'text/plain; charset=utf-8', 'ok');
       if (req.method !== 'GET' && req.method !== 'HEAD') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET, HEAD' });

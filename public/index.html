@@ -101,7 +101,7 @@
     </div>
     <aside class="menu-board scores-detail" aria-labelledby="boardTitle1">
       <section class="board" aria-labelledby="boardTitle1">
-        <div class="boardHead"><h2 id="boardTitle1">Fastest escapes</h2><span class="boardScope">Loading</span></div>
+        <div class="boardHead"><h2 id="boardTitle1">Scoreboard</h2><span class="boardScope">Loading</span></div>
         <p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p>
       </section>
       <div class="share menu-share" id="menuShare" hidden>
@@ -165,7 +165,7 @@
       <p class="err" id="coopErr" aria-live="polite"></p>
     </div>
     <footer class="coop-foot">
-      <p class="entry-fine">Watch each other’s backs, and your aim: friendly fire is on. Supplies go to whoever picks them up first; each player carries their own ammunition. If you fall, you watch through your partner’s eyes. Pausing does not stop a co-op game, and co-op escapes stay off the solo scoreboard.</p>
+      <p class="entry-fine">Watch each other’s backs, and your aim: friendly fire is on. Supplies go to whoever picks them up first; each player carries their own ammunition. If you fall, you watch through your partner’s eyes. Pausing does not stop a co-op game. Both players’ results go on the scoreboard, marked co-op.</p>
       <button type="button" class="entry-back" id="coopBack">Back to menu</button>
     </footer>
   </div>
@@ -177,8 +177,10 @@
     <div class="overline">Evacuation report / Co-op</div>
     <h1 class="title" id="ceTitle">Outside.</h1>
     <p class="lede" id="ceText"></p>
+    <p class="err result-rank" id="ceRank"></p>
     <p class="err muted" id="ceWait" aria-live="polite"></p>
     <div class="btns"><button type="button" class="primary" id="ceAgain">Play again</button><button type="button" id="ceLeave">Leave the game</button></div>
+    <section class="board" aria-labelledby="boardTitle4"><div class="boardHead"><h2 id="boardTitle4">Scoreboard</h2><span class="boardScope">Loading</span></div><p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p></section>
   </div>
 </div>
 
@@ -205,9 +207,10 @@
     <div class="overline danger-label">Evacuation failed / Record closed</div>
     <h1 class="title red" id="deadTitle">It found you.</h1>
     <p class="lede" id="deadText">The corridors are quiet again.</p>
+    <p class="err result-rank" id="deadRank"></p>
     <p class="rules">Every attempt leaves you wiser. Use corners to break sight, keep an escape route, and save a shelter for when fighting is no longer an option.</p>
     <div class="btns"><button type="button" class="primary" id="retryDark">Re-enter the ward</button><button type="button" id="deadMenuBtn">Main menu</button></div>
-    <section class="board" aria-labelledby="boardTitle3"><div class="boardHead"><h2 id="boardTitle3">Fastest escapes</h2><span class="boardScope">Loading</span></div><p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p></section>
+    <section class="board" aria-labelledby="boardTitle3"><div class="boardHead"><h2 id="boardTitle3">Scoreboard</h2><span class="boardScope">Loading</span></div><p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p></section>
   </div>
 </div>
 
@@ -222,7 +225,7 @@
       <div class="codeRow"><code id="winCode"></code><button type="button" id="winCopy">Copy code</button></div>
     </div>
     <div class="btns"><button type="button" class="primary" id="againBtn">Play again</button><button type="button" id="menuBtn">Main menu</button></div>
-    <section class="board" aria-labelledby="boardTitle2"><div class="boardHead"><h2 id="boardTitle2">Fastest escapes</h2><span class="boardScope">Loading</span></div><p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p></section>
+    <section class="board" aria-labelledby="boardTitle2"><div class="boardHead"><h2 id="boardTitle2">Scoreboard</h2><span class="boardScope">Loading</span></div><p class="boardMine"></p><ol class="boardList"></ol><p class="foot boardFoot"></p></section>
   </div>
 </div>
 
