@@ -185,7 +185,7 @@
   // sprint head jerks (2), then death spasms (3).
   const TW = [[0, 2.6, .5, .05, .18, 70], [1.3, 3.4, .45, .04, .1, 72], [0, .45, .55, .025, .05, 74], [.2, .6, .5, .03, .06, 75],
     [0, .7, .55, .035, .07, 77], [.31, .9, .5, .035, .08, 78], [0, .38, .7, .03, .05, 90], [.13, .46, .6, .03, .06, 91],
-    [.27, .55, .55, .04, .07, 92]];
+    [.27, .55, .55, .04, .07, 92], [0, .3, .8, .02, .07, 93], [.11, .37, .75, .02, .06, 94], [.2, .43, .7, .025, .05, 95]];
   function twitches(from, n, sh) {
     const t = NZ[NZ_T];
     for (let q = 0; q < n; q++) { const w = TW[from + q]; NZ[q] = twitch(t + w[0], w[1], w[2], w[3], w[4], w[5], sh); }
@@ -284,7 +284,7 @@
   const I_CLOCK = 0, I_PHASE = 1, I_CAD = 2, I_SPD = 3, I_SPDV = 4, I_TURN = 5, I_MOVE = 6, I_STALK = 7, I_CHASE = 8;
   const I_SEARCH = 9, I_WATCH = 10, I_LUNGE = 11, I_STAG = 12, I_ATK = 13, I_SCR = 14, I_MOUTH = 15, I_STEP = 16;
   const I_DEATH = 17, I_DT = 18, I_T = 19, I_SIN = 20, I_TURNIN = 21, I_LUNGEIN = 22, I_STAGIN = 23, I_RUN = 24;
-  const I_STRIDE = 25, I_ROFF = 26, I_FREEZE = 27, I_BANK = 28, I_TD = 29, I_N = 30;
+  const I_STRIDE = 25, I_ROFF = 26, I_FREEZE = 27, I_BANK = 28, I_TD = 29, I_RISE = 30, I_RDUR = 31, I_RLOW = 32, I_N = 33;
   const DQ_ROWS = 5, DQ_OUT = DQ_ROWS * 6;
   const S_LIMIT = [.75, .6, .35, .35, 1.25, .8, 1.1, .9, .7, .9];
 
@@ -296,7 +296,8 @@
     const walkS = positive(opts.walkSpeed, K.walk), chaseS = Math.max(walkS * 1.25, positive(opts.chaseSpeed, K.chase));
     const hipH = K.hip * scale, legL = K.leg * scale, quad = K.quad, rig = RIGS[name], pivotZ = quad ? -.1 * scale : 0;
 
-    const c = new Float64Array(CH), cur = new Float64Array(CH), from = new Float64Array(CH);
+    // lay: the pose a rising body left the floor in (read only while ms[I_RDUR] > 0, so reset() leaves it alone).
+    const c = new Float64Array(CH), cur = new Float64Array(CH), from = new Float64Array(CH), lay = new Float64Array(CH);
     const sx = new Float64Array(S_N), sv = new Float64Array(S_N), coef = new Float64Array(SPRINGS.length * 4 + 4);
     // Death keyframe rows [t1, v1, t2, v2, t3, v3] (set by startDeath), then each row's current value.
     const dq = new Float64Array(DQ_OUT + DQ_ROWS);
@@ -642,7 +643,7 @@
       let lx = dx * Math.cos(yaw) - dz * Math.sin(yaw), lz = dx * Math.sin(yaw) + dz * Math.cos(yaw);
       const len = Math.hypot(lx, lz);
       if (len < 1e-6) { lx = 0; lz = -1; } else { lx /= len; lz /= len; }
-      dying = true; ms[I_DEATH] = 0; settled = false; headshot = flag(o.headshot);
+      dying = true; ms[I_DEATH] = 0; ms[I_RDUR] = 0; settled = false; headshot = flag(o.headshot);
       for (let i = 0; i < CH; i++) from[i] = cur[i];
       const D = K.death;
       side2 = rand() < .5 ? -1 : 1;
@@ -783,6 +784,26 @@
       if (t >= tEnd) settled = true;
     }
 
+    // Getting up off the floor: the live pose (already in c) is blended in from the pose the body lay in, in fits and
+    // starts (a stair-step ease that stalls twice on the way up), with jerks through the neck, arms and knees. Until
+    // the last fifth the blend rests on its lowest point, so the body neither sinks into nor floats above the floor.
+    function risePose(effects) {
+      const d = ms[I_RDUR], t = ms[I_RISE] = Math.min(d, ms[I_RISE] + ms[I_DT]), u = t / d;
+      const st = u - Math.sin(TAU * 3 * u) / (TAU * 3), w = st * st * (3 - 2 * st);
+      for (let i = 0; i < CH; i++) c[i] = lay[i] + (c[i] - lay[i]) * w;
+      if (effects) {
+        NZ[NZ_T] = t; twitches(9, 3, seed ^ 0x3a1c55);
+        const env = Math.sin(PI * u) * .5;
+        c[NK] += .5 * env * NZ[0]; c[NK + 2] += .3 * env * NZ[1];
+        c[AL] += .6 * env * NZ[2]; c[AR] -= .5 * env * NZ[1]; c[quad ? KL + 2 : KL] += .4 * env * Math.abs(NZ[2]);
+      }
+      RV[R_SCALE] = scale;
+      lowestCh(rig, c, null);
+      const f = u < .8 ? 0 : (u - .8) / .2, hold = 1 - f * f * (3 - 2 * f);
+      c[RY] -= hold * (c[RY] + RV[R_LOW] - ms[I_RLOW] * (1 - w));
+      if (t >= d) ms[I_RDUR] = 0;
+    }
+
     function writePose(foot) {
       for (let i = 0; i < CH; i++) if (c[i] !== c[i]) c[i] = 0;
       for (let i = 0; i < JOINTS.length; i++) {
@@ -814,7 +835,8 @@
       const st = STATES[inp.state] || 0;
       ms[I_SIN] = clamp(num(inp.speed), 0, chaseS * 2.2);
       ms[I_LUNGEIN] = clamp(num(inp.lunge), 0, 1); ms[I_STAGIN] = clamp(num(inp.stagger), 0, 3); ms[I_TURNIN] = num(inp.turn);
-      const foot = alive(st, flag(inp.watched), effects);
+      let foot = alive(st, flag(inp.watched), effects);
+      if (ms[I_RDUR] > 0) { risePose(effects); foot = 0; }
       if (quad) {
         // No jaw: mouth follows lunges, screams, attacks and chase panting.
         let m = .1 * ms[I_CHASE] + .7 * ms[I_LUNGE];
@@ -857,6 +879,19 @@
       ms[I_SCR] = 0; screamDur = d;
     }
     function die(o) { startDeath(o); }
+    // Wakes a body (usually a corpse-still sleeper) where it lies: over `duration` seconds it gets up into the live
+    // pose that update() drives. Callers stop passing dead: true at the same time.
+    function rise(duration) {
+      const d = clamp(positive(duration, .9), .3, 3);
+      for (let i = 0; i < CH; i++) lay[i] = cur[i];
+      RV[R_SCALE] = scale;
+      lowestCh(rig, lay, null);
+      const low = out(lay[RY] + RV[R_LOW], .2);
+      reset();
+      ms[I_RDUR] = d; ms[I_RLOW] = low;
+      for (let i = 0; i < CH; i++) c[i] = lay[i];
+      writePose(0);
+    }
     function snapshot() {
       const spd = ms[I_SPD], wMove = ms[I_MOVE];
       return {
@@ -864,12 +899,13 @@
         idle: 1 - wMove, stalk: ms[I_STALK], chase: ms[I_CHASE], search: ms[I_SEARCH], watched: ms[I_WATCH],
         lunge: ms[I_LUNGE], stagger: ms[I_STAG], scream: ms[I_SCR] >= 0 ? 1 : 0, attack: ms[I_ATK] >= 0 ? 1 : 0,
         dying: dying && !settled ? 1 : 0, dead: dying ? 1 : 0, deathT: dying ? ms[I_DEATH] : 0, deathMode: mode,
-        fall: dying ? sgn : 0, headshot: headshot ? 1 : 0, settled: settled ? 1 : 0, time: ms[I_CLOCK], mouth: pose.mouth
+        fall: dying ? sgn : 0, headshot: headshot ? 1 : 0, settled: settled ? 1 : 0, time: ms[I_CLOCK], mouth: pose.mouth,
+        rising: ms[I_RDUR] > 0 ? 1 : 0, rise: ms[I_RDUR] > 0 ? ms[I_RISE] / ms[I_RDUR] : 0
       };
     }
 
     reset();
-    return { kind: name, pose, update, hit, attack, scream, die, reset, snapshot };
+    return { kind: name, pose, update, hit, attack, scream, die, rise, reset, snapshot };
   }
 
   // Writes a pose onto a visuals.js monster group (duck-typed THREE.Object3D): joints = restPose + offsets, root

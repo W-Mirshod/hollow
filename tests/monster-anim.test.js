@@ -134,7 +134,7 @@ test('update() mutates and returns one preallocated pose; snapshot() is plain nu
   for (const kind of KINDS) {
     const anim = Anim.create(kind, { seed: 1 });
     assert.equal(anim.kind, kind);
-    for (const name of ['update', 'hit', 'attack', 'scream', 'die', 'reset', 'snapshot']) assert.equal(typeof anim[name], 'function');
+    for (const name of ['update', 'hit', 'attack', 'scream', 'die', 'rise', 'reset', 'snapshot']) assert.equal(typeof anim[name], 'function');
     const pose = anim.update(1 / 60, chase(kind)), { joints, root } = pose, legL = joints.legL;
     assert.equal(pose, anim.pose);
     assert.deepEqual(Object.keys(pose), ['joints', 'root', 'footstep', 'stepIntensity', 'mouth']);
@@ -176,6 +176,7 @@ test('fuzzed junk inputs and calls never produce NaN or out-of-range poses', () 
         else if (roll < .02) anim.scream(pick(junk));
         else if (roll < .023) anim.die(rand() < .3 ? pick([null, 5, undefined]) : { dirX: pick(junk), dirZ: pick(junk), yaw: pick(junk), headshot: pick(junk) });
         else if (roll < .026) anim.reset();
+        else if (roll < .029) anim.rise(pick(junk));
         const dt = pick([1 / 60, 1 / 60, 1 / 144, 1 / 30, .1, .5, 0, -.1, NaN, Infinity, undefined, '0.016', null]);
         const input = rand() < .04 ? pick([null, undefined, 7, 'chase', []]) : {
           speed: rand() < .7 ? rand() * 14 : pick(junk), state: pick(['wander', 'stalk', 'search', 'chase', 'bogus', 3, null, undefined, {}]),
@@ -495,6 +496,60 @@ test('a dead flag starts a default fall and clearing it revives; hits, attacks a
   }
 });
 
+test('a sleeping body gets up off the floor in fits and starts, then moves like the living', () => {
+  for (const kind of KINDS) {
+    const { anim, pose } = kill(kind, { dirX: .3, dirZ: 1 }, { seed: 7 });
+    const lying = channels(pose), tilt = p => Math.max(Math.abs(p.root.pitch), Math.abs(p.root.roll));
+    anim.rise(.9);
+    assert.deepEqual(channels(anim.pose), lying, `${kind} starts exactly where it lay`);
+    assert.deepEqual([anim.snapshot().dead, anim.snapshot().dying, anim.snapshot().rising], [0, 0, 1]);
+    let up = -1, steps = 0, quarter = 0;
+    run(anim, 2.4, idle({ dead: false, speed: Anim.KINDS[kind].walk }), { each: (p, t) => {
+      const floor = Anim.lowest(kind, p), rising = anim.snapshot().rising;
+      if (rising) {
+        assert.ok(floor > -.07 && floor < .04, `${kind} at ${t.toFixed(2)} s: lowest point ${floor.toFixed(3)} while rising`);
+        assert.equal(p.footstep, 0, `${kind} takes no steps while rising`);
+        if (!quarter && t >= .225) quarter = tilt(p);
+      } else if (up < 0) up = t;
+      if (up >= 0 && p.footstep) steps++;
+    } });
+    assert.ok(up > .85 && up < .95, `${kind} stands at ${up} s`);
+    assert.ok(quarter > tilt({ root: { pitch: lying[JOINT_CHANNELS + 3], roll: lying[JOINT_CHANNELS + 5] } }) * .6, `${kind} still mostly down a quarter of the way in`);
+    assert.ok(tilt(anim.pose) < .3 && hipHeight(kind, anim.pose) > Anim.KINDS[kind].hip * .8, `${kind} ends upright`);
+    assert.ok(steps > 0, `${kind} walks off once up`);
+    assert.equal(anim.snapshot().rising, 0);
+  }
+});
+
+test('rising stalls twice on the way up, agrees across frame rates and yields to death or reset', () => {
+  for (const kind of KINDS) {
+    const rate = [];
+    const { anim } = kill(kind, { dirX: 0, dirZ: 1 }, { seed: 2 });
+    anim.rise(.9);
+    let prev = channels(anim.pose);
+    run(anim, .9, idle({ dead: false, effects: false }), { each: p => { const now = channels(p); rate.push(maxDiff(now, prev)); prev = now; } });
+    const at = u => rate[Math.min(rate.length - 1, Math.round(u * 54))];
+    assert.ok(at(1 / 3) < at(1 / 6) * .5 && at(2 / 3) < at(.5) * .5, `${kind} stalls: ${[1 / 6, 1 / 3, .5, 2 / 3].map(u => at(u).toFixed(3))}`);
+    const scripted = fps => {
+      const a = kill(kind, { dirX: .5, dirZ: -1 }, { seed: 4 }).anim;
+      a.rise(1.2);
+      const middle = channels(run(a, .5, idle({ dead: false }), { fps }));
+      return [middle, channels(run(a, 1, idle({ dead: false }), { fps, t0: .5 }))];
+    };
+    const [a, b, c] = [30, 60, 144].map(scripted);
+    for (const other of [a, c]) for (const i of [0, 1]) {
+      assert.ok(maxDiff(other[i], b[i]) < .01, `${kind} rise ${i ? 'end' : 'middle'} differs by ${maxDiff(other[i], b[i])} across frame rates`);
+    }
+    const again = kill(kind, { dirX: 0, dirZ: 1 }, { seed: 2 }).anim;
+    again.rise(.9); run(again, .3, idle({ dead: false }));
+    again.die({ dirX: 0, dirZ: -1 });
+    assert.ok(fellFlat(run(again, 3, { dead: true })), `${kind} shot while rising falls again`);
+    assert.equal(again.snapshot().rising, 0);
+    again.rise(); again.reset();
+    assert.deepEqual(again.snapshot(), Anim.create(kind, { seed: 2 }).snapshot(), `${kind} reset() clears a rise`);
+  }
+});
+
 test('effects=false keeps per-frame motion bounded; settled corpses do not depend on effects', () => {
   for (const kind of KINDS) {
     const K = Anim.KINDS[kind];
@@ -591,6 +646,7 @@ function allocationProbe(modulePath) {
         const anim = anims[k];
         if (frame % 600 === 0) anim.reset();
         if (frame % 600 === 300 && k % 2) anim.die({ dirX: 1, dirZ: 0, yaw: frame });
+        if (frame % 600 === 450 && k % 2) anim.rise(.9);
         anim.update(1 / 60, input);
       }
     }
