@@ -72,6 +72,7 @@ test('a run starts with the sidearm alone; the carbine lies in the B1 armory and
   await ready(page);await start(page);
   const s=await snapshot(page);
   expect(s).toMatchObject({floorCode:'B1',owned:['pistol'],weapon:'pistol',mag:12,reserve:12});
+  await expect(page.locator("#resTxt")).toHaveText("/ ∞");
   expect(s.ammoPickups,'B1 stocks sixteen ammunition boxes (it had twelve)').toHaveLength(16);
   await expect(page.locator('#weaponSlots span.locked')).toHaveCount(2);
   await expect(page.locator('body')).toHaveAttribute('data-floor','B1');
@@ -317,4 +318,28 @@ test('a hunter snarls at arm\'s length and howls across the floor when it loses 
   await expect.poll(async()=>(await snapshot(page)).audioLog.some(e=>e.n>from&&e.src==='creature'&&e.kind==='warden'&&e.cue==='howl'),
     {timeout:30000}).toBe(true);
   await page.evaluate(()=>HollowTest.silence());
+});
+
+test('a charging creature cannot pass through a closed door, and an unlatched door holds for several seconds',async({page})=>{
+  await ready(page);await start(page);
+  const r=await page.evaluate(()=>{
+    const T=HollowTest,G=HollowGame;T.silence();T.torch(false);
+    const door=G.snapshot().doors[0];T.door?.(0,'close');
+    return door;
+  });
+  // Close the first room's door through the game's own interaction, from outside.
+  const d=(await snapshot(page)).doors[0];
+  await pose(page,{x:d.x,z:d.z+1.3,yaw:0});
+  if((await snapshot(page)).doors[0].open){await page.keyboard.press('e');await expect.poll(async()=>(await snapshot(page)).doors[0].open).toBe(false);}
+  const out=await page.evaluate(d=>{
+    const T=HollowTest,G=HollowGame,side=[];
+    // The survivor stands just inside, a Stalker charges from 6 m outside, straight at the door, at lunge speed.
+    for(const k of [1,2]){T.pose({x:d.x,z:d.z-1.3,yaw:Math.PI});T.enemy(k,{x:d.x,z:d.z+6,state:'chase',yaw:Math.PI});}
+    let crossed=false;
+    for(let i=0;i<80;i++){T.health(100);T.advance(.05);const s=G.snapshot();for(const k of [1,2])if(s.enemies[k].z<d.z-.05&&!s.doors[0].open)crossed=true;}
+    const s=G.snapshot();return {crossed,open:s.doors[0].open,health:s.doors[0].health};
+  },d);
+  expect(out.crossed,'no creature is inside while the door is shut').toBe(false);
+  expect(out.open,'the door holds for 4 s of bashing').toBe(false);
+  console.log('Door:',JSON.stringify(out));
 });

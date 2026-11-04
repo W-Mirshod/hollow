@@ -214,7 +214,7 @@ test('context prompts never cover phone movement or action buttons',async({page}
   });
   for(const [width,height] of [[320,568],[390,844],[568,320],[844,390],[768,1024]]){
     await page.setViewportSize({width,height});
-    for(const message of ['MAP · amber diamonds = fuses · green squares = shelters · red = exit','USE Lock door · crouch + torch OFF to hide','USE Unlock & open · lock integrity 100%']){
+    for(const message of ['MAP · amber diamonds = fuses · grey crosses = guns · green squares = shelters · red = exit','USE Lock door · crouch + torch OFF to hide','USE Unlock & open · lock integrity 100%']){
       const geometry=await page.evaluate(message=>{
         const prompt=document.getElementById('interactionPrompt');prompt.textContent=message;
         return {prompt:prompt.getBoundingClientRect().toJSON(),buttons:[...document.querySelectorAll('.touch-button,#touchMove')].filter(n=>!n.hidden).map(n=>({name:n.id||n.dataset.action,...n.getBoundingClientRect().toJSON()}))};

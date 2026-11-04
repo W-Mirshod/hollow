@@ -910,6 +910,8 @@ function layDistance(m,x,z){const l=m.lay;return Math.min(Math.hypot(l[0]-x,l[1]
 function hideMonsters(){monsters.forEach(m=>{m.g.visible=false;m.spawned=false;m.dead=true;m.dormant=false;m.riseT=0;m.wakeIn=-1;});stopAudio(state==='dead');}
 // A kit is everything the survivor carries between floors: health, the guns found so far and their rounds, decoys and
 // the torch battery. A new run gets the starting kit: full health and the sidearm alone.
+// The M9 sidearm never runs dry: reloads always refill it and its reserve is never spent.
+const infiniteAmmo=()=>weaponDefs[weaponIndex].id==='pistol';
 function freshKit(){
   const has=weaponDefs.map(w=>RULES.STARTING_WEAPONS.includes(w.id));
   return {health:100,owned:has,weapons:weaponDefs.map((w,i)=>has[i]?{mag:w.capacity,reserve:w.reserve}:{mag:0,reserve:0}),weapon:Math.max(0,has.indexOf(true)),decoys:3,battery:1};
@@ -1351,7 +1353,13 @@ function targets(){
 function setPathTo(m,x,z){m.path=mazeNavigator?mazeNavigator.path(m.pos.x,m.pos.z,Math.max(S+.65,Math.min((W-1)*S-.65,x)),Math.max(S+.65,Math.min((W-1)*S-.65,z)),m.stats.radius):[];}
 function moveToward(m,x,z,sp,dt){
   const dx=x-m.pos.x,dz=z-m.pos.z,d=Math.hypot(dx,dz);if(d<.001)return d;
-  const step=Math.min(d,sp*dt);m.pos.x+=dx/d*step;m.pos.z+=dz/d*step;
+  const step=Math.min(d,sp*dt),ox=m.pos.x,oz=m.pos.z;m.pos.x+=dx/d*step;m.pos.z+=dz/d*step;
+  // A fast step must not tunnel through a closed door (0.25 m thick): stop on the side it came from.
+  const r=m.stats.radius;
+  for(const door of roomDoors){if(door.open)continue;const b=door.box,half=b.d/2+r;
+    if(Math.abs(m.pos.x-b.x)>b.w/2+r&&Math.abs(ox-b.x)>b.w/2+r)continue;
+    const before=oz-b.z,after=m.pos.z-b.z;
+    if(Math.sign(before)!==Math.sign(after)||Math.abs(after)<half){const side=Math.sign(before)||1;if(Math.abs(before)>=half-.02||Math.sign(before)!==Math.sign(after))m.pos.z=b.z+side*half;}}
   m.yaw=angLerp(m.yaw,Math.atan2(dx,dz),Math.min(1,dt*(m.kind==='warden'?2.5:7)));return d;
 }
 function followPath(m,sp,dt){
@@ -1542,7 +1550,7 @@ function updateMonster(m,dt){
       if(d<2.4){
         m.yaw=angLerp(m.yaw,Math.atan2(locked.box.x-m.pos.x,locked.box.z-m.pos.z),Math.min(1,dt*4));
         if(tgs.some(c=>c.torch&&RULES.insideRoom(locked.room,c.x,c.z)))m.lost=0;
-        locked.health-=dt*(locked.locked?(m.kind==='warden'?6:2):32);
+        locked.health-=dt*(locked.locked?(m.kind==='warden'?6:2):(m.kind==='warden'?10:6));
         if(m.attackT<=0){m.attackT=1.3;m.lungeT=.3;m.anim.attack();sThud(locked.box.x,1,locked.box.z,.35,m.kind==='warden'?75:150);}
         if(locked.health<=0){locked.open=true;locked.locked=false;locked.revision++;m.repath=0;showMsg('An isolation lock broke. Find another shelter.',3);}
       }else{m.repath-=dt;if(m.repath<=0){setPathTo(m,locked.box.x,locked.box.z+S);m.repath=.8;}followPath(m,speed,dt);}
@@ -1608,7 +1616,7 @@ function animateMonster(m,dt){
 function startReload(){
   const w=weaponDefs[weaponIndex];
   if(state!=='play'||reloadT>0||mag>=w.capacity)return;
-  if(reserve<=0){showMsg('No spare ammunition. Search rooms and dead ends.',2);return;}
+  if(reserve<=0&&!infiniteAmmo()){showMsg('No spare ammunition. Search rooms and dead ends.',2);return;}
   reloadT=w.reload;aiming=false;sReload();
 }
 const _o=new THREE.Vector3(),_d=new THREE.Vector3(),_shotDir=new THREE.Vector3(),_shotQuat=new THREE.Quaternion(),_shotEuler=new THREE.Euler(0,0,0,'YXZ');
@@ -1624,7 +1632,7 @@ function fire(){
   if(reloadT>0||P.hidden)return;
   fireQueued=false;
   const w=weaponDefs[weaponIndex];
-  if(mag<=0){sDry();fireT=.3;semiFired=true;if(reserve>0)startReload();else showMsg('Weapon empty. Switch weapons or find supplies.',2);return;}
+  if(mag<=0){sDry();fireT=.3;semiFired=true;if(reserve>0||infiniteAmmo())startReload();else showMsg('Weapon empty. Switch weapons or find supplies.',2);return;}
   mag--;weapons[weaponIndex].mag=mag;fireT=w.interval;gunKick=1;flashT=.045;semiFired=true;sShot();NET.shots++;
   if(!NET.inGame||NET.role==='host'){alertMonsters(w.noise,P.pos.x,P.pos.z,0);rouseByShot(P.pos.x,P.pos.z,w.noise);}
   _o.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
@@ -1707,7 +1715,7 @@ function updateGun(dt){
   if(state==='pause')return;
   const w=weaponDefs[weaponIndex];fireT-=dt;
   if(state==='play'&&(mouseDown||fireQueued)&&fireT<=0&&!P.running&&(w.automatic||!semiFired))fire();
-  if(reloadT>0){reloadT=Math.max(0,reloadT-dt);if(reloadT===0){const take=Math.min(w.capacity-mag,reserve);mag+=take;reserve-=take;weapons[weaponIndex]={mag,reserve};}}
+  if(reloadT>0){reloadT=Math.max(0,reloadT-dt);if(reloadT===0){const take=infiniteAmmo()?w.capacity-mag:Math.min(w.capacity-mag,reserve);mag+=take;if(!infiniteAmmo())reserve-=take;weapons[weaponIndex]={mag,reserve};}}
   gunKick*=Math.exp(-dt*15);flashT-=dt;
   const progress=reloadT>0?1-reloadT/w.reload:0,rp=reloadT>0?Math.sin(Math.PI*progress):0;
   gun.userData.run=lerp(gun.userData.run||0,P.running?1:0,1-Math.exp(-dt*8));
@@ -1742,6 +1750,9 @@ function drawMap(){
     if(r.shelter){c.strokeStyle='#89c7b7';c.lineWidth=1;c.strokeRect(x-2,z-2,4,4);}
     if(r.fuse&&!roomLoot.find(l=>l.room===r&&l.type==='fuse')?.taken){c.fillStyle='#e6b979';c.beginPath();c.moveTo(x,z-3);c.lineTo(x+3,z);c.lineTo(x,z+3);c.lineTo(x-3,z);c.fill();}
   }
+  // Guns not taken yet: a grey cross.
+  c.strokeStyle='#cfd6dc';c.lineWidth=1.5;
+  for(const l of roomLoot)if(l.type==='weapon'&&!l.taken&&l.g.visible){const x=l.x/S*k,z=l.z/S*k;c.beginPath();c.moveTo(x-3,z);c.lineTo(x+3,z);c.moveTo(x,z-3);c.lineTo(x,z+3);c.stroke();}
   c.fillStyle=exitPowered?'#96eac5':'#df6f4d';c.fillRect((W-1)*k,(W-2)*k,k,k);
   if(visited[(W-2)*W+(W-1)]){c.fillStyle='#ff3322';c.fillRect((W-1)*k,(W-2)*k,k,k);}
   const px=P.pos.x/S*k,pz=P.pos.z/S*k,fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw);
@@ -1886,7 +1897,7 @@ function updateHUD(){
   $('objectiveText').textContent=exitOpen?T.go:exitPowered?'THE ALARM IS DRAWING THEM HERE':fuses===3?T.ready:`${fuses} / 3 ${T.tags} · ${nearest?nearest.room.name.slice(5):'search marked rooms'}`;
   $('floorText').textContent=FLOOR().code+' · '+FLOOR().name.toUpperCase();$('wingText').textContent=T.wing;
   $('fpsText').textContent=Math.round(1000/frameAverage)+' FPS · '+qualityLevel.toUpperCase()+(renderScale<1?' '+Math.round(renderScale*100)+'%':'');
-  $('weaponName').textContent=w.name;$('magTxt').textContent=mag;$('resTxt').textContent='/ '+reserve;$('magTxt').style.color=mag===0?'var(--ember)':'';
+  $('weaponName').textContent=w.name;$('magTxt').textContent=mag;$('resTxt').textContent='/ '+(infiniteAmmo()?'∞':reserve);$('magTxt').style.color=mag===0?'var(--ember)':'';
   $('ammoLbl').textContent=reloadT>0?`RELOADING · ${reloadT.toFixed(1)}s`:aiming?'AIMING':w.automatic?'AUTOMATIC':w.id==='shotgun'?'PUMP ACTION':'SEMI-AUTOMATIC';
   if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+['AR','M9','SG'][i];$('weaponSlots').appendChild(slot);});}
   [...$('weaponSlots').children].forEach((slot,i)=>{slot.classList.toggle('selected',i===weaponIndex);slot.classList.toggle('locked',!owned[i]);slot.title=owned[i]?weaponDefs[i].name:'Not found yet';});
@@ -1900,7 +1911,7 @@ function updateHUD(){
   }else if([...roomLoot.filter(l=>automaticLoot(l.type)),...ammoBoxes].some(l=>!l.taken&&pickupReach(l,P.pos,2.4)))prompt='WALK OVER · ammunition collects automatically';
   else if(P.hidden)prompt='CONCEALED · Stay quiet. Listen for footsteps to fade.';
   else if(currentShelter())prompt='SHELTER · Close and lock the door. Crouch. Torch off.';
-  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · green squares = shelters · red = exit`;
+  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · grey crosses = guns · green squares = shelters · red = exit`;
   $('interactionPrompt').textContent=prompt;
   $('controlsHint').textContent=touch?'Left stick: move · Drag right: look · USE: interact':
     P.hidden?'E unlock & leave · Keep your torch off until the footsteps fade':

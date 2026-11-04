@@ -145,7 +145,7 @@ test('keyboard switching, aiming, firing and reloading show only the selected we
   await page.keyboard.press('r');const reloading=await advance(page,.2);
   expect(reloading.reloadT).toBeGreaterThan(0);expectViewmodel(reloading,'pistol');
   const reloaded=await advance(page,3);
-  expect(reloaded.mag).toBe(loaded.mag);expect(reloaded.reserve).toBe(loaded.reserve-1);expectViewmodel(reloaded,'pistol');
+  expect(reloaded.mag).toBe(loaded.mag);expect(reloaded.reserve,"the sidearm never spends its reserve").toBe(loaded.reserve);expectViewmodel(reloaded,'pistol');
   await page.keyboard.press('Escape');await expect(page.locator('#pause')).toBeVisible();
   expectViewmodel(await snapshot(page),'pistol');
   await page.locator('#resumeBtn').click();await renderedFrames(page);
