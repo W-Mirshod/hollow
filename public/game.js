@@ -2130,7 +2130,9 @@ function readRemote(peer,pr){
   if(NET.role==='guest'&&r.role==='host'){r.mon=Array.isArray(pr.mon)?pr.mon.slice(0,MAX_MON).map(v=>Array.isArray(v)&&v.length>=4&&v.slice(0,4).every(Number.isFinite)?[finiteNumber(v[0],0,-110,W*S+60),finiteNumber(v[1],0,-70,W*S+70),finiteNumber(v[2],0),Math.floor(v[3])&31,finiteNumber(v[4],0,-100,100)]:null):null;r.mc=Math.floor(finiteNumber(pr.mc,0,0,MAX_MON));r.el=finiteNumber(pr.el,0,0,7200);
     // host started (or restarted) a round we're not in yet
     const remoteSeed=finiteNumber(pr.seed,0,0,2147483647);
-    if(pr.ph==='play'&&r.gn>NET.gen&&remoteSeed){startCoopRound(remoteSeed,r.gn);}
+    // Wait for the host to admit this guest before starting, so late joiners
+    // receive their own spawn slot instead of overlapping the first guest.
+    if(pr.ph==='play'&&r.gn>NET.gen&&remoteSeed&&NET.myPeer&&NET.pts.includes(NET.myPeer)){startCoopRound(remoteSeed,r.gn);}
     if(r.gn===NET.gen&&NET.inGame){
       if(Array.isArray(pr.doors))pr.doors.forEach((v,i)=>{const d=roomDoors[i];if(!d||!Array.isArray(v))return;d.open=!!v[0];d.locked=!!v[1];d.health=Math.max(0,Math.min(100,Number(v[2])||0));});
       if(Array.isArray(pr.fuses))for(const l of roomLoot)if(l.type==='fuse'&&pr.fuses.includes(l.id)){l.taken=true;l.g.visible=false;}
