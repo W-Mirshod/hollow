@@ -173,8 +173,13 @@ async function main() {
     await expect.poll(async () => (await snapshot(page)).performance.frames, POLL).toBeGreaterThan(1);
     const current = await snapshot(page);
     assert.equal(current.rooms.length, 10, 'Ten rooms must be present');
-    assert.equal(current.enemies.length, 8, 'Solo must have eight monsters');
-    assert.equal(new Set(current.enemies.map(enemy => enemy.kind)).size, 4, 'Four monster types must be present');
+    // B1: eight creatures hunt from the start and up to five more lie asleep. A run starts with the sidearm alone.
+    const awake = current.enemies.filter(enemy => !enemy.dormant), asleep = current.enemies.length - awake.length;
+    assert.equal(awake.length, 8, 'Solo B1 must have eight hunting monsters');
+    assert(asleep >= 0 && asleep <= 5, 'B1 must have at most five sleepers');
+    assert.equal(current.floorCode, 'B1', 'A run must start on B1');
+    assert.deepEqual(current.owned, ['pistol'], 'A run must start with the sidearm alone');
+    assert.equal(new Set(awake.map(enemy => enemy.kind)).size, 4, 'Four monster types must be present');
     assert(current.enemies.some(enemy => enemy.kind === 'warden' && enemy.hp >= 20), 'The armored Warden must be present');
     assert(current.performance.textures > 0 && current.performance.drawCalls > 0, 'The 3D scene must render');
     const frame = await presented(page);
@@ -260,8 +265,10 @@ async function main() {
         finally { await page.mouse.up(); }
         await page.keyboard.press('r');
         await expect.poll(async () => (await snapshot(page)).mag, POLL).toBe(loaded.mag);
+        // The shotgun has not been found yet: its key says so and the sidearm stays drawn.
         await page.keyboard.press('3');
-        await expect.poll(async () => (await snapshot(page)).weapon, POLL).toBe('shotgun');
+        await expect(page.locator('#msg')).toContainText('No SG-8', { timeout: TIMEOUT });
+        assert.equal((await snapshot(page)).weapon, 'pistol', 'An unfound gun must not be drawn');
         phase = 'desktop initial pause';
         await page.keyboard.press('Escape');
         await stateIs(page, 'pause');
@@ -287,7 +294,7 @@ async function main() {
         await page.waitForFunction(() => !!window.HollowGame, null, { timeout: TIMEOUT });
         await expect(page.locator('#menu')).toBeVisible();
         assert.equal((await snapshot(page)).performance.quality, 'low');
-        return { movement: true, jump: true, weapons: ['rifle', 'pistol', 'shotgun'], fireAndReload: true, pauseResume: true, qualitySwitch: true, reload: true };
+        return { movement: true, jump: true, weapons: ['pistol'], lockedWeapons: true, fireAndReload: true, pauseResume: true, qualitySwitch: true, reload: true };
       } finally { await closeContext(context); }
     });
 
@@ -370,8 +377,9 @@ async function main() {
           const [a, b] = await Promise.all([snapshot(host.page), snapshot(guest.page)]);
           return a.network.inGame && b.network.inGame && a.network.partner && b.network.partner &&
             a.network.role === 'host' && b.network.role === 'guest' && a.seed > 0 && a.seed === b.seed &&
-            a.enemies.length === 12 && b.enemies.length === 12 && a.enemies.every((enemy, index) => {
+            a.enemies.filter(enemy => !enemy.dormant).length === 12 && b.enemies.length === a.enemies.length && a.enemies.every((enemy, index) => {
               const remote = b.enemies[index];
+              if (enemy.dormant) return true;
               return enemy.kind === remote.kind && enemy.dead === remote.dead && enemy.hp === remote.hp && Math.hypot(enemy.x - remote.x, enemy.z - remote.z) < 2.5;
             });
         }, POLL).toBe(true);
