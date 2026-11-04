@@ -95,7 +95,10 @@ catch(e){console.warn('[The Hollow] atmosphere disabled:',e);atm=null;}
 
 /* ---------- environments ---------- */
 const ENV={
-  hell:{sky:lin(0x889796),gnd:lin(0x24221f),hi:0.23,fog:untone(0x0b100f),fd:0.024}
+  hell:{sky:lin(0x889796),gnd:lin(0x24221f),hi:0.23,fog:untone(0x0b100f),fd:0.024},
+  // B2 runs cold and blue, B3 bleeds red; both sit a little darker in thicker fog.
+  morgue:{sky:lin(0x7c95ad),gnd:lin(0x1a2129),hi:0.2,fog:untone(0x081019),fd:0.028},
+  hollow:{sky:lin(0xa07a70),gnd:lin(0x2b1915),hi:0.19,fog:untone(0x150706),fd:0.03}
 };
 function applyEnv(e){
   hemi.color.copy(e.sky);hemi.groundColor.copy(e.gnd);setLight(hemi,e.hi);
@@ -275,11 +278,49 @@ if(window.HollowVisuals){
 let grid=[],specialRooms=[],roomDoors=[],roomProps=[],roomLoot=[],fuses=0,decoys=3,decoyEvents=[],exitPowered=false,mazeNavigator=null;
 let interaction=null,interactionT=0,hideTime=0,hitMarkerT=0,damageT=0,noticeT=0,worldSeed=0;
 let horror=HollowHorror.create(0),caseNotes=[],readNotes=new Set(),captionText='',captionT=0,exitRelease=0,exitOpen=false,alarmT=0,simulationTime=0;
+// The campaign: floor indexes RULES.FLOORS. owned[i]: the survivor carries weaponDefs[i]. checkpoint: the kit, time and
+// banked score carried onto this floor (retry and Continue start from it). scoreBase: kills and points from floors
+// already cleared (the streak restarts on every floor).
+let floor=0,checkpoint=null,scoreBase={points:0,kills:0},owned=[],sleepHint=false,wakeBannerT=-99,wakeStingT=-99,howlAt=-99;
+const FLOOR=()=>RULES.FLOORS[floor]||RULES.FLOORS[0];
+// Each floor's objective wording. B1's lines are the ward's original ones.
+const FLOOR_TEXT=[
+  {tag:'FUSE',tags:'FUSES',one:'fuse',many:'fuses',need:n=>`Exit needs ${n} more power ${n===1?'fuse':'fuses'}`,label:'POWER FUSE',sign:'POWER OFFLINE / 3 FUSES',take:'Recover power fuse',start:'Start emergency release',locked:'Power is offline.',
+    all:'All fuses secured. Reach the exit to restore power.',allKick:'All fuses · reach the exit',kick:'Power fuse',
+    power:'POWER RESTORED',powerKick:'Shutter releasing',powered:'Power restored. The shutter is releasing. Keep moving — they can hear it.',
+    open:'SHUTTER OPEN · RUN',opened:'SHUTTER OPEN. Leave the ward.',releasing:'RELEASING SHUTTER',released:'RELEASE COMPLETE · RUN',
+    go:'EVACUATE · east loading exit',ready:'3 / 3 FUSES · power the east loading shutter',
+    areas:['BLACKWATER / ADMISSIONS','BLACKWATER / SERVICE WING','BLACKWATER / LOWER TREATMENT'],wing:'BW / LOWER WING',
+    guide:'BLACKWATER / ISOLATION ROOMS →',
+    intro:'B1 · BLACKWATER WARD · Recover three fuses. The east loading shutter leads deeper. Some bodies here are only sleeping.'},
+  {tag:'KEYCARD',tags:'KEYCARDS',one:'keycard',many:'keycards',need:n=>`The lift needs ${n} more ${n===1?'keycard':'keycards'}`,label:'LIFT KEYCARD',sign:'LIFT LOCKED / 3 KEYCARDS',take:'Take lift keycard',start:'Call the freight lift',locked:'The freight lift is locked out.',
+    all:'All keycards found. Call the freight lift.',allKick:'All keycards · reach the lift',kick:'Lift keycard',
+    power:'LIFT CALLED',powerKick:'The lift is coming down',powered:'Keycards accepted. The freight lift is coming down, loudly. Everything heard it.',
+    open:'THE LIFT IS HERE · RUN',opened:'THE LIFT IS HERE. Get in.',releasing:'LIFT DESCENDING',released:'LIFT ARRIVED · RUN',
+    go:'GET IN · east freight lift',ready:'3 / 3 KEYCARDS · call the freight lift',
+    areas:['B2 / RECORDS','B2 / COLD STORAGE','B2 / CREMATORIUM WING'],wing:'BW / MORGUE LEVEL',
+    guide:'B2 / COLD VAULTS LOCK FROM INSIDE',
+    intro:'B2 · RECORDS & MORGUE · The bodies here are only sleeping. Three lift keycards. Don\'t wake them.'},
+  {tag:'KEY',tags:'KEYS',one:'key',many:'keys',need:n=>`The floodgate needs ${n} more ${n===1?'key':'keys'}`,label:'FLOODGATE KEY',sign:'FLOODGATE SEALED / 3 KEYS',take:'Take floodgate key',start:'Open the surface floodgate',locked:'The floodgate is sealed.',
+    all:'All keys found. Open the floodgate.',allKick:'All keys · reach the floodgate',kick:'Floodgate key',
+    power:'FLOODGATE UNSEALED',powerKick:'The gate is grinding open',powered:'Keys turned. The floodgate is grinding open and the whole Hollow heard it.',
+    open:'FLOODGATE OPEN · RUN',opened:'FLOODGATE OPEN. Get out.',releasing:'FLOODGATE OPENING',released:'FLOODGATE OPEN · RUN',
+    go:'GET OUT · surface floodgate',ready:'3 / 3 KEYS · open the surface floodgate',
+    areas:['B3 / PUMP GALLERY','B3 / THE WELL','B3 / CISTERNS'],wing:'BW / CISTERN LEVEL',
+    guide:'B3 / BULKHEADS LOCK FROM INSIDE',
+    intro:'B3 · THE HOLLOW · Three floodgate keys. The surface floodgate is the only way out.'}
+];
+const TEXT=()=>FLOOR_TEXT[floor]||FLOOR_TEXT[0];
+const more=n=>`${n} more ${n===1?TEXT().one:TEXT().many}`;
 const dynamicWorld=new THREE.Group();scene.add(dynamicWorld);
 dynamicWorld.matrixAutoUpdate=false;
 const roomLights=[];
+// Lamp colour per floor: B1 keeps its fixtures, B2's run cold blue, B3's burn red. Shelter lamps keep their green.
+const FLOOR_LAMPS=[null,{tint:lin(0x8fb8e8),mix:.6},{tint:lin(0xd2503a),mix:.6}],lampMix=new THREE.Color();
+function floorLamp(hex,shelter){const f=FLOOR_LAMPS[floor];if(!f||shelter)return hex;
+  return lampMix.setHex(hex,THREE.LinearSRGBColorSpace).lerp(f.tint,f.mix).getHex(THREE.LinearSRGBColorSpace);}
 function genMaze(){
-  const layout=RULES.generateMaze(Math.random);specialRooms=layout.rooms;return layout.grid;
+  const layout=RULES.generateFloor(floor,Math.random);specialRooms=layout.rooms;return layout.grid;
 }
 function cellWall(cx,cz){if(cx<0||cz<0||cx>=W||cz>=W)return false;return grid[cz][cx]===1;}
 function wallAt(x,z){return cellWall(Math.floor(x/S),Math.floor(z/S));}
@@ -310,7 +351,7 @@ function movePlayer(dx,dz){
   // rollback point world-valid even when a creature blocks that correction.
   resolve(P.pos,PR);
   const from={x:P.pos.x,z:P.pos.z};
-  const blocked=()=>state==='play'&&monsters.some(m=>!m.dead&&P.pos.y<m.stats.height&&
+  const blocked=()=>state==='play'&&monsters.some(m=>!m.dead&&!m.dormant&&P.pos.y<m.stats.height&&
     RULES.blocksCircleMove(from,P.pos,PR,{x:m.pos.x,z:m.pos.z,r:m.stats.radius}));
   P.pos.x=from.x+dx;P.pos.z=from.z+dz;resolve(P.pos,PR);
   if(!blocked())return;
@@ -399,6 +440,10 @@ const boxGeo=new THREE.BoxGeometry(0.56,0.3,0.32),lidGeo=new THREE.PlaneGeometry
 const boxMat=new THREE.MeshStandardMaterial({color:lin(0x4b5230),roughness:0.75,metalness:0.2});
 const boxLabelMat=(()=>{const [c,x]=cv(256,96);x.fillStyle='#4b5230';x.fillRect(0,0,256,96);x.fillStyle='#d8c35a';x.font='bold 40px "IBM Plex Mono",monospace';x.textAlign='center';x.textBaseline='middle';x.fillText('7.62x39',128,38);x.font='22px "IBM Plex Mono",monospace';x.fillText('30 RDS',128,76);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;return new THREE.MeshStandardMaterial({map:t,roughness:0.8,emissive:lin(0x111108)});})();
 const MESSAGES=['IT HEARS YOU RUN','LOCK THE DOOR','LIGHTS OFF','THE WARDEN DOES NOT HURRY','THREE FUSES. ONE EXIT.','CROUCH. BREATHE. WAIT.','A SHOT IS AN INVITATION','ISOLATION SAVES LIVES'];
+// B1 keeps its writing (the seeded draws depend on it). The first entry of a lower floor is painted in the hall.
+const FLOOR_MESSAGES=[MESSAGES,
+  ['DON\'T WAKE THEM','LIGHTS WAKE THEM','THEY ARE NOT DEAD','COUNT THE BODIES','ONE OF THEM MOVED','THREE CARDS CALL THE LIFT','DO NOT RUN PAST THEM','THE LIFT IS LOUD'],
+  ['DON\'T WAKE THEM','IT CAME UP THE WELL','LIGHTS WAKE THEM','THREE KEYS. ONE GATE.','THE WATER HEARS YOU','NO ONE LEFT','THE GATE WAKES EVERYTHING','KEEP YOUR LIGHT LOW']];
 function buildMaze(){
   maze.traverse(o=>{if(o.isInstancedMesh&&o.dispose)o.dispose();if(o.geometry&&o.geometry!==boxGeo&&o.geometry!==lidGeo)o.geometry.dispose();if(o.material&&o.userData.own){if(o.material.map)o.material.map.dispose();o.material.dispose();}});
   scene.remove(maze);maze.clear();scene.add(maze);
@@ -421,7 +466,8 @@ function buildMaze(){
     const sides=[];if(cellWall(cx+1,cz))sides.push('px');if(cellWall(cx-1,cz))sides.push('nx');if(cellWall(cx,cz+1))sides.push('pz');if(cellWall(cx,cz-1)&&!inHall)sides.push('nz');
     if(!sides.length)continue;used.add(cz*W+cx);
     const side=sides[Math.floor(Math.random()*sides.length)];
-    const t=new THREE.CanvasTexture(writingC(placed===0?'YOU TOUCHED IT':MESSAGES[placed%MESSAGES.length]));t.colorSpace=THREE.SRGBColorSpace;
+    const lines=FLOOR_MESSAGES[floor]||MESSAGES;
+    const t=new THREE.CanvasTexture(writingC(placed===0&&!floor?'YOU TOUCHED IT':lines[placed%lines.length]));t.colorSpace=THREE.SRGBColorSpace;
     const mat=new THREE.MeshStandardMaterial({map:t,transparent:true,depthWrite:false,roughness:0.6,polygonOffset:true,polygonOffsetFactor:-2});
     const pl=new THREE.Mesh(new THREE.PlaneGeometry(2.2,1.1),mat);pl.userData.own=true;
     const [wx,wz]=center(cx,cz),y=rnd(1.3,1.9);
@@ -440,7 +486,7 @@ function buildMaze(){
     (nb===1?ends:any).push([x,z]);}
   const shuf=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
   const picks=[];
-  for(const c of shuf(ends).concat(shuf(any))){if(picks.every(o=>Math.abs(o[0]-c[0])+Math.abs(o[1]-c[1])>5))picks.push(c);if(picks.length===12)break;}
+  for(const c of shuf(ends).concat(shuf(any))){if(picks.every(o=>Math.abs(o[0]-c[0])+Math.abs(o[1]-c[1])>5))picks.push(c);if(picks.length===FLOOR().ammo)break;}
   for(const [cx,cz] of picks){const [wx,wz]=center(cx,cz);const g=new THREE.Group();
     const b=new THREE.Mesh(boxGeo,boxMat);b.position.y=0.15;b.castShadow=true;b.receiveShadow=true;g.add(b);
     const lid=new THREE.Mesh(lidGeo,boxLabelMat);lid.position.set(0,0.152,0.1601);g.add(lid);
@@ -481,9 +527,9 @@ function buildRooms(){
   if(window.HollowVisuals)oldDecorations.forEach(o=>HollowVisuals.disposeGroup(o));
   dynamicWorld.traverse(o=>{if(o.userData.own){if(o.geometry)o.geometry.dispose();if(o.material){if(o.material.map)o.material.map.dispose();o.material.dispose();}}});
   dynamicWorld.clear();roomDoors=[];roomProps=[];roomLoot=[];roomLights.length=0;fuses=0;exitPowered=false;exitRelease=0;exitOpen=false;alarmT=0;decoys=3;decoyEvents=[];hideTime=0;
-    horror=HollowHorror.create(worldSeed);caseNotes=[];readNotes=new Set();captionText='';captionT=0;simulationTime=0;
+    horror=HollowHorror.create(worldSeed);caseNotes=[];readNotes=new Set();captionText='';captionT=0;simulationTime=0;wakeBannerT=wakeStingT=-99;
     const ward=HollowVisuals.decorateWard(THREE,{grid,cellSize:S,height:H,rooms:specialRooms,seed:worldSeed});
-    dynamicWorld.add(ward);roomLights.push(...ward.userData.practicals);
+    dynamicWorld.add(ward);roomLights.push(...ward.userData.practicals.map(p=>({...p,color:floorLamp(p.color)})));
     chaosWorldBuilt(ward);
   const own=o=>{o.userData.own=true;return o;};
   for(const r of specialRooms){
@@ -499,8 +545,8 @@ function buildRooms(){
     const strip=own(new THREE.Mesh(new THREE.BoxGeometry(2.4,.035,.12),new THREE.MeshBasicMaterial({color:lin(r.shelter?0x83d4c2:r.fuse?0xffc282:0xa6c4dd)})));
     strip.position.set(cx,H-.07,cz);group.add(strip);strip.position.x=0;strip.position.z=0;
     // Only the three nearest practical lights are active. Emissive fixtures stay visible.
-    roomLights.push({x:cx,z:cz,color:r.shelter?0xbac3a7:r.fuse?0xcdb48b:0x9caeaa,shelter:!!r.shelter,box:{minX:r.x*S,maxX:(r.x+r.w)*S,minZ:r.z*S,maxZ:(r.z+r.d)*S}});
-        const record=HollowHorror.RECORDS[r.id];
+    roomLights.push({x:cx,z:cz,color:floorLamp(r.shelter?0xbac3a7:r.fuse?0xcdb48b:0x9caeaa,r.shelter),shelter:!!r.shelter,box:{minX:r.x*S,maxX:(r.x+r.w)*S,minZ:r.z*S,maxZ:(r.z+r.d)*S}});
+        const record=HollowHorror.RECORDS[r.id]||HollowHorror.FLOOR_RECORDS?.[r.id];
         if(record){
           const [paper,ink]=cv(512,512);ink.fillStyle='#b6ae95';ink.fillRect(0,0,512,512);
           ink.fillStyle='#393a31';ink.font='bold 24px monospace';ink.fillText('BLACKWATER / INTERNAL',28,52);
@@ -530,11 +576,12 @@ function buildRooms(){
     group.updateMatrix();group.matrixAutoUpdate=false;
   }
   // A nearby refuge is deliberately introduced with signage rather than a surprise mechanic.
-  const guide=worldLabel('BLACKWATER / ISOLATION ROOMS →','#b8bea3',3.3);guide.position.set(7.5,2.3,3.06);dynamicWorld.add(guide);
-  const exitSign=worldLabel('POWER OFFLINE / 3 FUSES','#e7b878',2.3);exitSign.position.set((W-1)*S-.04,1.9,(W-2)*S+S/2);exitSign.rotation.y=-Math.PI/2;dynamicWorld.add(exitSign);
+  const guide=worldLabel(TEXT().guide,'#b8bea3',3.3);guide.position.set(7.5,2.3,3.06);dynamicWorld.add(guide);
+  const exitSign=worldLabel(TEXT().sign,'#e7b878',2.3);exitSign.position.set((W-1)*S-.04,1.9,(W-2)*S+S/2);exitSign.rotation.y=-Math.PI/2;dynamicWorld.add(exitSign);
   const gate=own(new THREE.Mesh(new THREE.BoxGeometry(.14,H,S),isolationDoorMaterial()));
   gate.position.set((W-1)*S-.02,H/2,(W-2)*S+S/2);gate.castShadow=true;dynamicWorld.add(gate);dynamicWorld.userData.gate=gate;dynamicWorld.userData.exitSign=exitSign;
   mazeNavigator=HollowNavigation.create({grid,cellSize:S,props:roomProps,circles:obstacles,doors:()=>roomDoors.map(d=>({...d.box,open:d.open}))});
+  placeWeapons();
   if(atm)addAtmosphereFixtures();
 }
 // Beacon mount beside open cell (cx,cz): on the first wall found (W, E, N, S), 0.2 m off it.
@@ -561,11 +608,37 @@ function metalAt(x,z){
   return false;
 }
 function makeLoot(type,x,z,room){
-  const group=new THREE.Group();group.position.set(x,type==='fuse'?.3:.15,z);dynamicWorld.add(group);
+  // The objective item keeps the loot type 'fuse' on every floor: a fuse on B1, a lift keycard on B2, a key on B3.
+  const shape=type!=='fuse'?[.5,.26,.26,.15,.15]:floor===1?[.38,.05,.25,.05,.45]:floor===2?[.54,.09,.13,.06,.45]:[.24,.55,.26,.3,.15];
+  const group=new THREE.Group();group.position.set(x,shape[3],z);dynamicWorld.add(group);
   const color=type==='fuse'?0xe9bd79:type==='medical'?0x81cbb3:0x879dae;
-  const box=new THREE.Mesh(new THREE.BoxGeometry(type==='fuse'?.24:.5,type==='fuse'?.55:.26,.26),new THREE.MeshStandardMaterial({color:lin(color),metalness:.45,roughness:.35,emissive:lin(color),emissiveIntensity:.15}));box.userData.own=true;group.add(box);
-  const label=worldLabel(type==='fuse'?'POWER FUSE':type==='medical'?'FIELD DRESSING':'AMMO / WALK OVER','#b5dad0',.9);label.scale.y=.4;label.position.set(0,.6,0);group.add(label);group.userData.label=label;
+  const box=new THREE.Mesh(new THREE.BoxGeometry(shape[0],shape[1],shape[2]),new THREE.MeshStandardMaterial({color:lin(color),metalness:.45,roughness:.35,emissive:lin(color),emissiveIntensity:shape[4]}));box.userData.own=true;group.add(box);
+  const label=worldLabel(type==='fuse'?TEXT().label:type==='medical'?'FIELD DRESSING':'AMMO / WALK OVER','#b5dad0',.9);label.scale.y=.4;label.position.set(0,.6,0);group.add(label);group.userData.label=label;
   return {id:room.id+':'+type,type,x,z,g:group,taken:false,room};
+}
+// A gun lying on its case where someone dropped it, taken with E. weapon: its index in weaponDefs.
+function makeWeaponLoot(index,x,z,room){
+  const w=weaponDefs[index],group=new THREE.Group();group.position.set(x,0,z);dynamicWorld.add(group);
+  const crate=new THREE.Mesh(new THREE.BoxGeometry(.42,.16,1.05),new THREE.MeshStandardMaterial({color:lin(0x2d3429),roughness:.72,metalness:.3}));crate.position.y=.08;crate.userData.own=true;group.add(crate);
+  const model=HollowVisuals.makeWeapon(THREE,w.id,{world:true});model.userData.decoration=true;
+  model.rotation.set(0,0,Math.PI/2);model.position.set(-.04,.2,w.id==='pistol'?.05:.22);group.add(model);
+  const label=worldLabel(w.name.toUpperCase()+' · [E]','#e7d9a2',1.2);label.scale.y=.4;label.position.set(0,.75,0);group.add(label);group.userData.label=label;
+  return {id:room.id+':'+w.id,type:'weapon',weapon:index,x,z,g:group,taken:false,room};
+}
+// Each floor's guns lie in their rooms, on a clear spot reachable from the door and away from the other pickups.
+function placeWeapons(){
+  for(const [kind,id] of Object.entries(FLOOR().weapons)){
+    const index=weaponDefs.findIndex(w=>w.id===kind),r=specialRooms.find(v=>v.id===id);if(index<0||!r)continue;
+    const cx=(r.x+r.w/2)*S,cz=(r.z+r.d/2)*S,[ex,ez]=center(r.door.x,r.door.z),cand=[];let spot=null;
+    // Prefer a spot beside the room's centre, toward the back wall; scan the whole floor of the room if furniture is there.
+    for(let x=r.x*S+1;x<=(r.x+r.w)*S-1;x+=.5)for(let z=r.z*S+1;z<=(r.z+r.d)*S-1;z+=.5)cand.push([x,z,Math.hypot(x-cx-1.5,z-cz+1)]);
+    cand.sort((a,b)=>a[2]-b[2]);
+    for(const [x,z] of cand){
+      if(!movementClear(x,z,x,z,.6)||roomLoot.some(l=>Math.hypot(l.x-x,l.z-z)<1.4))continue;
+      if(mazeNavigator.path(ex,ez,x,z,PR).length){spot={x,z};break;}
+    }
+    if(spot)roomLoot.push(makeWeaponLoot(index,spot.x,spot.z,r));
+  }
 }
 // Linear decay follows r128's (1-d/13)^2 pools within ~15% from 2 to 10 m without blowing out the ceiling.
 const practicalLights=Array.from({length:3},()=>{const l=physical(new THREE.PointLight(0xb4cadd,0,13),4.7,1);dynamicWorld.add(l);scene.add(l);return l;});
@@ -609,22 +682,30 @@ function pickupReach(item,player,radius=1.15){
 }
 function requestLoot(l){
   if(l.taken||l.pending)return;
+  // Guns are each survivor's own find: co-op partners each pick up their own copy, without asking the host.
+  if(l.type==='weapon'){collectLoot(l);return;}
   if(NET.inGame&&NET.role==='guest'){if(queueAction({type:'loot',id:l.id}))l.pending=NET.actionSeq;}
   else collectLoot(l);
 }
 function collectLoot(l){
   if(l.taken)return;
-  if(l.type==='fuse'&&(!NET.inGame||NET.role==='host'))alertMonsters(24,l.x,l.z);
+  if(l.type==='fuse'&&(!NET.inGame||NET.role==='host'))alertMonsters(24,l.x,l.z,5);
   if(l.type==='medical'&&P.health>=100){showMsg('Health is full. Save this kit for later.',2);return;}
+  if(l.type==='weapon'){l.taken=true;l.g.visible=false;takeWeapon(l.weapon);return;}
   l.taken=true;l.g.visible=false;sPickup(l.type);
   rewardLoot(l.type);
 }
 function rewardLoot(type){
-  if(type==='fuse'){fuses=roomLoot.filter(v=>v.type==='fuse'&&v.taken).length;showMsg(fuses===3?'All fuses secured. Reach the exit to restore power.':`Power fuse recovered · ${fuses}/3.`,3.5);}
+  if(type==='fuse'){fuses=roomLoot.filter(v=>v.type==='fuse'&&v.taken).length;showMsg(fuses===3?TEXT().all:`${TEXT().kick} recovered · ${fuses}/3.`,3.5);}
   else if(type==='medical'){P.health=Math.min(100,P.health+45);showMsg('Field dressing · +45 health.',2);}
-  else if(type==='ammo'){weapons[0].reserve+=20;weapons[1].reserve+=6;weapons[2].reserve+=3;reserve=weapons[weaponIndex].reserve;showMsg('Ammunition · +20 carbine / +6 sidearm / +3 shells.',2.5);}
+  else if(type==='ammo'){weapons[0].reserve+=20;weapons[1].reserve+=6;weapons[2].reserve+=3;reserve=weapons[weaponIndex].reserve;showMsg(ammoText([20,6,3]),3);}
   else {weapons[0].reserve+=30;weapons[1].reserve+=12;weapons[2].reserve+=6;reserve=weapons[weaponIndex].reserve;decoys=Math.min(5,decoys+1);battery=1;showMsg('Supplies secured · ammunition, battery and a decoy.',3);}
   if(automaticLoot(type)&&mag===0&&reserve>0)startReload();
+}
+// Rounds for a gun not found yet are kept for it: they are in its reserve when it turns up.
+function ammoText(amounts){
+  const got=weaponDefs.map((w,i)=>owned[i]?`+${amounts[i]} ${['carbine','sidearm','shells'][i]}`:'').filter(Boolean).join(' / ');
+  return `Ammunition · ${got}.`+(owned.every(Boolean)?'':' Spare rounds packed for guns not found yet.');
 }
 function queueAction(action){
   if(NET.actions.length>=32){showMsg('Waiting for the host to confirm your actions.',2);return false;}
@@ -642,15 +723,16 @@ function interact(){
     requestLoot(l);
   }else if(interaction.type==='record'){
       const note=interaction.item;readNotes.add(note.id);captionText=note.title+' — '+note.text;captionT=18;sMetal(0,680,.035);
-    }else if(fuses<3)showMsg(`Power is offline. Recover ${3-fuses} more ${fuses===2?'fuse':'fuses'} from marked rooms.`,3);
+    }else if(fuses<3)showMsg(`${TEXT().locked} Recover ${more(3-fuses)} from marked rooms.`,3);
   else if(NET.inGame&&NET.role==='guest')queueAction({type:'exit'});
   else powerExit();
 }
 function powerExit(){
   if(fuses<3||exitPowered)return;
-  exitPowered=true;exitRelease=HollowHorror.RELEASE_SECONDS;alarmT=0;sMetal(0,90,.22);
-  showMsg('Power restored. The shutter is releasing. Keep moving — they can hear it.',5);
-  if(!NET.inGame||NET.role==='host')alertMonsters(100,(W-2)*S+S/2,(W-2)*S+S/2);
+  exitPowered=true;exitRelease=FLOOR().release;alarmT=0;sMetal(0,90,.22);
+  showMsg(TEXT().powered,5);
+  // The lift and the floodgate below are loud enough to wake most of a floor.
+  if(!NET.inGame||NET.role==='host')alertMonsters(100,(W-2)*S+S/2,(W-2)*S+S/2,floor?45:18);
 }
 function throwDecoy(){
   if(state!=='play'||!decoys)return;decoys--;
@@ -664,7 +746,7 @@ function updateRooms(dt){
   damageT=Math.max(0,damageT-dt);hitMarkerT=Math.max(0,hitMarkerT-dt);noticeT=Math.max(0,noticeT-dt);
   for(const d of roomDoors){d.angle=lerp(d.angle,d.open?-Math.PI/2:0,1-Math.exp(-dt*10));d.hinge.rotation.y=d.angle;}
   if(exitPowered&&!exitOpen){
-    if(!NET.inGame||NET.role==='host'){exitRelease=Math.max(0,exitRelease-dt);if(exitRelease===0){exitOpen=true;showMsg('SHUTTER OPEN. Leave the ward.',4);}}
+    if(!NET.inGame||NET.role==='host'){exitRelease=Math.max(0,exitRelease-dt);if(exitRelease===0){exitOpen=true;showMsg(TEXT().opened,4);}}
     alarmT-=dt;if(alarmT<=0){alarmT=3.2;sWardSound('alarm',(W-2)*S+S/2,(W-2)*S+S/2);if(!NET.inGame||NET.role==='host')alertMonsters(100,(W-2)*S+S/2,(W-2)*S+S/2);}
   }
   const gate=dynamicWorld.userData.gate;if(gate)gate.position.y=lerp(gate.position.y,exitOpen?H*1.5:exitPowered?H/2+.16:H/2,Math.min(1,dt*2));
@@ -673,7 +755,7 @@ function updateRooms(dt){
   const concealed=door&&!door.open&&door.locked&&P.crouching&&!torchOn&&!P.running&&!mouseDown;
   hideTime=concealed?hideTime+dt:0;P.hidden=hideTime>1.25;
   for(const l of roomLoot)if(!l.taken){l.g.userData.label.visible=Math.hypot(P.pos.x-l.x,P.pos.z-l.z)<3.2;l.g.userData.label.rotation.y=P.yaw;}
-  for(const d of decoyEvents){d.remaining-=dt;d.pulse-=dt;if(d.pulse<=0){d.pulse=1.2;sThud(d.x,.1,d.z,.6,680);if(!NET.inGame||NET.role==='host')alertMonsters(23,d.x,d.z);}}
+  for(const d of decoyEvents){d.remaining-=dt;d.pulse-=dt;if(d.pulse<=0){d.pulse=1.2;sThud(d.x,.1,d.z,.6,680);if(!NET.inGame||NET.role==='host')alertMonsters(23,d.x,d.z,6);}}
   decoyEvents=decoyEvents.filter(d=>d.remaining>0);
   interactionT-=dt;if(interactionT<=0){interactionT=.1;interaction=findInteraction();refreshRoomLights();}
 }
@@ -705,8 +787,11 @@ function createPostFX(){
   catch(e){console.warn('[The Hollow] post-processing disabled:',e);fx=null;}
 }
 createPostFX();
-function selectWeapon(index){
-  index=(index+weaponDefs.length)%weaponDefs.length;if(index===weaponIndex)return;
+// step (Q): walk that way to the next gun carried. Without it the index is taken as given and must be carried.
+function selectWeapon(index,step){
+  const n=weaponDefs.length;index=(index+n)%n;
+  if(step)for(let k=0;k<n&&!owned[index];k++)index=(index+step+n)%n;
+  if(!owned[index]||index===weaponIndex)return;
   weapons[weaponIndex].mag=mag;weapons[weaponIndex].reserve=reserve;
   gun.visible=false;weaponIndex=index;gun=weaponModels[index];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;
   mag=weapons[index].mag;reserve=weapons[index].reserve;reloadT=0;fireT=.24;gunKick=0;flashT=0;semiFired=false;weaponAudio?.equip(weaponDefs[index].id);
@@ -723,11 +808,14 @@ function updatePuffs(dt){for(const sp of puffs){if(!sp.visible)continue;sp.userD
 
 /* ---------- monster ---------- */
 function makeMonster(kind){return HollowVisuals.makeMonster(THREE,kind);}
-const MAX_MON=12;let monCount=8;
-const MONSTER_ORDER=['warden','stalker','crawler','shrieker','stalker','crawler','warden','shrieker','crawler','stalker','warden','shrieker'];
+// Slots [0, active) of a floor hunt from the start; the next `sleepers` slots lie on the floor until disturbed.
+const MAX_MON=20;let monCount=8;
+const MONSTER_ORDER=['warden','stalker','crawler','shrieker','stalker','crawler','warden','shrieker','crawler','stalker','warden','shrieker',
+  'crawler','stalker','crawler','stalker','shrieker','crawler','stalker','crawler'];
 const monsters=[];
 for(let i=0;i<MAX_MON;i++){const kind=MONSTER_ORDER[i],g=makeMonster(kind);g.visible=false;scene.add(g);
-  monsters.push({g,kind,stats:RULES.MONSTERS[kind],pos:new THREE.Vector3(),yaw:0,state:'wander',path:[],repath:0,lastSeen:new THREE.Vector3(),lost:0,searchT:0,stepT:rnd(0,0.6),spotCD:0,hp:RULES.MONSTERS[kind].hp,dead:true,deadT:0,stagger:0,voiceT:rnd(2,6),stalkT:0,watchT:0,flank:i%2?1:-1,lungeT:0,lungeCD:0,lungeBoost:0,attackT:0,screamT:0,senseT:0,seenTarget:null,anim:HollowMonsterAnim.create(kind,{seed:i}),animYaw:0,watched:false});}
+  monsters.push({g,kind,stats:RULES.MONSTERS[kind],pos:new THREE.Vector3(),yaw:0,state:'wander',path:[],repath:0,lastSeen:new THREE.Vector3(),lost:0,searchT:0,stepT:rnd(0,0.6),spotCD:0,hp:RULES.MONSTERS[kind].hp,dead:true,deadT:0,stagger:0,voiceT:rnd(2,6),stalkT:0,watchT:0,flank:i%2?1:-1,lungeT:0,lungeCD:0,lungeBoost:0,attackT:0,screamT:0,senseT:0,seenTarget:null,anim:HollowMonsterAnim.create(kind,{seed:i}),animYaw:0,watched:false,
+    dormant:false,sleep:0,rate:0,rouser:null,wakeIn:-1,riseT:0,stirred:false,lay:[0,0,0,0,0,0],layR:.36});}
 
 /* ---------- state ---------- */
 const keys={};
@@ -746,43 +834,192 @@ let visited=new Uint8Array(W*W),ammoBoxes=[];
 // The ward's look: the dark hemisphere/fog, the torch on and the rifle out.
 function setHell(){
   dynamicWorld.visible=true;
-  applyEnv(ENV.hell);
+  applyEnv([ENV.hell,ENV.morgue,ENV.hollow][floor]||ENV.hell);document.body.dataset.floor=FLOOR().code;
   canvas.style.filter='none';$('grain').style.opacity=preferences.effects?.027:0;$('vignette').style.opacity=.6;
   torchOn=true;torch.visible=false;gunOut=true;gun.visible=true;
 }
-function spawnMonsters(count){
-  monCount=count||8;
+// count: creatures awake on arrival (slots [0,count)); sleepers: bodies on the floor in the slots after them.
+function spawnMonsters(count,sleepers=0){
+  count=Math.min(MAX_MON,count||8);
   const df=distField(3,2);let max=0;for(const v of df)if(v>max)max=v;
   const cand=[];for(let z=0;z<W;z++)for(let x=0;x<W;x++){const v=df[z*W+x];if(v>Math.min(22,max*.3)&&x<W-1&&!specialRooms.some(r=>r.shelter&&RULES.insideRoom(r,x*S+S/2,z*S+S/2)))cand.push([x,z]);}
   for(let i=cand.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[cand[i],cand[j]]=[cand[j],cand[i]];}
   const chosen=[];
-  for(const c of cand){if(chosen.every(o=>Math.abs(o[0]-c[0])+Math.abs(o[1]-c[1])>7))chosen.push(c);if(chosen.length===monCount)break;}
-  while(chosen.length<monCount)chosen.push(cand[Math.floor(Math.random()*cand.length)]);
-  monsters.forEach((m,i)=>{if(i>=monCount){m.dead=true;m.spawned=false;m.g.visible=false;return;}m.spawned=true;const [wx,wz]=center(chosen[i][0],chosen[i][1]);
-    m.pos.set(wx,0,wz);m.yaw=Math.random()*Math.PI*2;m.state='wander';m.path=[];m.repath=0;m.lost=0;m.spotCD=0;m.hp=m.stats.hp;m.dead=false;m.deadT=0;m.stagger=0;m.attackT=0;m.screamT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;
-    m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.stalkT=0;m.watchT=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;
-    m.g.position.copy(m.pos);m.g.rotation.set(0,m.yaw,0);m.g.visible=true;m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);});
+  for(const c of cand){if(chosen.every(o=>Math.abs(o[0]-c[0])+Math.abs(o[1]-c[1])>7))chosen.push(c);if(chosen.length===count)break;}
+  while(chosen.length<count)chosen.push(cand[Math.floor(Math.random()*cand.length)]);
+  monsters.forEach((m,i)=>{if(i>=count){m.dead=true;m.spawned=false;m.dormant=false;m.g.visible=false;return;}const [wx,wz]=center(chosen[i][0],chosen[i][1]);resetMonster(m,wx,wz,Math.random()*Math.PI*2);});
+  monCount=count+layBodies(count,Math.min(MAX_MON-count,sleepers),df);
 }
-function hideMonsters(){monsters.forEach(m=>{m.g.visible=false;m.spawned=false;m.dead=true;});stopAudio(state==='dead');}
-function resetSurvivor(){
+function resetMonster(m,x,z,yaw){
+  m.spawned=true;m.pos.set(x,0,z);m.yaw=yaw;m.state='wander';m.path=[];m.repath=0;m.lost=0;m.spotCD=0;m.hp=m.stats.hp;m.dead=false;m.deadT=0;m.stagger=0;m.attackT=0;m.screamT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;
+  m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.stalkT=0;m.watchT=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;
+  m.dormant=false;m.sleep=0;m.rate=0;m.rouser=null;m.wakeIn=-1;m.riseT=0;m.shotDmg=0;
+  m.g.position.copy(m.pos);m.g.rotation.set(0,m.yaw,0);m.g.visible=true;m.g.userData.speed=0;m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);
+}
+// Sleepers lie along corridor walls and between the furniture, mostly well away from the lobby, never in a refuge and
+// never on top of a pickup; morgue rooms take a few more. Returns how many bodies found a place, in slots from `first`.
+function layBodies(first,n,df){
+  if(n<=0)return 0;
+  const cells=[];
+  for(let z=1;z<W-1;z++)for(let x=1;x<W-2;x++){
+    if(!openCell(x,z)||df[z*W+x]<=7)continue;
+    const [wx,wz]=center(x,z);if(Math.hypot(wx-PED.x,wz-PED.z)<18)continue;
+    const room=specialRooms.find(r=>RULES.insideRoom(r,wx,wz))||null;if(room&&room.shelter)continue;
+    cells.push({x,z,wx,wz,room,rank:room&&room.type==='morgue'?0:1,r:Math.random()});
+  }
+  cells.sort((a,b)=>a.rank-b.rank||a.r-b.r);
+  const used=[],near=(x,z)=>roomLoot.some(l=>Math.hypot(l.x-x,l.z-z)<3)||ammoBoxes.some(b=>Math.hypot(b.x-x,b.z-z)<2.4);
+  let ci=0,placed=0;
+  for(let i=first;i<first+n;i++){
+    const m=monsters[i];let ok=false;
+    while(!ok&&ci<cells.length){
+      const c=cells[ci++];
+      if(used.some(o=>Math.abs(o.x-c.x)+Math.abs(o.z-c.z)<(c.room&&o.room===c.room?2:3)))continue;
+      if(c.room&&used.filter(o=>o.room===c.room).length>=(c.room.type==='morgue'?4:2))continue;
+      const walls=[[1,0],[-1,0],[0,1],[0,-1]].filter(([dx,dz])=>cellWall(c.x+dx,c.z+dz));
+      let x=c.wx+rnd(-.6,.6),z=c.wz+rnd(-.6,.6),yaw=Math.random()*Math.PI*2;
+      if(walls.length){const [dx,dz]=walls[Math.floor(Math.random()*walls.length)];x=c.wx+dx*.8;z=c.wz+dz*.8;yaw=(dx?0:Math.PI/2)+rnd(-.2,.2);}
+      if(near(x,z)||!movementClear(x,z,x,z,m.stats.radius))continue;
+      for(const turn of [0,Math.PI]){
+        resetMonster(m,x,z,yaw+turn);layDown(m,i);
+        if([0,2,4].every(k=>movementClear(m.lay[k],m.lay[k+1],m.lay[k],m.lay[k+1],.18))){ok=true;break;}
+      }
+    }
+    if(!ok){m.dead=true;m.spawned=false;m.dormant=false;m.g.visible=false;break;}
+    used.push(cells[ci-1]);placed++;
+  }
+  for(let i=first+placed;i<MAX_MON;i++){const m=monsters[i];m.dead=true;m.spawned=false;m.dormant=false;m.g.visible=false;}
+  return placed;
+}
+const LAY_IN={speed:0,state:'wander',lunge:0,stagger:0,turn:0,watched:false,effects:false,dead:true};
+// Puts a creature on the floor as if it had died there (falling forward or back by slot, so co-op peers agree), eyes
+// dark. lay: three points along the body, for shots, contact and the torch.
+function layDown(m,slot){
+  m.dormant=true;m.state='sleep';m.sleep=0;m.rate=0;m.rouser=null;m.wakeIn=-1;m.riseT=0;m.stirred=false;m.senseT=Math.random()*.1;m.voiceT=rnd(3,10);
+  m.g.userData.eyeMat.color.set(0x120000);m.g.userData.speed=0;
+  const f=slot%2?1:-1;
+  m.anim.reset();m.anim.die({dirX:Math.sin(m.yaw)*f,dirZ:Math.cos(m.yaw)*f,yaw:m.yaw});
+  for(let k=0;k<45;k++)m.anim.update(.1,LAY_IN);
+  HollowMonsterAnim.apply(m.g,m.anim.pose,m.pos.x,m.pos.z,m.yaw);
+  const g=m.g,sx=Math.sin(g.rotation.y),sz=Math.cos(g.rotation.y),quad=m.kind==='crawler';
+  const dir=quad?1:Math.sin(g.rotation.x)<0?-1:1,h=m.stats.height;
+  m.lay=(quad?[-.4,0,.4]:[.18*h,.45*h,.72*h]).flatMap(a=>[g.position.x+sx*a*dir,g.position.z+sz*a*dir]);
+  m.layR=quad?.45:.36;
+}
+function layDistance(m,x,z){const l=m.lay;return Math.min(Math.hypot(l[0]-x,l[1]-z),Math.hypot(l[2]-x,l[3]-z),Math.hypot(l[4]-x,l[5]-z));}
+function hideMonsters(){monsters.forEach(m=>{m.g.visible=false;m.spawned=false;m.dead=true;m.dormant=false;m.riseT=0;m.wakeIn=-1;});stopAudio(state==='dead');}
+// A kit is everything the survivor carries between floors: health, the guns found so far and their rounds, decoys and
+// the torch battery. A new run gets the starting kit: full health and the sidearm alone.
+function freshKit(){
+  const has=weaponDefs.map(w=>RULES.STARTING_WEAPONS.includes(w.id));
+  return {health:100,owned:has,weapons:weaponDefs.map((w,i)=>has[i]?{mag:w.capacity,reserve:w.reserve}:{mag:0,reserve:0}),weapon:Math.max(0,has.indexOf(true)),decoys:3,battery:1};
+}
+function currentKit(){
+  weapons[weaponIndex]={mag,reserve};
+  return {health:Math.max(1,P.health),owned:owned.slice(),weapons:weapons.map(w=>({mag:w.mag,reserve:w.reserve})),weapon:weaponIndex,decoys,battery};
+}
+function resetSurvivor(kit){
+  kit=kit||freshKit();
   stopAudio();
-  P.health=100;P.crouching=false;P.eye=EYE;P.hidden=false;P.noise=0;P.groundY=0;P.jumpBuffer=0;P.coyote=0;slideT=0;LOCO.reset();P.sprint=0;P.strafe=0;if(atm)atm.clear();fxKill=fxFlash=0;damageT=0;stingerCD=0;aiming=false;semiFired=false;crouchHeld=false;sprintHeld=false;touchMove.x=touchMove.y=0;
+  P.health=kit.health;P.crouching=false;P.eye=EYE;P.hidden=false;P.noise=0;P.groundY=0;P.jumpBuffer=0;P.coyote=0;slideT=0;LOCO.reset();P.sprint=0;P.strafe=0;if(atm)atm.clear();fxKill=fxFlash=0;damageT=0;stingerCD=0;aiming=false;semiFired=false;crouchHeld=false;sprintHeld=false;touchMove.x=touchMove.y=0;
   for(const k in keys)keys[k]=false;
-  weaponModels.forEach(g=>g.visible=false);weapons=weaponDefs.map(w=>({mag:w.capacity,reserve:w.reserve}));weaponIndex=0;gun=weaponModels[0];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;
-  mag=weapons[0].mag;reserve=weapons[0].reserve;reloadT=0;fireT=.3;gunKick=0;mouseDown=false;fireQueued=false;flashT=0;hitMarkerT=0;setLight(muzzleLight,0);setLight(fpFlash,0);
+  weaponModels.forEach(g=>g.visible=false);owned=kit.owned.slice();weapons=kit.weapons.map(w=>({mag:w.mag,reserve:w.reserve}));weaponIndex=owned[kit.weapon]?kit.weapon:Math.max(0,owned.indexOf(true));
+  gun=weaponModels[weaponIndex];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;decoys=kit.decoys;battery=kit.battery;
+  mag=weapons[weaponIndex].mag;reserve=weapons[weaponIndex].reserve;reloadT=0;fireT=.3;gunKick=0;mouseDown=false;fireQueued=false;flashT=0;hitMarkerT=0;setLight(muzzleLight,0);setLight(fpFlash,0);
+  stowOwnedWeapons();
+}
+// A gun the survivor already carries is not lying on this floor (one not found yet stays until it is).
+function stowOwnedWeapons(){for(const l of roomLoot)if(l.type==='weapon'){const has=!!owned[l.weapon];l.taken=has;l.g.visible=!has;}}
+function takeWeapon(index){
+  const w=weaponDefs[index];if(!w)return;
+  weapons[weaponIndex]={mag,reserve};owned[index]=true;
+  weapons[index]={mag:w.capacity,reserve:weapons[index].reserve+w.reserve};
+  if(index!==weaponIndex)selectWeapon(index);else{mag=weapons[index].mag;reserve=weapons[index].reserve;}
+  playStinger('pickup','weapon');
+  hud.banner('NEW WEAPON',{tone:'objective',kicker:w.name,duration:2.6});
+  showMsg(`${w.name} · ${weapons[index].mag} loaded, ${weapons[index].reserve} spare. ${index+1} or Q switches weapons.`,3.4);
 }
 function newGame(){
   if(NET.g)leaveRoom();NET.inGame=false;avatar.visible=false;runToken++;
   avSpot.visible=avFlash.visible=false;
-  // A dark run started from the title reuses the world the menu prebuilt and warmed (warmPlayPipelines).
+  // A dark run started from the title reuses the world the menu prebuilt and warmed (warmPlayPipelines): always B1.
+  floor=0;scoreBase={points:0,kills:0};elapsed=0;
   if(!prebuiltSeed){worldSeed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);}
-  prebuiltSeed=0;resetSurvivor();
-  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
-  battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
-  visited=new Uint8Array(W*W);
-  setHell();P.pos.set(PED.x-.85,0,PED.z);P.yaw=Math.PI/2;P.pitch=0;spawnMonsters(8);grace=10;state='play';
+  prebuiltSeed=0;startFloor(freshKit());
   if(droneGain)droneGain.gain.value=0.07;
-  showMsg('BLACKWATER WARD · Recover three fuses. The east loading shutter is your way out.',6);
+}
+// Everything after a floor's world is built: the kit, the survivor at the lobby pedestal, the creatures, a checkpoint.
+function startFloor(kit){
+  resetSurvivor(kit);
+  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
+  danger=0;ambientT=14;$('flash').style.opacity=0;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
+  visited=new Uint8Array(W*W);
+  setHell();P.pos.set(PED.x-.85,0,PED.z);P.yaw=Math.PI/2;P.pitch=0;spawnMonsters(FLOOR().active,FLOOR().sleepers);grace=10;state='play';
+  checkpoint={floor,kit:copyKit(kit),elapsed,score:{...scoreBase}};
+  if(floor>0)saveCampaign();
+  if(scoreBase.points>0)hud.score(scoreBase.points);
+  showMsg(TEXT().intro,floor?7:6);
+}
+// Builds floor `index` with a new layout and carries `kit` onto it (descending, a retry, Continue, QA).
+function enterFloor(index,kit,seed){
+  floor=Math.max(0,Math.min(RULES.FLOORS.length-1,index|0));
+  worldSeed=seed||1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);
+  startFloor(kit);
+}
+function copyKit(k){return {health:k.health,owned:k.owned.slice(),weapons:k.weapons.map(w=>({mag:w.mag,reserve:w.reserve})),weapon:k.weapon,decoys:k.decoys,battery:k.battery};}
+// The score of the whole run: floors already cleared plus this floor's streak.
+function runScore(){const own=streak.snapshot();return {kills:scoreBase.kills+own.kills,points:scoreBase.points+own.points};}
+// Between floors: a black title card. It paints before the build holds the main thread, then stays up long enough to
+// read (CARD_MS in all, and CARD_AFTER_MS past the build, while the new floor's first frames render behind it).
+const CARD_MS=1600,CARD_AFTER_MS=700;
+function transition(code,name,note,build){
+  state='descend';releaseInput();stopAudio();
+  $('descendCode').textContent=code;$('descendName').textContent=name;$('descendNote').textContent=note;
+  showScreen('descend');const shown=performance.now();
+  const run=()=>{
+    if(state!=='descend')return;
+    // A menu warm-up still compiling the old world (Continue right after loading) stops at its next step: wait for it.
+    if(warming){setTimeout(run,50);return;}
+    try{build();}catch(e){console.error('[The Hollow] Floor build failed:',e);openMenu();return;}
+    state='descend';
+    setTimeout(()=>{if(state!=='descend')return;state='play';if(document.hidden){pause();return;}showScreen(null);if(document.pointerLockElement!==canvas)lock();},
+      Math.max(CARD_AFTER_MS,CARD_MS-(performance.now()-shown)));
+  };
+  setTimeout(run,90);
+}
+function descend(){
+  if(state!=='play'||NET.inGame||floor>=RULES.FLOORS.length-1)return;
+  scoreBase=runScore();const kit=currentKit(),next=RULES.FLOORS[floor+1],from=FLOOR().exit;
+  sThud(P.pos.x,1,P.pos.z,.7,50);
+  transition(next.code,next.name,`Down through the ${from}. Everything you carry comes with you.`,()=>enterFloor(floor+1,kit));
+}
+// Death below B1 goes back to the start of the floor with what the survivor carried down.
+function retryFloor(c){
+  if(NET.g)leaveRoom();NET.inGame=false;avatar.visible=false;avSpot.visible=avFlash.visible=false;runToken++;
+  floor=c.floor;scoreBase={...c.score};elapsed=c.elapsed;const f=FLOOR();
+  transition(f.code,f.name,'Back to the start of the floor, with what you carried down.',()=>enterFloor(c.floor,copyKit(c.kit)));
+}
+const LS_CAMPAIGN='hollow.campaign';
+function saveCampaign(){
+  if(!checkpoint||!checkpoint.floor)return;
+  try{localStorage.setItem(LS_CAMPAIGN,JSON.stringify({v:1,floor:checkpoint.floor,kit:checkpoint.kit,elapsed:checkpoint.elapsed,score:checkpoint.score,at:Date.now()}));}catch(e){}
+}
+function clearCampaign(){try{localStorage.removeItem(LS_CAMPAIGN);}catch(e){}checkpoint=null;}
+// The saved checkpoint, checked field by field: it comes back from storage.
+function savedCampaign(){
+  let s=null;try{s=JSON.parse(localStorage.getItem(LS_CAMPAIGN)||'null');}catch(e){return null;}
+  if(!s||typeof s!=='object'||!s.kit||typeof s.kit!=='object')return null;
+  const fl=Math.floor(finiteNumber(s.floor,0,0,RULES.FLOORS.length-1));if(!fl)return null;
+  const k=s.kit,has=weaponDefs.map((w,i)=>!!(Array.isArray(k.owned)&&k.owned[i])||RULES.STARTING_WEAPONS.includes(w.id));
+  const kit={health:finiteNumber(k.health,100,1,100),owned:has,
+    weapons:weaponDefs.map((w,i)=>{const v=Array.isArray(k.weapons)&&k.weapons[i]||{};return {mag:Math.floor(finiteNumber(v.mag,0,0,w.capacity)),reserve:Math.floor(finiteNumber(v.reserve,0,0,999))};}),
+    weapon:Math.floor(finiteNumber(k.weapon,1,0,weaponDefs.length-1)),decoys:Math.floor(finiteNumber(k.decoys,3,0,5)),battery:finiteNumber(k.battery,1,0,1)};
+  const score=s.score&&typeof s.score==='object'?s.score:{};
+  return {floor:fl,kit,elapsed:finiteNumber(s.elapsed,0,0,7200),score:{points:Math.floor(finiteNumber(score.points,0,0,1e6)),kills:Math.floor(finiteNumber(score.kills,0,0,999))}};
+}
+function updateContinue(){
+  const b=$('continueBtn'),s=savedCampaign();if(!b)return;
+  b.hidden=!s;if(s)b.textContent=`Continue · ${RULES.FLOORS[s.floor].code} ${RULES.FLOORS[s.floor].name}`;
 }
 
 /* ---------- audio ---------- */
@@ -890,7 +1127,7 @@ addEventListener('keydown',e=>{
   if(!e.repeat){
     const actions={KeyF:'torch',KeyR:'reload',KeyE:'interact',KeyQ:'weapon',KeyV:'decoy',KeyM:'map',Space:'jump',Escape:'pause'};
     if(actions[e.code])inputAction(actions[e.code],true);
-    if(state==='play'&&['Digit1','Digit2','Digit3'].includes(e.code))selectWeapon(Number(e.code.slice(-1))-1);
+    if(state==='play'&&['Digit1','Digit2','Digit3'].includes(e.code)){const i=Number(e.code.slice(-1))-1;if(owned[i])selectWeapon(i);else showMsg(`No ${weaponDefs[i].name} yet. Guns lie where their owners fell.`,2.2);}
     if(['KeyC','ControlLeft','ControlRight'].includes(e.code))inputAction('crouch',true);
   }
 },{passive:false});
@@ -914,14 +1151,14 @@ function inputAction(action,pressed){
   if(action==='jump')P.jumpBuffer=.16;
   if(action==='torch'&&state==='play'){if(battery>.01){torchOn=!torchOn;sClick();}else showMsg('Battery depleted. Leave the torch off to recharge.',2);}
   if(action==='reload'&&state==='play')startReload();
-  if(action==='weapon'&&state==='play')selectWeapon(weaponIndex+1);
+  if(action==='weapon'&&state==='play')selectWeapon(weaponIndex+1,1);
   if(action==='interact')interact();
   if(action==='decoy')throwDecoy();
   if(action==='map'){mapExpanded=!mapExpanded;$('map').classList.toggle('expanded',mapExpanded);}
 }
 const controls=window.HollowControls?HollowControls.create({canvas,onAction:inputAction,onLook:look,onMove:(x,y)=>{touchMove.x=x;touchMove.y=y;}}):null;
 function lock(){if(controls?controls.touch:IS_TOUCH)return;try{const r=canvas.requestPointerLock();if(r&&r.catch)r.catch(()=>showMsg('Click the game to capture the mouse.',2));}catch(e){}}
-function showScreen(id){renderRequested=true;['name','menu','pause','dead','win','coop','coopEnd'].forEach(s=>$(s).hidden=s!==id);$('hud').hidden=!(id===null&&state==='play');
+function showScreen(id){renderRequested=true;['name','menu','pause','dead','win','coop','coopEnd','descend'].forEach(s=>$(s).hidden=s!==id);$('hud').hidden=!(id===null&&state==='play');
   // A button that closed its own screen keeps focus until the browser's next focus fix-up (a whole frame on slow GPUs),
   // and the key handler ignores buttons: release it now so the next key reaches the game.
   const f=document.activeElement;if(f&&f!==document.body&&f.closest('[hidden]')&&f.blur)f.blur();}
@@ -946,7 +1183,11 @@ $('nameForm').addEventListener('submit',e=>{e.preventDefault();
   setName(v.slice(0,18));$('nameErr').textContent='';openMenu();});
 $('resumeBtn')?.addEventListener('click',resume);
 $('pauseMenuBtn')?.addEventListener('click',async()=>{if(NET.g)await leaveRoom();hideMonsters();gunOut=false;weaponModels.forEach(g=>g.visible=false);torch.visible=false;openMenu();});
-$('retryDark').addEventListener('click',e=>{e.stopPropagation();initAudio();newGame();showScreen(null);lock();});
+$('retryDark').addEventListener('click',e=>{e.stopPropagation();initAudio();if(checkpoint&&checkpoint.floor){retryFloor(checkpoint);lock();return;}newGame();showScreen(null);lock();});
+$('continueBtn').addEventListener('click',()=>{
+  const s=savedCampaign();if(!s){updateContinue();return;}
+  initAudio();retryFloor({floor:s.floor,kit:s.kit,elapsed:s.elapsed,score:s.score});lock();
+});
 $('deadMenuBtn').addEventListener('click',async e=>{e.stopPropagation();if(NET.g)await leaveRoom();hideMonsters();gunOut=false;weaponModels.forEach(g=>g.visible=false);torch.visible=false;openMenu();});
 $('againBtn').addEventListener('click',()=>{initAudio();newGame();showScreen(null);lock();});
 $('menuBtn').addEventListener('click',()=>openMenu());
@@ -1103,8 +1344,8 @@ function monsterSees(m,tg){
 function localInDanger(){return state==='play'||(NET.inGame&&state==='pause'&&prevState==='play');}
 function targets(){
   const out=[];
-  if(localInDanger())out.push({x:P.pos.x,z:P.pos.z,y:P.pos.y,yaw:P.yaw,torch:torchOn,running:P.running,crouching:P.crouching,hidden:P.hidden,local:true});
-  if(NET.inGame&&NET.role==='host'&&R.present&&R.gn===NET.gen&&R.al&&!R.out)out.push({x:R.raw.x,z:R.raw.z,y:R.raw.y||0,yaw:R.raw.yaw,torch:R.raw.torch,running:R.raw.run,crouching:R.raw.crouch,hidden:R.raw.hidden,local:false});
+  if(localInDanger())out.push({x:P.pos.x,z:P.pos.z,y:P.pos.y,yaw:P.yaw,pitch:P.pitch,torch:torchOn,running:P.running,crouching:P.crouching,moving:P.moving,hidden:P.hidden,local:true});
+  if(NET.inGame&&NET.role==='host'&&R.present&&R.gn===NET.gen&&R.al&&!R.out)out.push({x:R.raw.x,z:R.raw.z,y:R.raw.y||0,yaw:R.raw.yaw,pitch:R.raw.pitch,torch:R.raw.torch,running:R.raw.run,crouching:R.raw.crouch,moving:Math.hypot(R.vx,R.vz)>.5,hidden:R.raw.hidden,local:false});
   return out;
 }
 function setPathTo(m,x,z){m.path=mazeNavigator?mazeNavigator.path(m.pos.x,m.pos.z,Math.max(S+.65,Math.min((W-1)*S-.65,x)),Math.max(S+.65,Math.min((W-1)*S-.65,z)),m.stats.radius):[];}
@@ -1127,10 +1368,81 @@ function pickWander(m){
     }
   }
 }
-function alertMonsters(radius,x,z){
+// sleepers: the radius within which a noise also wakes sleeping bodies (each within a second, nearest first).
+function alertMonsters(radius,x,z,sleepers=Math.min(radius,18)){
   if(x==null){x=P.pos.x;z=P.pos.z;}
-  for(const m of monsters){if(m.dead)continue;if(Math.hypot(x-m.pos.x,z-m.pos.z)<radius){m.state='chase';m.lastSeen.set(x,0,z);m.lost=0;m.repath=0;}}
+  for(const m of monsters){if(m.dead)continue;const d=Math.hypot(x-m.pos.x,z-m.pos.z);
+    if(m.dormant){if(d<sleepers)rouse(m,.15+.8*d/sleepers,x,z);continue;}
+    if(d<radius){m.state='chase';m.lastSeen.set(x,0,z);m.lost=0;m.repath=0;}}
 }
+// A gunshot wakes the sleepers in earshot: the nearest at once, the furthest about a second later.
+function rouseByShot(x,z,noise){
+  for(const m of monsters)if(m.dormant&&!m.dead){const delay=RULES.shotWakeDelay(layDistance(m,x,z),noise);if(delay>=0)rouse(m,delay,x,z);}
+}
+// Schedules a sleeper to wake in `delay` seconds (an earlier schedule wins), heading for (x, z) once up.
+function rouse(m,delay,x,z){
+  if(!m.dormant||m.dead||m.wakeIn>=0&&m.wakeIn<=delay)return;
+  m.wakeIn=Math.max(0,delay);m.rouser={x,z};
+}
+// A sleeper's disturbance, every frame (host and solo only): torch beams, footsteps, sprints and contact from every
+// survivor add up toward SLEEP.wake; left alone it settles back down.
+function updateSleeper(m,dt){
+  if(m.wakeIn>=0){m.wakeIn-=dt;if(m.wakeIn<0)wakeMonster(m,m.rouser);return;}
+  m.senseT-=dt;
+  if(m.senseT<=0){
+    m.senseT=.1;m.rate=0;let top=0;
+    for(const c of targets()){
+      if(c.hidden)continue;
+      const d=layDistance(m,c.x,c.z);if(d>RULES.SLEEP.torch&&d>RULES.SLEEP.run)continue;
+      const r=RULES.sleepDisturbance(d,{torch:c.torch&&d<RULES.SLEEP.torch&&beamOnBody(m,c),moving:c.moving,running:c.running,crouching:c.crouching});
+      m.rate+=r;if(r>top){top=r;m.rouser={x:c.x,z:c.z};}
+    }
+  }
+  if(m.rate===Infinity){wakeMonster(m,m.rouser);return;}
+  m.sleep=m.rate>0?m.sleep+m.rate*dt:Math.max(0,m.sleep-RULES.SLEEP.decay*dt);
+  if(m.sleep>=RULES.SLEEP.wake){wakeMonster(m,m.rouser);return;}
+  sleeperVoice(m,dt);
+}
+// The torch beam lies on the body: one of its points sits within SLEEP.cone of the beam's axis, in plain sight.
+function beamOnBody(m,c){
+  const eye=(c.y||0)+(c.crouching?1:EYE),cp=Math.cos(c.pitch||0),fx=-Math.sin(c.yaw)*cp,fy=Math.sin(c.pitch||0),fz=-Math.cos(c.yaw)*cp,l=m.lay;
+  for(let k=0;k<6;k+=2){
+    const dx=l[k]-c.x,dy=.3-eye,dz=l[k+1]-c.z,d=Math.hypot(dx,dy,dz);
+    if(d>.01&&(dx*fx+dy*fy+dz*fz)/d>Math.cos(RULES.SLEEP.cone)&&sightLine(c.x,eye,c.z,l[k],.35,l[k+1]))return true;
+  }
+  return false;
+}
+// A sleeper gets up roaring and hunts toward whatever woke it; the roar rouses the others nearby a moment later.
+function wakeMonster(m,from){
+  if(!m.dormant||m.dead)return;
+  const x=from?from.x:P.pos.x,z=from?from.z:P.pos.z;
+  m.state='chase';m.lastSeen.set(x,0,z);m.lost=0;m.repath=0;m.path=[];m.senseT=0;m.dormant=false;
+  for(const o of monsters)if(o!==m&&o.dormant&&!o.dead&&Math.hypot(o.pos.x-m.pos.x,o.pos.z-m.pos.z)<RULES.SLEEP.chain)rouse(o,rnd(.4,1.6),x,z);
+  wakeEffects(m);
+}
+// What everyone sees and hears when a body wakes (the co-op guest runs only this part).
+function wakeEffects(m){
+  m.dormant=false;m.wakeIn=-1;m.sleep=0;m.rate=0;m.stirred=false;m.riseT=RULES.SLEEP.rise;m.spotCD=6;
+  m.anim.rise(RULES.SLEEP.rise);m.anim.scream(1.5);
+  m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);
+  const v=vox(m);v.state='chase';v.chargeT=5;m.voiceT=rnd(2.2,3.2);
+  if(sVoice(m.kind,'wake',m.pos.x,.6,m.pos.z)!=null)v.said.wake=t;
+  if(!localInDanger())return;
+  const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);
+  if(d<16&&simulationTime-wakeStingT>2.5){wakeStingT=simulationTime;playStinger('scare','wake');flashDanger();camFX.addTrauma(.15+.3*(1-d/16));}
+  if(d<40&&simulationTime-wakeBannerT>5){wakeBannerT=simulationTime;
+    hud.banner(monsters.filter(o=>o.riseT>0||o.wakeIn>=0).length>1?'THEY\'RE WAKING UP':'IT\'S AWAKE',{tone:'danger',duration:1.9});}
+  if(!sleepHint){sleepHint=true;showMsg('Something you passed was only sleeping. Light, footsteps and gunfire wake them. Crouch past with the torch off.',4.5);}
+}
+// Sleepers breathe and murmur; one that is close to waking chatters its teeth, a warning to back off.
+function sleeperVoice(m,dt){
+  if(!m.stirred&&m.sleep>.45){m.stirred=true;sleepSound(m,'chatter',.75);return;}
+  if(m.stirred&&m.sleep<.15)m.stirred=false;
+  m.voiceT-=dt;if(m.voiceT>0)return;
+  m.voiceT=rnd(6,12);
+  if(Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z)<12)sleepSound(m,Math.random()<.25?'moan':'breath',.35);
+}
+function sleepSound(m,cue,volume){if(sVoice(m.kind,cue,m.pos.x,.35,m.pos.z,volume)!=null)vox(m).said[cue]=t;}
 function damagePlayer(m){
   if(!localInDanger()||damageT>0||grace>0||P.hidden)return;
   P.health=Math.max(0,P.health-m.stats.damage);damageT=1.05;m.lungeT=.3;m.anim.attack();
@@ -1163,6 +1475,9 @@ function chargeCue(m,local){
 }
 function updateMonster(m,dt){
   if(m.dead){if(m.g.visible){m.deadT+=dt;if(m.deadT>18)m.g.visible=false;}return;}
+  if(m.dormant){updateSleeper(m,dt);return;}
+  // Getting up off the floor: it cannot move or strike until it stands.
+  if(m.riseT>0){m.riseT=Math.max(0,m.riseT-dt);m.g.userData.speed=0;m.lungeT=Math.max(0,m.lungeT-dt);updateMonsterAudio(m,dt,0);return;}
   resolve(m.pos,m.stats.radius);
   const previousState=m.state,sneaky=m.kind==='stalker'||m.kind==='crawler';
   m.spotCD=Math.max(0,m.spotCD-dt);m.stagger=Math.max(0,m.stagger-dt);m.attackT=Math.max(0,m.attackT-dt);m.screamT=Math.max(0,m.screamT-dt);m.lungeT=Math.max(0,m.lungeT-dt);
@@ -1241,7 +1556,7 @@ function updateMonster(m,dt){
     if(m.searchT<=0){m.state='wander';m.path=[];}
   }else if(m.state==='wander'){if(!m.path.length)pickWander(m);followPath(m,speed,dt);}
   m.pos.y=0;resolve(m.pos,m.stats.radius);
-  for(const other of monsters){if(other===m||other.dead)continue;const dx=m.pos.x-other.pos.x,dz=m.pos.z-other.pos.z,d=Math.hypot(dx,dz),gap=m.stats.radius+other.stats.radius;
+  for(const other of monsters){if(other===m||other.dead||other.dormant)continue;const dx=m.pos.x-other.pos.x,dz=m.pos.z-other.pos.z,d=Math.hypot(dx,dz),gap=m.stats.radius+other.stats.radius;
     if(d<gap&&d>.0001){m.pos.x+=dx/d*(gap-d)*.35;m.pos.z+=dz/d*(gap-d)*.35;}
   }
   resolve(m.pos,m.stats.radius);
@@ -1269,7 +1584,7 @@ function updateMonsters(dt){
       for(let k=0;k<n&&state===st0;k++)updateMonster(m,dt/n);
       if(state!==st0)return;
     }
-    if(m.dead)continue;const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);nearestD=Math.min(nearestD,d);
+    if(m.dead||m.dormant)continue;const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);nearestD=Math.min(nearestD,d);
     target=Math.max(target,m.state==='chase'?Math.max(0,1-d/32):m.state==='stalk'?Math.max(0,1-d/6)*.18:Math.max(0,1-d/14)*.35);
   }
   danger+=(target-danger)*Math.min(1,dt*2);
@@ -1283,7 +1598,7 @@ function animateMonster(m,dt){
   let dy=m.yaw-m.animYaw;dy-=Math.round(dy/(2*Math.PI))*2*Math.PI;m.animYaw=m.yaw;
   animIn.speed=state==='caught'?0:sp;animIn.state=close?'chase':m.state;
   animIn.lunge=m.lungeBoost>0?1:(m.lungeT||0);animIn.stagger=m.stagger||0;animIn.turn=dt>0?dy/dt:0;
-  animIn.watched=m.watched===true;animIn.time=t;animIn.effects=preferences.effects===true;animIn.dead=m.dead===true;
+  animIn.watched=m.watched===true;animIn.time=t;animIn.effects=preferences.effects===true;animIn.dead=m.dead===true||m.dormant===true;
   const pose=m.anim.update(dt,animIn);
   HollowMonsterAnim.apply(m.g,pose,m.pos.x,m.pos.z,m.yaw,close);
   if(pose.footstep&&!m.dead)onMonsterFootstep(m,pose.stepIntensity);
@@ -1297,17 +1612,25 @@ function startReload(){
   reloadT=w.reload;aiming=false;sReload();
 }
 const _o=new THREE.Vector3(),_d=new THREE.Vector3(),_shotDir=new THREE.Vector3(),_shotQuat=new THREE.Quaternion(),_shotEuler=new THREE.Euler(0,0,0,'YXZ');
+// During fire(): [body, shooter position] for each sleeping body a pellet hit without killing it.
+let shotWakes=null;
+// Distance along the current pellet ray (_o, _d) to an upright cylinder of radius r at (x, z), or -1 when it misses.
+function rayCircle(x,z,r){
+  const ox=_o.x-x,oz=_o.z-z,a=_d.x*_d.x+_d.z*_d.z;if(a<.00001)return -1;
+  const b=2*(ox*_d.x+oz*_d.z),c=ox*ox+oz*oz-r*r,disc=b*b-4*a*c;if(disc<0)return -1;
+  const sq=Math.sqrt(disc);let at=(-b-sq)/(2*a);if(at<0)at=(-b+sq)/(2*a);return at;
+}
 function fire(){
   if(reloadT>0||P.hidden)return;
   fireQueued=false;
   const w=weaponDefs[weaponIndex];
   if(mag<=0){sDry();fireT=.3;semiFired=true;if(reserve>0)startReload();else showMsg('Weapon empty. Switch weapons or find supplies.',2);return;}
   mag--;weapons[weaponIndex].mag=mag;fireT=w.interval;gunKick=1;flashT=.045;semiFired=true;sShot();NET.shots++;
-  if(!NET.inGame||NET.role==='host')alertMonsters(w.noise);
+  if(!NET.inGame||NET.role==='host'){alertMonsters(w.noise,P.pos.x,P.pos.z,0);rouseByShot(P.pos.x,P.pos.z,w.noise);}
   _o.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
   _shotQuat.setFromEuler(_shotEuler.set(P.pitch,P.yaw,0,'YXZ'));_shotDir.set(0,0,-1).applyQuaternion(_shotQuat);
   const spread=w.spread*(aiming?.4:1)*(P.crouching?.65:1)+(P.moving?.008:0);
-  dopaShotBegin();
+  dopaShotBegin();shotWakes=[];
   let didHit=false,hitPartner=false;
   if(atm&&gun.userData.muzzlePosition)_atmMz.copy(gun.userData.muzzlePosition).applyEuler(gun.rotation).add(gun.position);
   if(w.pellets>1)fxFlash=.55;
@@ -1317,6 +1640,8 @@ function fire(){
     for(let st=.1;st<48;st+=.13){if(blocksRay(_o.x+_d.x*st,_o.y+_d.y*st,_o.z+_d.z*st)){wallDistance=st;break;}}
     let best=null,distance=wallDistance;
     for(const m of monsters){if(m.dead)continue;
+      // A body on the floor is three low cylinders along it; a hit there is never a headshot.
+      if(m.dormant){for(let k=0;k<6;k+=2){const at=rayCircle(m.lay[k],m.lay[k+1],m.layR);if(at<0||at>=distance)continue;const y=_o.y+_d.y*at;if(y<.02||y>.6)continue;distance=at;best={m,y:Math.min(y,m.stats.head-.01)};}continue;}
       const ox=_o.x-m.pos.x,oz=_o.z-m.pos.z,a=_d.x*_d.x+_d.z*_d.z;if(a<.00001)continue;
       const radius=m.stats.radius,b=2*(ox*_d.x+oz*_d.z),c=ox*ox+oz*oz-radius*radius,disc=b*b-4*a*c;if(disc<0)continue;
       const sq=Math.sqrt(disc);let at=(-b-sq)/(2*a);if(at<0)at=(-b+sq)/(2*a);if(at<0||at>=distance)continue;
@@ -1349,6 +1674,8 @@ function fire(){
     }else if(wallDistance<48)puff(hit,false);
     audioBullet(hit,best,distance,wallDistance);
   }
+  const woken=shotWakes;shotWakes=null;
+  for(const [m,src] of woken)if(!m.dead&&m.dormant)wakeMonster(m,src);
   dopaShotEnd();
   if(didHit){hitMarkerT=.16;audioHitTick();}
   if(hitPartner)sendNet(true);
@@ -1359,11 +1686,14 @@ function fire(){
 function hitMonster(m,dmg,from,headshot,strength){
   if(m.dead)return;
   const src=from||P.pos,shot={dirX:m.pos.x-src.x,dirZ:m.pos.z-src.z,yaw:m.yaw,headshot:!!headshot,strength:strength??1};
+  // A shot that does not finish a sleeper wakes it at once (a killing shot leaves it where it lies). Inside fire() the
+  // wake waits for the last pellet, so a blast that kills it does not get it up roaring first.
+  if(m.dormant&&m.hp-dmg>0){if(shotWakes)shotWakes.push([m,{x:src.x,z:src.z}]);else wakeMonster(m,src);}
   m.hp-=dmg;m.stagger=m.kind==='warden'?.07:.25;m.state='chase';
   if(m.hp>0)m.anim.hit(shot);
   if(from)m.lastSeen.set(from.x,0,from.z);else m.lastSeen.copy(P.pos);m.lost=0;
   if(m.hp<=0){
-    m.dead=true;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
+    m.dead=true;m.dormant=false;m.wakeIn=-1;m.riseT=0;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
     m.anim.die(shot);fxKill=1;
     const left=monsters.filter((o,i)=>i<monCount&&!o.dead).length;
     showMsg(left?`${m.stats.name} down · ${left} threats remain.`:'The corridors are silent. Restore the exit power.',2.5);
@@ -1458,8 +1788,9 @@ function updateCaught(dt){
   if(caughtT>1.6&&NET.inGame){coopLocalDone('dead');return;}
   if(caughtT>1.6){
     state='dead';hideMonsters();setLight(spot,0);$('flash').style.opacity=0;gun.visible=false;
-    const lasted=Math.round(elapsed*10)/10,m=Math.floor(lasted/60),s=Math.floor(lasted%60),own=streak.snapshot();
-    $('deadText').textContent=`You lasted ${m}:${String(s).padStart(2,'0')} in the dark. The corridors are quiet again.`;
+    const lasted=Math.round(elapsed*10)/10,m=Math.floor(lasted/60),s=Math.floor(lasted%60),own=runScore();
+    $('deadText').textContent=`You lasted ${m}:${String(s).padStart(2,'0')} in the dark${floor?`, down to ${FLOOR().code} · ${FLOOR().name}`:''}. The corridors are quiet again.`;
+    $('retryDark').textContent=checkpoint&&checkpoint.floor?`Retry ${FLOOR().code} · ${FLOOR().name}`:'Re-enter the ward';
     showScreen('dead');recordRun({mode:'solo',escaped:false,time:elapsed,kills:own.kills,score:own.points},'deadRank');try{document.exitPointerLock();}catch(e){}
   }
 }
@@ -1478,7 +1809,8 @@ async function warmPlayPipelines(){
   const views=[[PED.x-.85,PED.z],[W*S/2,W*S/2]],yaws=[0,Math.PI/2,Math.PI,-Math.PI/2];
   try{
     // Build the next dark run's world now (Play then skips the ~1-2 s build) and compile it in its play lighting.
-    const seed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(seed);prebuiltSeed=seed;
+    // Play always starts on B1, whichever floor the last run ended on.
+    floor=0;const seed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(seed);prebuiltSeed=seed;
     setHell();weaponModels.forEach(g=>g.visible=true);
     // Fill the navigator's per-radius clearance caches, which the first monster paths would otherwise build mid-play.
     if(mazeNavigator)for(const kind in RULES.MONSTERS)for(const [cx,cz] of [[W-2,W-2],[W-2,3],[3,W-2],[N,N]])if(openCell(cx,cz))mazeNavigator.path(PED.x+1,PED.z,cx*S+S/2,cz*S+S/2,RULES.MONSTERS[kind].radius);
@@ -1538,9 +1870,10 @@ function updateHUD(){
   $('hud').hidden=!active;$('ammo').hidden=!(active||state==='spect');$('cross').hidden=!active;
   $('hud').querySelector('.vitals-panel').hidden=!active;
     const room=active&&specialRooms.find(r=>RULES.insideRoom(r,P.pos.x,P.pos.z));
-    $('locationText').textContent=active?(room?room.name:'BLACKWATER / '+(P.pos.z<36?'ADMISSIONS':P.pos.z<72?'SERVICE WING':'LOWER TREATMENT')):'';
+    const T=TEXT();
+    $('locationText').textContent=active?(room?room.name:T.areas[P.pos.z<36?0:P.pos.z<72?1:2]):'';
     $('horrorCaption').textContent=active?captionText:'';
-    $('escapeStatus').textContent=active&&exitPowered?(exitOpen?'RELEASE COMPLETE · RUN':'RELEASING SHUTTER · '+Math.ceil(exitRelease)+'s'):'';
+    $('escapeStatus').textContent=active&&exitPowered?(exitOpen?T.released:T.releasing+' · '+Math.ceil(exitRelease)+'s'):'';
     document.body.classList.toggle('reading-record',active&&captionT>0&&captionText[0]!=='[');
   if(controls)controls.update({active,state,torchOn,canInteract:!!interaction,decoys,mapExpanded});
   if(!active)return;
@@ -1550,23 +1883,24 @@ function updateHUD(){
   $('noiseBar').style.width=Math.round(P.noise*100)+'%';$('stanceText').textContent=P.hidden?'CONCEALED':slideT>0?'SLIDING':P.crouching?'CROUCHED':P.running?'SPRINTING':P.onGround?'STANDING':'AIRBORNE';
   const remaining=roomLoot.filter(l=>l.type==='fuse'&&!l.taken).sort((a,b)=>Math.hypot(a.x-P.pos.x,a.z-P.pos.z)-Math.hypot(b.x-P.pos.x,b.z-P.pos.z));
   const nearest=remaining[0];
-  $('objectiveText').textContent=exitOpen?'EVACUATE · east loading exit':exitPowered?'THE ALARM IS DRAWING THEM HERE':fuses===3?'3 / 3 FUSES · power the east loading shutter':`${fuses} / 3 FUSES · ${nearest?nearest.room.name.slice(5):'search marked rooms'}`;
+  $('objectiveText').textContent=exitOpen?T.go:exitPowered?'THE ALARM IS DRAWING THEM HERE':fuses===3?T.ready:`${fuses} / 3 ${T.tags} · ${nearest?nearest.room.name.slice(5):'search marked rooms'}`;
+  $('floorText').textContent=FLOOR().code+' · '+FLOOR().name.toUpperCase();$('wingText').textContent=T.wing;
   $('fpsText').textContent=Math.round(1000/frameAverage)+' FPS · '+qualityLevel.toUpperCase()+(renderScale<1?' '+Math.round(renderScale*100)+'%':'');
   $('weaponName').textContent=w.name;$('magTxt').textContent=mag;$('resTxt').textContent='/ '+reserve;$('magTxt').style.color=mag===0?'var(--ember)':'';
   $('ammoLbl').textContent=reloadT>0?`RELOADING · ${reloadT.toFixed(1)}s`:aiming?'AIMING':w.automatic?'AUTOMATIC':w.id==='shotgun'?'PUMP ACTION':'SEMI-AUTOMATIC';
-  if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+['AR','M9','SG'][i];slot.title=v.name;$('weaponSlots').appendChild(slot);});}
-  [...$('weaponSlots').children].forEach((slot,i)=>slot.classList.toggle('selected',i===weaponIndex));
+  if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+['AR','M9','SG'][i];$('weaponSlots').appendChild(slot);});}
+  [...$('weaponSlots').children].forEach((slot,i)=>{slot.classList.toggle('selected',i===weaponIndex);slot.classList.toggle('locked',!owned[i]);slot.title=owned[i]?weaponDefs[i].name:'Not found yet';});
   $('reticleHit').style.opacity=hitMarkerT>0?1:0;$('cross').classList.toggle('aiming',aiming);
   let prompt='';const key=touch?'USE':'[E]';
   if(interaction){
     if(interaction.type==='door'){const d=interaction.item,inside=RULES.insideRoom(d.room,P.pos.x,P.pos.z);prompt=d.open?`${key} Close isolation door`:d.locked?(inside?`${key} Unlock & open · lock integrity ${Math.ceil(d.health)}%`:'Door locked from inside'):inside?`${key} Lock door · crouch + torch OFF to hide`:`${key} Open isolation door`;}
-    if(interaction.type==='loot'){const type=interaction.item.type;prompt=`${key} ${type==='fuse'?'Recover power fuse':type==='medical'?'Use field dressing · +45 health':'Collect ammunition, battery & decoy'}`;}
+    if(interaction.type==='loot'){const type=interaction.item.type;prompt=`${key} ${type==='fuse'?T.take:type==='medical'?'Use field dressing · +45 health':type==='weapon'?'Take the '+weaponDefs[interaction.item.weapon].name:'Collect ammunition, battery & decoy'}`;}
     if(interaction.type==='record')prompt=captionT>6?'':`${key} Read ${readNotes.has(interaction.item.id)?'case note again':'case note'}`;
-        if(interaction.type==='exit')prompt=fuses===3?`${key} Start emergency release · alarm will sound`:`Exit needs ${3-fuses} more power ${fuses===2?'fuse':'fuses'}`;
+        if(interaction.type==='exit')prompt=fuses===3?`${key} ${T.start} · alarm will sound`:T.need(3-fuses);
   }else if([...roomLoot.filter(l=>automaticLoot(l.type)),...ammoBoxes].some(l=>!l.taken&&pickupReach(l,P.pos,2.4)))prompt='WALK OVER · ammunition collects automatically';
   else if(P.hidden)prompt='CONCEALED · Stay quiet. Listen for footsteps to fade.';
   else if(currentShelter())prompt='SHELTER · Close and lock the door. Crouch. Torch off.';
-  else if(simulationTime<15)prompt='MAP · amber diamonds = fuses · green squares = shelters · red = exit';
+  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · green squares = shelters · red = exit`;
   $('interactionPrompt').textContent=prompt;
   $('controlsHint').textContent=touch?'Left stick: move · Drag right: look · USE: interact':
     P.hidden?'E unlock & leave · Keep your torch off until the footsteps fade':
@@ -1588,12 +1922,13 @@ function loop(){
   if(state==='play'){
     elapsed+=rawDt;stepSurvival(sdt);
     if(exitOpen&&NET.inGame&&P.pos.x>W*S+.6){coopLocalDone('out');}
+    else if(exitOpen&&P.pos.x>W*S+.6&&floor<RULES.FLOORS.length-1)descend();
     else if(exitOpen&&P.pos.x>W*S+.6){
       state='win';const m=Math.floor(elapsed/60),s=Math.floor(elapsed%60);
       const kills=monsters.filter((o,i)=>i<monCount&&o.dead).length;
       $('winText').textContent=`Cold air on your face. You got out in ${fmtTime(elapsed)}. Behind you, ${kills>=monCount?'nothing is walking any more':'something keeps walking'}.`;
       $('winRank').textContent='';
-      const own=streak.snapshot();
+      const own=runScore();clearCampaign();
       showScreen('win');recordRun({mode:'solo',escaped:true,time:elapsed,kills:own.kills,score:own.points},'winRank');try{document.exitPointerLock();}catch(e){}
       stopAudio();if(droneGain)fadeTo(droneGain,0,2);mouseDown=false;
     }
@@ -1743,7 +2078,7 @@ function onPeers(ch){
   if(Array.isArray(pr.p)){R.raw.x=finiteNumber(pr.p[0],R.raw.x,-110,W*S+60);R.raw.z=finiteNumber(pr.p[1],R.raw.z,-70,W*S+70);R.raw.yaw=finiteNumber(pr.p[2],R.raw.yaw);R.raw.pitch=finiteNumber(pr.p[3],R.raw.pitch,-1.35,1.35);R.raw.torch=!!pr.p[4];R.raw.run=!!pr.p[5];R.raw.y=finiteNumber(pr.p[6],0,0,H);R.raw.crouch=!!pr.p[7];R.raw.hidden=!!pr.p[8];R.raw.health=finiteNumber(pr.p[9],100,0,100);R.raw.weapon=Math.floor(finiteNumber(pr.p[10],0,0,2));R.raw.reload=!!pr.p[11];R.raw.aim=!!pr.p[12];
     if(!R.seen){R.pos.set(R.raw.x,0,R.raw.z);R.yaw=R.raw.yaw;R.pitch=R.raw.pitch;R.seen=true;}}
   R.sh=finiteNumber(pr.sh,0,0);R.ff=finiteNumber(pr.ff,0,0);R.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];R.dm=Array.isArray(pr.dm)?pr.dm.slice(0,MAX_MON).map(v=>finiteNumber(v,0,0)):[];R.actions=Array.isArray(pr.actions)?pr.actions.slice(0,32):[];
-  if(NET.role==='guest'){R.mon=Array.isArray(pr.mon)?pr.mon.slice(0,MAX_MON).map(v=>Array.isArray(v)&&v.length>=4&&v.slice(0,4).every(Number.isFinite)?[finiteNumber(v[0],0,-110,W*S+60),finiteNumber(v[1],0,-70,W*S+70),finiteNumber(v[2],0),Math.floor(v[3])&15,finiteNumber(v[4],0,-100,100)]:null):null;R.mc=Math.floor(finiteNumber(pr.mc,0,0,MAX_MON));R.el=finiteNumber(pr.el,0,0,7200);
+  if(NET.role==='guest'){R.mon=Array.isArray(pr.mon)?pr.mon.slice(0,MAX_MON).map(v=>Array.isArray(v)&&v.length>=4&&v.slice(0,4).every(Number.isFinite)?[finiteNumber(v[0],0,-110,W*S+60),finiteNumber(v[1],0,-70,W*S+70),finiteNumber(v[2],0),Math.floor(v[3])&31,finiteNumber(v[4],0,-100,100)]:null):null;R.mc=Math.floor(finiteNumber(pr.mc,0,0,MAX_MON));R.el=finiteNumber(pr.el,0,0,7200);
     // host started (or restarted) a round we're not in yet
     const remoteSeed=finiteNumber(pr.seed,0,0,2147483647);
     if(pr.ph==='play'&&R.gn>NET.gen&&remoteSeed){startCoopRound(remoteSeed,R.gn);}
@@ -1753,7 +2088,7 @@ function onPeers(ch){
       if(Array.isArray(pr.loot))for(const l of roomLoot)if(pr.loot.includes(l.id)){l.taken=true;l.g.visible=false;}
       if(Array.isArray(pr.grants))for(const grant of pr.grants){if(grant&&typeof grant.id==='string'&&!NET.claimed.has(grant.id)&&['ammo','medical','supplies'].includes(grant.type)){NET.claimed.add(grant.id);rewardLoot(grant.type);sPickup();}}
       fuses=roomLoot.filter(l=>l.type==='fuse'&&l.taken).length;exitPowered=!!pr.power;
-            exitRelease=finiteNumber(pr.release,exitPowered?HollowHorror.RELEASE_SECONDS:0,0,HollowHorror.RELEASE_SECONDS);exitOpen=exitPowered&&pr.exitOpen===1;
+            exitRelease=finiteNumber(pr.release,exitPowered?FLOOR().release:0,0,FLOOR().release);exitOpen=exitPowered&&pr.exitOpen===1;
       const ack=Number(pr.ack)||0;NET.actions=NET.actions.filter(a=>a.n>ack);for(const item of [...ammoBoxes,...roomLoot])if(item.pending&&item.pending<=ack)item.pending=false;
     }
     if(pr.ph==='lobby'&&NET.inGame&&state==='coopEnd'){$('ceWait').textContent=`Waiting for ${R.nm} to start another round.`;}
@@ -1790,16 +2125,18 @@ function startCoopRound(seed,gen){
   avSpot.visible=true;avFlash.visible=qualityLevel!=='low';
   NET.actions=[];NET.actionSeq=0;NET.actionAck=0;NET.claimed.clear();R.actions=[];R.actionAck=0;R.grants=[];
   R.dmApplied=new Array(MAX_MON).fill(0);R.lastSh=R.gn===gen?R.sh:0;R.ffApplied=R.gn===gen?R.ff:0;R.seen=false;
+  // Co-op rounds are played on B1.
+  floor=0;scoreBase={points:0,kills:0};checkpoint=null;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
   buildMazeSeeded(seed);resetSurvivor();
   P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
   battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   setHell();P.pos.set(PED.x-.85,0,PED.z+(NET.role==='host'?-.8:.8));P.yaw=Math.PI/2;P.pitch=0;grace=10;
-  if(NET.role==='host')spawnMonsters(12);else{hideMonsters();monCount=12;}
+  if(NET.role==='host')spawnMonsters(12,FLOOR().sleepers);else{hideMonsters();monCount=12;}
   if(droneGain)fadeTo(droneGain,0.07,1);
   state='play';showScreen(null);lock();
   sendNet(true);
-  showMsg(NET.role==='guest'&&!IS_TOUCH&&document.pointerLockElement!==canvas?'The game started. Click the screen to take control.':'Recover the fuses together. Twelve threats are hunting.',5);
+  showMsg(NET.role==='guest'&&!IS_TOUCH&&document.pointerLockElement!==canvas?'The game started. Click the screen to take control.':'Recover the fuses together. Twelve threats are hunting, and more lie sleeping.',5);
 }
 function coopLocalDone(how){
   NET.myAl=how!=='dead';NET.myOut=how==='out';
@@ -1849,9 +2186,9 @@ function sendNet(force){
     al:NET.myAl===false?0:1,out:NET.myOut?1:0,sh:NET.shots,ff:r2(NET.ff),tk:NET.tk.slice(0,32)};
   if(NET.role==='guest'){pk.dm=NET.dm.slice(0,MAX_MON).map(r2);pk.actions=NET.actions.slice(0,12);}
   if(NET.role==='host'){pk.seed=NET.seed;pk.mc=monCount;pk.el=r2(elapsed);pk.pt=R.peer||null;
-    pk.mon=monsters.slice(0,monCount).map(m=>[r2(m.pos.x),r2(m.pos.z),r2(m.yaw),(m.state==='chase'?1:0)|(m.dead?2:0)|(m.stagger>0?4:0)|(m.state==='stalk'?8:0),r2(m.hp)]);
+    pk.mon=monsters.slice(0,monCount).map(m=>[r2(m.pos.x),r2(m.pos.z),r2(m.yaw),(m.state==='chase'?1:0)|(m.dead?2:0)|(m.stagger>0?4:0)|(m.state==='stalk'?8:0)|(m.dormant?16:0),r2(m.hp)]);
     pk.doors=roomDoors.map(d=>[d.open?1:0,d.locked?1:0,Math.round(d.health)]);pk.fuses=roomLoot.filter(l=>l.type==='fuse'&&l.taken).map(l=>l.id);pk.power=exitPowered?1:0;pk.release=r2(exitRelease);pk.exitOpen=exitOpen?1:0;pk.ack=R.actionAck;
-    pk.loot=roomLoot.filter(l=>l.taken).map(l=>l.id);pk.grants=R.grants;
+    pk.loot=roomLoot.filter(l=>l.taken&&l.type!=='weapon').map(l=>l.id);pk.grants=R.grants;
   }
   NET.g.presence(pk).catch(()=>{});
 }
@@ -1860,13 +2197,17 @@ function guestMonsters(dt){
   if(!R.present||R.gn!==NET.gen||!R.mon){danger*=0.98;return;}
   monCount=R.mc||12;
   for(let i=0;i<MAX_MON;i++){const m=monsters[i],d=R.mon[i];
-    if(!d||i>=monCount){m.g.visible=false;m.dead=true;continue;}
-    const [x,z,yaw,fl,hp]=d;const dead=!!(fl&2),chase=!!(fl&1),stalk=!!(fl&8);m.hp=Number(hp)||0;m.attackT=Math.max(0,m.attackT-dt);m.lungeT=Math.max(0,m.lungeT-dt);
-    if(m.dead&&!dead){m.spawned=true;m.g.visible=true;m.dead=false;m.deadT=0;m.pos.set(x,0,z);m.yaw=yaw;m.g.rotation.set(0,yaw,0);m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);m.state='wander';m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.spotCD=0;m.stagger=0;m.anim.reset();m.animYaw=m.yaw;}
-    if(dead&&!m.dead){m.dead=true;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
+    if(!d||i>=monCount){m.g.visible=false;m.dead=true;m.dormant=false;continue;}
+    const [x,z,yaw,fl,hp]=d;const dead=!!(fl&2),chase=!!(fl&1),stalk=!!(fl&8),asleep=!!(fl&16);m.hp=Number(hp)||0;m.attackT=Math.max(0,m.attackT-dt);m.lungeT=Math.max(0,m.lungeT-dt);
+    if(m.dead&&!dead){m.spawned=true;m.g.visible=true;m.dead=false;m.deadT=0;m.pos.set(x,0,z);m.yaw=yaw;m.g.rotation.set(0,yaw,0);m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);m.state='wander';m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.spotCD=0;m.stagger=0;m.anim.reset();m.animYaw=m.yaw;
+      m.dormant=false;m.riseT=0;m.wakeIn=-1;if(asleep&&!dead)layDown(m,i);}
+    if(dead&&!m.dead){m.dead=true;m.dormant=false;m.riseT=0;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
       m.anim.die({dirX:m.pos.x-P.pos.x,dirZ:m.pos.z-P.pos.z,yaw:m.yaw});
       const left=R.mon.slice(0,monCount).filter(q=>q&&!(q[3]&2)).length;showMsg(left?`It went down. ${left} still walking.`:'It went down. The corridors are silent.',3);}
     if(m.dead){if(m.g.visible)m.deadT+=dt;continue;}
+    if(m.dormant&&!asleep){m.state=chase?'chase':'wander';wakeEffects(m);}
+    if(m.dormant){sleeperVoice(m,dt);continue;}
+    if(m.riseT>0){m.riseT=Math.max(0,m.riseT-dt);m.g.userData.speed=0;continue;}
     if(chase&&m.state!=='chase')chargeCue(m,true);
     m.spotCD=Math.max(0,(m.spotCD||0)-dt);
     m.state=chase?'chase':stalk?'stalk':'wander';if(fl&4)m.stagger=Math.max(m.stagger,0.1);m.stagger=Math.max(0,m.stagger-dt);
@@ -1897,7 +2238,7 @@ function netTick(dt){
     setLight(avSpot,R.al&&!R.out&&R.raw.torch?2.4:0);
     R.stepD+=moved;if(R.stepD>(R.raw.run?1.1:0.75)){R.stepD=0;if(R.al&&!R.out)sStepAt(R.pos.x,R.pos.z,R.raw.run?0.3:0.13);}
     if(R.sh>R.lastSh){const n=Math.min(3,R.sh-R.lastSh);R.lastSh=R.sh;for(let q=0;q<n;q++)setTimeout(()=>sShotAt(R.pos.x,R.pos.z),q*90);setLight(avFlash,preferences.effects?2.5:0);if(preferences.effects)avatar.userData.fire();
-      if(NET.role==='host')alertMonsters(weaponDefs[R.raw.weapon]?.noise||30,R.raw.x,R.raw.z);}
+      if(NET.role==='host'){const noise=weaponDefs[R.raw.weapon]?.noise||30;alertMonsters(noise,R.raw.x,R.raw.z,0);rouseByShot(R.raw.x,R.raw.z,noise);}}
     setLight(avFlash,avFlash.userData.level*Math.max(0,1-dt*30));
     if(R.ff<R.ffApplied)R.ffApplied=R.ff;else if(R.ff-R.ffApplied>.01){const d=R.ff-R.ffApplied;R.ffApplied=R.ff;hurtByPartner(Math.min(d,100));}
     // ammo boxes the partner took
@@ -1912,7 +2253,7 @@ function netTick(dt){
         if(a.action==='lock'&&!inside||a.action==='open'&&d.locked&&!inside)continue;
         if(['open','close','lock'].includes(a.action))doorAction(d,a.action);
       }else if(a.type==='loot'||a.type==='fuse'){
-        const l=roomLoot.find(l=>l.id===a.id);if(!l||l.taken||Math.hypot(l.x-R.raw.x,l.z-R.raw.z)>3||!los(R.raw.x,R.raw.z,l.x,l.z))continue;
+        const l=roomLoot.find(l=>l.id===a.id);if(!l||l.taken||l.type==='weapon'||Math.hypot(l.x-R.raw.x,l.z-R.raw.z)>3||!los(R.raw.x,R.raw.z,l.x,l.z))continue;
         if(automaticLoot(l.type)&&!pickupReach(l,R.raw,1.6))continue;
         if(l.type==='fuse')collectLoot(l);
         else if(l.type!=='medical'||R.raw.health<100){l.taken=true;l.g.visible=false;R.grants.push({id:l.id,type:l.type});showMsg(`${R.nm} collected ${l.type==='medical'?'a medical kit':'supplies'}.`,2);}
@@ -1953,7 +2294,7 @@ let playerName=lsGet(LS_NAME)||cookieGet(LS_NAME)||'';
 function setName(v){playerName=v;lsSet(LS_NAME,v);cookieSet(LS_NAME,v);$('whoName').textContent=v;renderBoards();}
 function fmtTime(sec){const m=Math.floor(sec/60),s=sec-m*60;return m+':'+(s<10?'0':'')+s.toFixed(1);}
 function openNameScreen(){state='menu';$('playerName').value=playerName;$('nameErr').textContent='';showScreen('name');setTimeout(()=>$('playerName').focus(),30);}
-function openMenu(){state='menu';$('whoName').textContent=playerName||'Guest';showScreen('menu');renderBoards();}
+function openMenu(){state='menu';$('whoName').textContent=playerName||'Guest';showScreen('menu');renderBoards();updateContinue();}
 
 let localScores=[];try{localScores=JSON.parse(lsGet(LS_SCORES)||'[]');if(!Array.isArray(localScores))localScores=[];}catch(e){localScores=[];}
 localScores=localScores.map(cleanRow).filter(Boolean);
@@ -2043,7 +2384,8 @@ function chaosEvent(e){
   if(e.bearing!=null&&e.x===undefined){const d=e.distance||3;e.x=P.pos.x+Math.cos(e.bearing)*d;e.z=P.pos.z+Math.sin(e.bearing)*d;}
   if(e.type==='chaseStart'){
     dopa.chaseT=simulationTime;dopa.shock=Math.max(dopa.shock,.35);
-    hud.banner(dopa.chasers>1?'THEY SEE YOU':'IT SEES YOU',{tone:'danger',duration:1.6});dopaTrauma(.25);
+    // A body getting up has its own banner (wakeEffects); the chase it starts does not replace it.
+    if(simulationTime-wakeBannerT>2)hud.banner(dopa.chasers>1?'THEY SEE YOU':'IT SEES YOU',{tone:'danger',duration:1.6});dopaTrauma(.25);
   }else if(e.type==='chaseEnd'){
     if(simulationTime-dopa.chaseT-HollowChaos.LIMITS.chaseEndHold>4&&simulationTime-dopa.lostT>30){dopa.lostT=simulationTime;hud.banner('YOU LOST IT',{tone:'info',duration:1.8});}
   }else if(e.type==='surge'){
@@ -2106,9 +2448,10 @@ function dopaFrame(rawDt,dt){
   return sdt;
 }
 function dopaObjectives(){
-  if(fuses!==dopa.fuses){if(fuses>dopa.fuses)hud.banner(`FUSE ${fuses}/3`,{tone:'objective',kicker:fuses>=3?'All fuses · reach the exit':'Power fuse'});dopa.fuses=fuses;}
-  if(exitPowered!==dopa.powered){if(exitPowered)hud.banner('POWER RESTORED',{tone:'objective',kicker:'Shutter releasing'});dopa.powered=exitPowered;}
-  if(exitOpen!==dopa.open){if(exitOpen)hud.banner('SHUTTER OPEN · RUN',{tone:'objective',duration:2.8});dopa.open=exitOpen;}
+  const T=TEXT();
+  if(fuses!==dopa.fuses){if(fuses>dopa.fuses)hud.banner(`${T.tag} ${fuses}/3`,{tone:'objective',kicker:fuses>=3?T.allKick:T.kick});dopa.fuses=fuses;}
+  if(exitPowered!==dopa.powered){if(exitPowered)hud.banner(T.power,{tone:'objective',kicker:T.powerKick});dopa.powered=exitPowered;}
+  if(exitOpen!==dopa.open){if(exitOpen)hud.banner(T.open,{tone:'objective',duration:2.8});dopa.open=exitOpen;}
 }
 // One marker, one streak hit and at most one hitstop per shot, however many pellets land. fire() never targets a
 // dead monster, so a monster hit by this shot that is dead at the end of it was killed by it.
@@ -2133,7 +2476,7 @@ function dopaShotEnd(){
 }
 function dopaKill(m,headshot,distance){
   const r=streak.kill(simulationTime,{headshot:!!headshot,kind:m.kind,distance,effects:preferences.effects});
-  hud.kill({...r,kind:m.kind,headshot:!!headshot});hud.score(streak.snapshot().points);dopaHitstop(r.hitstop);
+  hud.kill({...r,kind:m.kind,headshot:!!headshot});hud.score(scoreBase.points+streak.snapshot().points);dopaHitstop(r.hitstop);
   if(m.kind==='warden')dopaTrauma(.3);
   dopa.kills++;dopa.lastKill={kind:m.kind,headshot:!!headshot,label:r.label,count:r.count,points:r.points,hitstop:r.hitstop,flash:r.flash};
   return r;
@@ -2205,13 +2548,13 @@ function runSummary(r){return [(r.escaped?'escaped in ':'lasted ')+fmtTime(r.tim
 // Creature voices (audio.js), the player's body (player-audio.js) and the weapons (weapon-audio.js) are driven from
 // here; call sites elsewhere only make short calls into this section.
 if(!window.HollowPlayerAudio||!window.HollowWeaponAudio)throw new Error('A local game asset could not be loaded.');
-const VOICE_PRIORITY={breath:0,step:1,whisper:2,moan:2,notice:3,laugh:3,growl:3,attack:4,death:4,scream:4};
+const VOICE_PRIORITY={breath:0,step:1,whisper:2,moan:2,chatter:2,notice:3,laugh:3,growl:3,howl:3,snarl:3,attack:4,death:4,scream:4,wake:4};
 // Footsteps by weight: the Warden's tread carries, the others creep about 3-4.5 dB under it.
 const STEP_LEVEL={warden:1,stalker:.85,crawler:.85,shrieker:.85};
 const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
 const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,danger:0,chase:false,health:100,effects:true,hidden:false};
 // A threat call ducks the player's body bus (heartbeat, grunts, chase music): [max distance m, gain, hold s].
-const DUCK={scream:[30,.4,1.4],notice:[20,.65,.9],laugh:[12,.7,1],whisper:[10,.7,1.2]};
+const DUCK={scream:[30,.4,1.4],wake:[30,.45,1.4],notice:[20,.65,.9],howl:[45,.7,1.2],snarl:[10,.6,.8],laugh:[12,.7,1],whisper:[10,.7,1.2]};
 let reloadEmpty=false,audioFault=false,audioSeq=0,bodyBus=null,duckFree=0,duckDepth=1,duckEnd=0;
 // Master safety limiter: a fast high-ratio compressor (its automatic makeup gain trimmed back out), then a soft
 // ceiling at -0.63 dBFS, so a pile-up of shots, screams and stingers never clips. Returns the chain's input.
@@ -2247,10 +2590,10 @@ function audioAfter(delay,fn){if(AC)audioLater.push({at:AC.currentTime+delay,fn}
 function sVoice(kind,cue,x,y,z,volume=1){
   if(!creatureAudio)return null;
   const spectating=state==='spect'||state==='pause'&&prevState==='spect',viewer=spectating?R.pos:P.pos,d=Math.hypot(viewer.x-x,viewer.z-z);
-  if(d>(cue==='breath'?16:cue==='whisper'?10:cue==='scream'?60:38))return null;
+  if(d>(cue==='breath'?16:cue==='whisper'?10:cue==='chatter'?14:cue==='scream'||cue==='howl'?60:cue==='wake'?48:38))return null;
   if(!preferences.effects){
-    if(cue==='notice'||cue==='attack'||cue==='scream'||cue==='laugh'){if(d>38)return null;cue='breath';volume*=.65;}
-    else if(cue==='whisper'||cue==='moan'||cue==='growl')volume*=.5;
+    if(cue==='notice'||cue==='attack'||cue==='scream'||cue==='laugh'||cue==='howl'||cue==='wake'){if(d>38)return null;cue='breath';volume*=.65;}
+    else if(cue==='whisper'||cue==='moan'||cue==='growl'||cue==='snarl'||cue==='chatter')volume*=.5;
   }
   if(!voiceRoom(cue))return null;
   const eye=spectating?(R.raw.y||0)+(R.raw.crouch?1:EYE):P.pos.y+P.eye;
@@ -2260,7 +2603,7 @@ function sVoice(kind,cue,x,y,z,volume=1){
 }
 // A full mix gives up its oldest lowest-priority voice: a growl, laugh or scream must never take a rush's notice.
 function voiceRoom(cue){
-  if(VOICE_PRIORITY[cue]<3||cue==='notice'||cue==='attack'||cue==='death')return true;
+  if(VOICE_PRIORITY[cue]<3||cue==='notice'||cue==='attack'||cue==='death'||cue==='wake')return true;
   const s=creatureAudio.snapshot();if(s.activeVoices<s.maxVoices)return true;
   let victim=null;for(const v of s.voices)if(!victim||VOICE_PRIORITY[v.cue]<VOICE_PRIORITY[victim.cue])victim=v;
   return !victim||victim.cue!=='notice';
@@ -2274,8 +2617,10 @@ function monsterVoice(m,dt){
   if(m.lungeT>v.lunge+.05)audioOnLunge(m);
   v.lunge=m.lungeT;
   if(m.state!==v.state){
-    v.state=m.state;
+    const was=v.state;v.state=m.state;
     if(m.state==='stalk')v.laughed=false;
+    // Losing the trail: a long howl that tells the whole floor it is still hunting.
+    if(was==='chase'&&m.state==='search'&&t-howlAt>4){howlAt=t;m.voiceT=Math.max(m.voiceT,rnd(4,6));audioAfter(rnd(.2,.6),()=>{if(!m.dead&&!m.dormant)sCreature(m,'howl');});}
     // chargeCue plays the notice; the Warden and the Shrieker follow it with a scream, the sneaky kinds with a growl.
     if(m.state==='chase'&&v.chargeT<=0){
       const cue=m.kind==='warden'||m.kind==='shrieker'?'scream':'growl';v.chargeT=6;m.voiceT=Math.max(m.voiceT,rnd(2.2,3.4));
@@ -2287,11 +2632,18 @@ function monsterVoice(m,dt){
     if(d<=6&&v.whisperT<=0&&!playerSees(m)){v.whisperT=rnd(8,14);sCreature(m,'whisper');m.voiceT=Math.max(m.voiceT,3);return;}
   }else if(m.state!=='chase'&&P.hidden&&d<8&&v.laughT<=0){v.laughT=rnd(20,30);sCreature(m,'laugh');m.voiceT=Math.max(m.voiceT,2.5);return;}
   if(m.voiceT>0)return;
-  if(m.state==='chase'){m.voiceT=rnd(1.6,3);sCreature(m,'growl');}
-  else if(m.state==='stalk'){m.voiceT=rnd(4.5,7.5);sCreature(m,'breath',.55);}
+  if(m.state==='chase'){
+    // Within reach it snarls, fast and close; far off it may howl to the others.
+    if(d<9){m.voiceT=rnd(.9,1.6);sCreature(m,'snarl');}
+    else if(d>22&&t-howlAt>7&&Math.random()<.35){howlAt=t;m.voiceT=rnd(3,5);sCreature(m,'howl');}
+    else{m.voiceT=rnd(1.6,3);sCreature(m,'growl');}
+  }
+  else if(m.state==='stalk'){m.voiceT=rnd(4.5,7.5);if(m.kind==='crawler'&&d<12&&Math.random()<.6)sCreature(m,'chatter',.8);else sCreature(m,'breath',.55);}
   else{
     m.voiceT=rnd(5,9);
     if(d<8&&v.whisperT<=0){v.whisperT=rnd(8,14);sCreature(m,'whisper');}
+    else if(m.state==='search'&&d>10&&t-howlAt>8&&Math.random()<.3){howlAt=t;sCreature(m,'howl');}
+    else if(m.kind==='crawler'&&d<12&&Math.random()<.4)sCreature(m,'chatter',.7);
     else if(v.moanT<=0&&Math.random()<.4){v.moanT=rnd(12,20);sCreature(m,'moan');}
     else sCreature(m,'breath',.85);
   }
@@ -2488,11 +2840,14 @@ async function recordRun(run,noteId){
 
 // Read-only instrumentation is useful for profiling; deterministic test controls
 // are deliberately restricted to an explicit localhost QA session.
-function animSummary(m){const a=m.anim.snapshot();return {run:a.run,lunge:a.lunge,attack:a.attack,scream:a.scream,dying:a.dying,dead:a.dead,settled:a.settled,deathMode:a.deathMode,footsteps:a.footsteps,
+function animSummary(m){const a=m.anim.snapshot();return {run:a.run,lunge:a.lunge,attack:a.attack,scream:a.scream,dying:a.dying,dead:a.dead,settled:a.settled,deathMode:a.deathMode,footsteps:a.footsteps,rising:a.rising,rise:a.rise,
   pitch:m.g.rotation.x,roll:m.g.rotation.z,y:m.g.position.y,lowest:HollowMonsterAnim.lowest(m.kind,m.anim.pose)};}
 function snapshot(){return {
   state,seed:worldSeed,position:{x:P.pos.x,y:P.pos.y,z:P.pos.z},yaw:P.yaw,pitch:P.pitch,onGround:P.onGround,crouching:P.crouching,running:P.running,hidden:P.hidden,health:P.health,stamina:P.stamina,torchOn,battery,
   weapon:weaponDefs[weaponIndex].id,mag,reserve,reloadT,aiming,elapsed,simulationTime,fuses,exitPowered,exitRelease,exitOpen,decoys,
+  floor,floorCode:FLOOR().code,owned:weaponDefs.filter((w,i)=>owned[i]).map(w=>w.id),score:runScore(),
+  checkpoint:checkpoint?{floor:checkpoint.floor,elapsed:checkpoint.elapsed,owned:weaponDefs.filter((w,i)=>checkpoint.kit.owned[i]).map(w=>w.id)}:null,
+  savedFloor:savedCampaign()?.floor||0,
   viewmodel:{weapons:weaponModels.filter(model=>model.visible).map(model=>model.userData.kind),torch:torch.visible},
   player:{speed:Math.hypot(P.vel.x,P.vel.z),sprint:P.sprint,stamina:P.stamina,exhausted:P.exhausted,sliding:slideT>0,strafe:P.strafe},
   camera:{...camFX.snapshot(),y:camFX.pose.pos.y,x:camFX.pose.pos.x,roll:camFX.pose.rot.roll,pitch:camFX.pose.rot.pitch,fovAdd:camFX.pose.fov,fov:camera.fov,weaponZ:camFX.pose.weapon.z},
@@ -2509,9 +2864,10 @@ function snapshot(){return {
   performance:{fps:Math.round(1000/frameAverage),drawCalls:renderCalls,frames:renderedFrames,triangles:renderer.info.render.triangles,quality:qualityLevel,renderScale,pixelRatio:renderer.getPixelRatio(),wardDetail:wardDetail.value,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,backend:window.HollowBackend},
   rooms:specialRooms.map(r=>({id:r.id,name:r.name,x:r.x,z:r.z,w:r.w,d:r.d,shelter:!!r.shelter,fuse:!!r.fuse})),
   doors:roomDoors.map(d=>({id:d.id,x:d.box.x,z:d.box.z,open:d.open,locked:d.locked,health:d.health})),
-  loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending})),
+  loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending,...(l.type==='weapon'?{weapon:weaponDefs[l.weapon].id,visible:l.g.visible}:{})})),
   ammoPickups:ammoBoxes.map((b,i)=>({id:i,x:b.x,z:b.z,taken:b.taken,pending:!!b.pending})),
-  enemies:monsters.slice(0,monCount).map((m,i)=>({index:i,kind:m.kind,x:m.pos.x,z:m.pos.z,hp:m.hp,dead:m.dead,state:m.state,speed:m.stats.chase,moveSpeed:m.g.userData.speed,stalkTime:m.stalkT,watchTime:m.watchT,lunge:m.lungeBoost>0,lungeCooldown:m.lungeCD,anim:animSummary(m)})),
+  enemies:monsters.slice(0,monCount).map((m,i)=>({index:i,kind:m.kind,x:m.pos.x,z:m.pos.z,hp:m.hp,dead:m.dead,state:m.state,speed:m.stats.chase,moveSpeed:m.g.userData.speed,stalkTime:m.stalkT,watchTime:m.watchT,lunge:m.lungeBoost>0,lungeCooldown:m.lungeCD,anim:animSummary(m),
+    dormant:!!m.dormant,sleep:m.sleep||0,wakeIn:m.wakeIn,rising:m.riseT>0,visible:m.g.visible,body:m.dormant?m.lay.slice():null})),
   network:{role:NET.role,inGame:NET.inGame,generation:NET.gen,partner:R.present,code:NET.code,partnerY:R.raw.y||0,partnerCrouching:!!R.raw.crouch},
   input:{mouseDown,touchX:touchMove.x,touchY:touchMove.y}
 };}
@@ -2522,7 +2878,20 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     colliders:()=>roomProps.map(p=>({...p})),
     pose:({x,z,y=0,yaw=0,pitch=0})=>{P.pos.set(x,y,z);P.vel.set(0,0,0);P.velY=0;P.yaw=yaw;P.pitch=pitch;P.onGround=y===0;},
     silence:()=>{hideMonsters();grace=100000;},
-    enemy:(index,pose)=>{const m=monsters[index];m.pos.set(pose.x,0,pose.z);m.g.position.copy(m.pos);m.hp=m.stats.hp;m.dead=false;m.spawned=true;m.g.visible=true;m.state=pose.state||'wander';m.path=[];m.yaw=pose.yaw||0;m.g.rotation.set(0,m.yaw,0);m.lastSeen.copy(P.pos);m.attackT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;m.stalkT=0;m.watchT=0;m.lost=0;m.spotCD=0;m.repath=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;m.voiceT=3;grace=0;},
+    enemy:(index,pose)=>{const m=monsters[index];m.pos.set(pose.x,0,pose.z);m.g.position.copy(m.pos);m.hp=m.stats.hp;m.dead=false;m.spawned=true;m.g.visible=true;m.state=pose.state||'wander';m.path=[];m.yaw=pose.yaw||0;m.g.rotation.set(0,m.yaw,0);m.lastSeen.copy(P.pos);m.attackT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;m.stalkT=0;m.watchT=0;m.lost=0;m.spotCD=0;m.repath=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;m.voiceT=3;grace=0;
+      m.dormant=false;m.riseT=0;m.wakeIn=-1;m.sleep=0;m.rate=0;m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);monCount=Math.max(monCount,index+1);},
+    // A sleeping body in slot `index`, lying at (x, z) along `yaw`. Returns its three body points.
+    sleeper:(index,{x,z,yaw=0})=>{const m=monsters[index];resetMonster(m,x,z,yaw);layDown(m,index);monCount=Math.max(monCount,index+1);return m.lay.slice();},
+    wake:index=>wakeMonster(monsters[index],{x:P.pos.x,z:P.pos.z}),
+    // Gives the survivor `ids` (full magazines and the starting reserves) and draws `select`, like the old full kit.
+    arm:(ids=['rifle','pistol','shotgun'],select='rifle')=>{
+      owned=weaponDefs.map(w=>ids.includes(w.id));weapons=weaponDefs.map(w=>({mag:w.capacity,reserve:w.reserve}));
+      const i=weaponDefs.findIndex(w=>w.id===select),k=i>=0&&owned[i]?i:Math.max(0,owned.indexOf(true));
+      weaponModels.forEach(g=>g.visible=false);weaponIndex=k;gun=weaponModels[k];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;
+      mag=weapons[k].mag;reserve=weapons[k].reserve;reloadT=0;fireT=.3;gunKick=0;flashT=0;semiFired=false;stowOwnedWeapons();
+      return weaponDefs.filter((w,j)=>owned[j]).map(w=>w.id);},
+    // Jumps straight onto floor `index` (a new layout, or `seed`'s), carrying the current kit.
+    floor:(index,seed)=>{if(NET.inGame)return;scoreBase=runScore();enterFloor(index,currentKit(),seed);showScreen(null);return floor;},
     freezeAI:value=>{aiFrozen=!!value;},
     // Feed the auto-quality governor `count` frames of `ms` each, starting a fresh window with no settle time.
     autoQualityFrames:(ms,count)=>{const n=finiteNumber(count,0,0,2000),dt=finiteNumber(ms,16,1,1000)/1000;autoMs=autoFrames=autoSettle=0;for(let i=0;i<n;i++)autoQuality(dt);return {quality:qualityLevel,renderScale,wardDetail:wardDetail.value,autoBest};},
@@ -2533,7 +2902,10 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     path:(index,x,z)=>{setPathTo(monsters[index],x,z);return monsters[index].path.map(cell=>cell.slice());},
     navClear:(ax,az,bx,bz,radius)=>movementClear(ax,az,bx,bz,radius),
     chaosAudio:event=>audioChaosEvent(event),
-    build:seed=>{buildMazeSeeded(seed);resetSurvivor();P.pos.set(PED.x-.85,0,PED.z);P.vel.set(0,0,0);setHell();state='play';showScreen(null);spawnMonsters(8);grace=10;},
+    // Always B1. The guns carried stay carried, reloaded to their starting rounds.
+    build:seed=>{const kit=currentKit();kit.health=100;kit.decoys=3;kit.weapons=kit.weapons.map((w,i)=>owned[i]?{mag:weaponDefs[i].capacity,reserve:weaponDefs[i].reserve}:w);
+      floor=0;buildMazeSeeded(seed);resetSurvivor(kit);P.pos.set(PED.x-.85,0,PED.z);P.vel.set(0,0,0);setHell();state='play';showScreen(null);spawnMonsters(FLOOR().active,FLOOR().sleepers);grace=10;
+      checkpoint={floor:0,kit:copyKit(kit),elapsed,score:{...scoreBase}};},
     collide:(position,radius=PR)=>{const point={...position};resolve(point,radius);return point;}
   });
 }

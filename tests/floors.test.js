@@ -176,3 +176,23 @@ test('gunfire wakes every sleeper within earshot, nearest first, louder guns fur
   assert.equal(rules.shotWakeDelay(25, loud('pistol')), -1, 'the sidearm is the quiet option');
   for (const bad of [[NaN, 30], [5, NaN], [-1, 30], [Infinity, 30], [5, 0], [5, -10]]) assert.equal(rules.shotWakeDelay(...bad), -1);
 });
+
+test('lower-floor case notes hang in real B2 and B3 rooms, never replace a B1 note, and agree with the floor rules', () => {
+  const { RECORDS, FLOOR_RECORDS } = require('../public/horror');
+  assert.equal(Object.isFrozen(FLOOR_RECORDS), true);
+  for (const index of [1, 2]) {
+    const ids = rules.generateFloor(index, rules.seeded(index)).rooms.map(r => r.id);
+    const notes = ids.filter(id => FLOOR_RECORDS[id]);
+    assert.ok(notes.length >= 4, `${rules.FLOORS[index].code} has its own case notes`);
+  }
+  const lower = new Set([1, 2].flatMap(index => rules.generateFloor(index, rules.seeded(index)).rooms.map(r => r.id)));
+  for (const [id, record] of Object.entries(FLOOR_RECORDS)) {
+    assert.ok(lower.has(id), `${id} is a lower-floor room`);
+    assert.ok(!(id in RECORDS), `${id} does not replace a B1 note`);
+    assert.ok(record.title.length > 3 && record.text.length > 40, id);
+  }
+  assert.equal(rules.FLOORS[1].weapons.shotgun, 'm-security', 'the Security note promises the breacher');
+  assert.equal(rules.FLOORS[2].weapons.rifle, 'h-guard', 'the Guard post note promises a carbine');
+  assert.match(FLOOR_RECORDS['h-control'].text, /twenty-five seconds/);
+  assert.equal(rules.FLOORS[2].release, 25);
+});

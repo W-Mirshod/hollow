@@ -62,7 +62,8 @@ test('a solo run that ends in the ward goes on the main-screen scoreboard with i
   // A shotgun headshot on a crawler 3.5 m down the central hall (tests/dopamine.spec.js) earns points.
   const kill=await page.evaluate(()=>{
     const T=HollowTest,G=HollowGame,x=45,z=55,crawlerZ=51.5;
-    T.silence();T.torch(false);
+    // A run starts with the sidearm alone: hand over the full kit, carbine drawn, then switch to the shotgun.
+    T.silence();T.torch(false);T.arm();
     T.action('weapon',true);T.action('weapon',true);T.action('aim',true);T.advance(.3);
     T.pose({x,z,yaw:0,pitch:0});const eye=G.snapshot().position.y+1.6;
     T.pose({x,z,yaw:0,pitch:Math.atan((.72-eye)/(z-crawlerZ-.43))});
@@ -108,7 +109,7 @@ test('both co-op partners’ runs go on the scoreboard, marked co-op with each o
     // The host scores the same crawler headshot. Co-op rounds only run on real frames, so the monsters hold still meanwhile.
     await hostPage.evaluate(()=>{
       const T=HollowTest,G=HollowGame,x=45,z=55,crawlerZ=51.5;
-      T.silence();T.freezeAI(true);T.torch(false);
+      T.silence();T.freezeAI(true);T.torch(false);T.arm();
       T.action('weapon',true);T.action('weapon',true);T.action('aim',true);
       T.pose({x,z,yaw:0,pitch:0});const eye=G.snapshot().position.y+1.6;
       T.pose({x,z,yaw:0,pitch:Math.atan((.72-eye)/(z-crawlerZ-.43))});

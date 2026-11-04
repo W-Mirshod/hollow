@@ -21,7 +21,8 @@ async function ready(page,settings){
   await page.waitForFunction(()=>!!window.HollowTest&&!!window.HollowGame);
   await page.locator('#startDarkBtn').click();
   await expect.poll(()=>page.evaluate(()=>HollowGame.snapshot().state)).toBe('play');
-  await page.evaluate(()=>HollowTest.silence());
+  // A run starts with the sidearm alone; the shotgun kills below need the full kit.
+  await page.evaluate(()=>{HollowTest.silence();HollowTest.arm();});
 }
 
 // Runs a whole seeded chase inside one evaluate, so real frames cannot interleave with the director.

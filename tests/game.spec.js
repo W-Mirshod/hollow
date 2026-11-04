@@ -13,7 +13,8 @@ async function ready(page,name='QA Explorer'){
   },name);
   await page.goto('/?qa=1');await page.waitForFunction(()=>!!window.HollowTest);
 }
-async function start(page){await ready(page);await page.locator('#startDarkBtn').click();await expect.poll(()=>page.evaluate(()=>HollowGame.snapshot().state)).toBe('play');await page.evaluate(()=>HollowTest.silence());}
+// A run starts with the sidearm alone; these checks cover the whole kit, so the survivor is handed all three guns.
+async function start(page){await ready(page);await page.locator('#startDarkBtn').click();await expect.poll(()=>page.evaluate(()=>HollowGame.snapshot().state)).toBe('play');await page.evaluate(()=>{HollowTest.silence();HollowTest.arm();});}
 async function state(page){return page.evaluate(()=>HollowGame.snapshot());}
 async function pose(page,position){await page.evaluate(position=>HollowTest.pose(position),position);}
 async function key(page,name,ms=150){await page.keyboard.down(name);await page.waitForTimeout(ms);await page.keyboard.up(name);}
@@ -24,7 +25,12 @@ test('offline-local boot, menus, settings, assets and restart are error-free',as
   await ready(page);
   await expect(page.locator('#menu')).toBeVisible();await expect(page.locator('#startDarkBtn')).toBeVisible();
   await page.locator('#startDarkBtn').click();await expect(page.locator('#hud')).toBeVisible();
-  const initial=await state(page);expect(initial.rooms).toHaveLength(10);expect(initial.enemies).toHaveLength(8);expect(new Set(initial.enemies.map(x=>x.kind)).size).toBe(4);
+  const initial=await state(page);expect(initial.rooms).toHaveLength(10);
+  // B1: eight creatures hunt from the start and up to five more lie asleep on the floor. The run starts with the sidearm.
+  const awake=initial.enemies.filter(x=>!x.dormant),asleep=initial.enemies.filter(x=>x.dormant);
+  expect(awake).toHaveLength(8);expect(new Set(awake.map(x=>x.kind)).size).toBe(4);
+  expect(asleep.length).toBeGreaterThan(0);expect(asleep.length).toBeLessThanOrEqual(5);
+  expect(initial).toMatchObject({floor:0,floorCode:'B1',owned:['pistol'],weapon:'pistol',mag:12});
   await page.evaluate(()=>HollowTest.pause());await expect(page.locator('#pause')).toBeVisible();
   for(const quality of ['high','medium']){const frames=(await state(page)).performance.frames;await page.locator('#settingsQuality').selectOption(quality);await expect.poll(async()=>(await state(page)).performance.frames).toBeGreaterThan(frames);}
   await page.locator('#settingsMotion').check();
@@ -76,7 +82,17 @@ test('shelter doors physically block, lock, conceal and let the Warden lose its 
   await page.keyboard.press('e');await expect.poll(async()=>(await state(page)).doors[0].open).toBe(true);
 });
 
-test('different enemy damage, armor, medical aid and fuse-powered escape work',async({page})=>{
+// An approach 1.2 m from a pickup with a clear walk to it (lower-floor rooms are furnished differently from B1's).
+async function approach(page,item){
+  const spot=await page.evaluate(item=>{
+    for(const [dx,dz] of [[0,1],[0,-1],[1,0],[-1,0]]){const x=item.x+dx*1.2,z=item.z+dz*1.2;
+      if(HollowTest.navClear(x,z,item.x,item.z,.32))return {x,z,yaw:Math.atan2(dx,dz)};}
+    return null;
+  },item);
+  expect(spot,`${item.id} has a clear approach`).toBeTruthy();return spot;
+}
+
+test('different enemy damage, armor, medical aid, the fuse-powered descent and the B3 floodgate escape work',async({page})=>{
   await start(page);await pose(page,{x:13,z:7.5,yaw:Math.PI/2});
   await page.evaluate(()=>{HollowTest.enemy(0,{x:12,z:7.5,state:'chase'});});
   await expect.poll(async()=>(await state(page)).health).toBe(32);
@@ -93,10 +109,33 @@ test('different enemy damage, armor, medical aid and fuse-powered escape work',a
   // Software rendering may need far more than 60 wall seconds for the ten-second simulation countdown.
   await expect.poll(async()=>(await state(page)).exitOpen,{timeout:180000}).toBe(true);
   const opened=await state(page);expect(opened.exitRelease).toBe(0);expect(opened.simulationTime-powered.simulationTime).toBeGreaterThanOrEqual(powered.exitRelease-.05);
+  // B1's shutter leads down to B2: a new floor, with the health, guns and score carried and a checkpoint saved.
   await page.keyboard.down('w');
+  try{await expect.poll(async()=>(await state(page)).floor,{timeout:60000}).toBe(1);}finally{await page.keyboard.up('w');}
+  await expect.poll(async()=>(await state(page)).state).toBe('play');
+  const b2=await state(page);
+  expect(b2).toMatchObject({floorCode:'B2',fuses:0,exitPowered:false,exitOpen:false,health:opened.health,owned:['rifle','pistol','shotgun'],savedFloor:1});
+  expect(b2.checkpoint).toMatchObject({floor:1,owned:['rifle','pistol','shotgun']});expect(b2.score).toEqual(opened.score);
+  expect(b2.seed).not.toBe(opened.seed);expect(b2.rooms).toHaveLength(12);
+  await expect(page.locator('#floorText')).toHaveText('B2 · RECORDS & MORGUE');
+  // B3's surface floodgate is the way out: three keys, a 25-second release, then the open air.
+  await page.evaluate(()=>{HollowTest.floor(2);HollowTest.silence();});
+  const b3=await state(page);expect(b3).toMatchObject({floor:2,floorCode:'B3',fuses:0,savedFloor:2});
+  await expect(page.locator('#floorText')).toHaveText('B3 · THE HOLLOW');
+  for(const key of b3.loot.filter(l=>l.type==='fuse')){
+    await pose(page,await approach(page,key));await page.keyboard.press('e');
+    await expect.poll(async()=>(await state(page)).loot.find(l=>l.id===key.id).taken).toBe(true);
+  }
+  expect((await state(page)).fuses).toBe(3);
+  await pose(page,{x:100.5,z:100.5,yaw:-Math.PI/2});await page.keyboard.press('e');await expect.poll(async()=>(await state(page)).exitPowered).toBe(true);
+  const gate=await state(page);expect(gate.exitRelease).toBeGreaterThan(20);expect(gate.exitRelease).toBeLessThanOrEqual(25);expect(gate.exitOpen).toBe(false);
+  await page.evaluate(()=>{for(let i=0;i<3;i++)HollowTest.advance(10);});
+  expect((await state(page)).exitOpen).toBe(true);
+  await pose(page,{x:100.5,z:100.5,yaw:-Math.PI/2});await page.keyboard.down('w');
   try{await expect.poll(async()=>(await state(page)).state,{timeout:60000}).toBe('win');}finally{await page.keyboard.up('w');}
   await expect(page.locator('#win')).toBeVisible();
   await expect(page.locator('#winRank')).toHaveText(/^Score [\d,]+\. New personal best, posted to the board\.$/);
+  expect((await state(page)).savedFloor,'Getting out clears the saved checkpoint').toBe(0);
 });
 
 test('two real browser peers synchronize map, monsters, fuses, doors, jumping and final exit',async({browser})=>{
@@ -109,7 +148,10 @@ test('two real browser peers synchronize map, monsters, fuses, doors, jumping an
     const code=await host.locator('#coopCode').textContent();await guest.locator('#coopBtn').click();await guest.locator('#coopCodeIn').fill(code);await guest.locator('#coopJoinForm button').click();
     await expect(host.locator('#coopStart')).toBeEnabled();await host.locator('#coopStart').click();
     await expect.poll(async()=>(await state(guest)).state).toBe('play');
-    expect((await state(host)).seed).toBe((await state(guest)).seed);expect((await state(guest)).enemies).toHaveLength(12);
+    // Co-op plays B1 with twelve creatures awake and B1's sleepers on the floor; the guest mirrors every slot.
+    expect((await state(host)).seed).toBe((await state(guest)).seed);
+    const hostEnemies=(await state(host)).enemies;expect(hostEnemies.filter(x=>!x.dormant)).toHaveLength(12);
+    await expect.poll(async()=>(await state(guest)).enemies.length).toBe(hostEnemies.length);
     await host.evaluate(()=>HollowTest.silence());
     await guest.evaluate(()=>HollowTest.action('jump',true));await expect.poll(async()=>(await state(host)).network.partnerY).toBeGreaterThan(.1);
     await guest.evaluate(()=>HollowTest.action('crouch',true));await expect.poll(async()=>(await state(host)).network.partnerCrouching).toBe(true);await guest.evaluate(()=>HollowTest.action('crouch',false));

@@ -12,6 +12,19 @@
     laboratory:{title:'OBSERVATION / FINAL ENTRY',text:'It follows the light under the door. Lock the room. Crouch. Switch the torch off. Wait until the footsteps move away.'},
     'refuge-b':{title:'PENCIL ON THE WALL',text:'I counted four sets of steps. Then five. One stopped every time I stopped. I have been here since the lights went out.'}
   });
+  // Case notes on the lower floors, by room id (systems.js FLOOR_PLANS).
+  const FLOOR_RECORDS=Object.freeze({
+    'm-records':{title:'LIFT ORDER / B2',text:'The freight lift keycards were split between Records, the Morgue and the Crematorium so nobody could leave alone. The lift is loud. Everything lying down here will hear it come.'},
+    'm-morgue':{title:'MORTUARY LOG / 03:40',text:'The drawer count does not match the tags. Two of the bodies on the tables were facing the other way when I came back. Do not shine a light on them.'},
+    'm-security':{title:'SECURITY / SIDEARM ONLY',text:'Night staff carry the M9 and nothing else. The breacher stays locked in here for a reason: one shot in these halls and every table sits up.'},
+    'm-crematory':{title:'CREMATORIUM / UNFIRED',text:'The furnace never lit. They were stacked here to wait for power. They are still waiting. Crouch past them and keep the torch on the floor ahead, never on them.'},
+    'm-vault-b':{title:'SCRATCHED INTO THE DOOR',text:'One woke when I ran. Then the one beside it. Then all of them. I counted to four hundred before they stopped walking.'},
+    'h-guard':{title:'GUARD POST / ISSUE',text:'One carbine issued to this post. If it is not on the rack, the guard took it down with him. Look for him. Look carefully.'},
+    'h-pump':{title:'PUMP ROOM / FLOOD LOG',text:'Three floodgate keys: the Pump Room, the Well and the Nest. The surface gate opens slowly, and the whole Hollow hears it grinding.'},
+    'h-control':{title:'FLOODGATE CONTROL',text:'The gate motor needs twenty-five seconds. Do not stand at the gate while it opens. Find a door, hold it, and run the moment it is up.'},
+    'h-well':{title:'THE WELL / DO NOT DESCEND',text:'They came up out of the water. Some are still lying around the rim as if they were sleeping. They are not sleeping.'},
+    'h-nest':{title:'THE NEST',text:'Count them before you cross. If one stirs, back away slowly. If one screams, run, because the rest are getting up.'}
+  });
   function randomSource(seed){
     let value=Number(seed)|0;
     return ()=>{value=(Math.imul(value,1664525)+1013904223)|0;return (value>>>0)/4294967296;};
@@ -52,5 +65,5 @@
     }
     return Object.freeze({update,snapshot});
   }
-  return Object.freeze({create,RECORDS,RELEASE_SECONDS:10});
+  return Object.freeze({create,RECORDS,FLOOR_RECORDS,RELEASE_SECONDS:10});
 });

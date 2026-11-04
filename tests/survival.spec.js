@@ -31,10 +31,11 @@ async function advance(page,seconds){
     HollowTest.advance(seconds);return HollowGame.snapshot();
   },seconds);
 }
+// A run starts with the sidearm alone; these checks cover the full kit, so the survivor is handed all three guns.
 async function start(page){
   await ready(page);await page.locator('#startDarkBtn').click();
   await expect.poll(async()=>(await snapshot(page)).state).toBe('play');
-  await page.evaluate(()=>HollowTest.silence());
+  await page.evaluate(()=>{HollowTest.silence();HollowTest.arm();});
 }
 async function renderedFrames(page,count=2){
   const from=(await snapshot(page)).performance.frames;
@@ -156,7 +157,7 @@ test.describe('touch viewmodel',()=>{
   test('real weapon and torch taps keep exactly one weapon visible',async({page})=>{
     await ready(page);await page.locator('#startDarkBtn').tap();
     await expect.poll(async()=>(await snapshot(page)).state).toBe('play');
-    await page.evaluate(()=>HollowTest.silence());
+    await page.evaluate(()=>{HollowTest.silence();HollowTest.arm();});
     await expect(page.locator('#touchControls')).toBeVisible();
     expectViewmodel(await advance(page,.35),'rifle');
     for(const id of ['pistol','shotgun','rifle']){
@@ -485,8 +486,8 @@ test('two real peers receive automatic pickups only after host confirmation, onc
     expect(initialHost.network).toMatchObject({role:'host',inGame:true,partner:true});
     expect(initialGuest.network).toMatchObject({role:'guest',inGame:true,partner:true});expect(initialGuest.seed).toBe(initialHost.seed);
     expect(initialGuest.ammoPickups).toEqual(initialHost.ammoPickups);
-    await host.evaluate(()=>{HollowTest.silence();HollowTest.torch(false);});
-    await guest.evaluate(()=>HollowTest.torch(false));
+    await host.evaluate(()=>{HollowTest.silence();HollowTest.torch(false);HollowTest.arm();});
+    await guest.evaluate(()=>{HollowTest.torch(false);HollowTest.arm();});
     await expect.poll(async()=>(await snapshot(guest)).enemies.every(enemy=>enemy.dead)).toBe(true);
     let hostInventory=await inventory(host),guestInventory=await inventory(guest);
     const collected=[];

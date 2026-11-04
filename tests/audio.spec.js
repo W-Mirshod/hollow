@@ -21,10 +21,11 @@ async function ready(page,settings={}){
   await page.waitForFunction(()=>!!window.HollowGame&&typeof window.HollowTest?.advance==='function');
 }
 async function snapshot(page){return page.evaluate(()=>HollowGame.snapshot());}
+// A run starts with the sidearm alone; the weapon cues below need all three guns, the carbine drawn.
 async function start(page){
   await page.locator('#startDarkBtn').click();
   await expect.poll(async()=>(await snapshot(page)).state).toBe('play');
-  await page.evaluate(()=>HollowTest.silence());
+  await page.evaluate(()=>{HollowTest.silence();HollowTest.arm();});
 }
 const cues=(entries,src,cue,kind)=>entries.filter(e=>e.src===src&&e.cue===cue&&(kind===undefined||e.kind===kind));
 
