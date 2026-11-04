@@ -166,7 +166,7 @@ test('procedural surface enhancement preserves the world transition node graph, 
 });
 
 test('rooms batch static geometry and keep both central navigation axes clear', () => {
-  for (const type of ['infirmary', 'archive', 'generator', 'armory', 'security', 'lounge', 'maintenance']) {
+  for (const type of ['infirmary', 'archive', 'generator', 'armory', 'security', 'lounge', 'maintenance', 'morgue']) {
     for (const width of [9, 15]) {
       const room = V.decorateRoom(THREE, { width, depth: 9, type });
       assert.ok(meshCount(room) <= 12, `${type} exceeded the room draw-call budget: ${meshCount(room)}`);
@@ -387,7 +387,7 @@ function assertClearGeometry(room) {
 }
 
 test('clinical dressing tells the ward story and actual geometry leaves navigation axes open', () => {
-  for (const type of ['infirmary', 'archive', 'generator', 'armory', 'security', 'lounge', 'maintenance']) {
+  for (const type of ['infirmary', 'archive', 'generator', 'armory', 'security', 'lounge', 'maintenance', 'morgue']) {
     for (const [width, depth] of [[7, 7], [9, 9], [15, 12]]) {
       const room = V.decorateRoom(THREE, { width, depth, type });
       assert.equal(room.userData.direction, 'Blackwater Ward');

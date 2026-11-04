@@ -2059,8 +2059,8 @@
       mark(x, z, orientation ? 0.65 : 1.55, orientation ? 1.55 : 0.65, 1.80);
     }
 
-    function bed(x, z, covered) {
-      const r = joint(THREE, g, 'medical bed', x, 0, z);
+    function bed(x, z, covered, bare) {
+      const r = joint(THREE, g, bare ? 'mortuary gurney' : 'medical bed', x, 0, z);
       bevel(THREE, r, p.dark, 0, 0.61, 0, 0.90, 0.10, 1.98, 0.02);
       bevel(THREE, r, p.cloth, 0, 0.71, 0, 0.83, 0.14, 1.89, 0.025);
       oval(THREE, r, p.cloth, 0, 0.84, -0.68, 0.34, 0.09, 0.25, 0.05);
@@ -2084,6 +2084,13 @@
         link(THREE, r, p.steel, [sx, 0.62, 0.65], [sx, 0.99, 0.65], 0.019);
         link(THREE, r, p.steel, [sx, 0.99, -0.70], [sx, 0.99, 0.65], 0.019);
       }
+      if (bare) {
+        // A morgue gurney: no drip, just a toe tag hanging off the sheet.
+        link(THREE, r, p.dark, [0.12, 0.84, 0.93], [0.13, 0.66, 1.0], 0.003);
+        box(THREE, r, p.cloth, 0.13, 0.62, 1.0, 0.075, 0.11, 0.004);
+        mark(x, z, 1.04, 2.12, 1.2);
+        return;
+      }
       cyl(THREE, r, p.steel, 0.68, 1.02, -0.70, 0.016, 0.016, 1.99);
       link(THREE, r, p.steel, [0.51, 1.99, -0.70], [0.86, 1.99, -0.70], 0.012);
       bevel(THREE, r, p.cloth, 0.59, 1.80, -0.70, 0.13, 0.24, 0.055, 0.011);
@@ -2091,6 +2098,22 @@
       // The IV stand must not turn the entire mattress into a two-metre wall.
             mark(x, z, 1.04, 2.12, covered ? 1.2 : 1.01);
             mark(x + 0.69, z - 0.70, 0.38, 0.10, 2.02);
+    }
+
+    // A bank of cold-store doors against the west wall, facing into the room; one drawer has slid out.
+    function drawers(x, z) {
+      const r = joint(THREE, g, 'mortuary drawers', x, 0, z); r.rotation.y = Math.PI / 2;
+      bevel(THREE, r, p.steel, 0, 1.0, 0, 1.46, 2.0, 0.62, 0.02);
+      for (let row = 0; row < 3; row++) for (let col = 0; col < 2; col++) {
+        const x0 = -0.355 + col * 0.71, y0 = 0.42 + row * 0.62, open = row === 0 && col === 1, front = open ? 0.64 : 0.322;
+        bevel(THREE, r, p.paint, x0, y0, front, 0.6, 0.5, 0.025, 0.01);
+        box(THREE, r, p.dark, x0, y0 + 0.13, front + 0.03, 0.22, 0.03, 0.035);
+        box(THREE, r, p.cloth, x0 - 0.19, y0 - 0.15, front + 0.016, 0.11, 0.07, 0.004);
+      }
+      box(THREE, r, p.steel, 0.355, 0.25, 0.48, 0.56, 0.04, 0.32);
+      oval(THREE, r, p.cloth, 0.355, 0.31, 0.48, 0.24, 0.07, 0.17);
+      story('mortuary drawers', r);
+      mark(x + 0.17, z, 0.96, 1.46, 2.0);
     }
 
     function consoleDesk(x, z, wide) {
@@ -2208,6 +2231,13 @@
         mark(x, z, 0.75, 1.85, 0.58);
         cabinet(right, back, true);
         placard(-width * 0.2, 2.34, -depth / 2 + 0.04, 'ATTENDANTS ONLY', 'PERSONAL EFFECTS / UNCLAIMED', '#aaa996');
+      } else if (type === 'morgue') {
+        drawers(-width / 2 + 0.34, -depth * 0.22);
+        if (depth >= 11) drawers(-width / 2 + 0.34, depth * 0.17);
+        bed(right - 0.1, Math.max(back + 0.7, -depth * 0.25), true, true);
+        if (depth >= 8) bed(right - 0.1, depth * 0.24, true, true);
+        if (width >= 11) bed(-width * 0.2, Math.max(back + 0.7, -depth * 0.25), true, true);
+        placard(width * 0.22, 2.35, -depth / 2 + 0.04, 'MORTUARY', 'COLD STORAGE / TAG EVERY BODY', '#9fb4b8');
       } else {
         shelf(left, back + 0.3, Math.PI / 2); consoleDesk(right - 0.2, back, false);
         if (width >= 11) { consoleDesk(left + 0.3, depth * 0.23, true); cabinet(right, depth * 0.23, true); }

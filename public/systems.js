@@ -27,6 +27,44 @@
     staminaDrain:1/7, staminaRegenIdle:1/5, staminaRegenMove:1/8,
     exhaustedRecover:.35, exhaustedSpeed:.85, jumpCost:.08, slideCost:.16, slideSpeed:7.5, slideTime:.65
   });
+  // The campaign: three floors, each with three objective items behind one exit. active: monsters awake on arrival;
+  // sleepers: bodies on the floor that wake when disturbed; ammo: supply boxes; release: seconds the exit takes to open
+  // once powered (B1 keeps HollowHorror.RELEASE_SECONDS). weapons: gun -> room id where it lies, if not yet owned.
+  const FLOORS = Object.freeze([
+    Object.freeze({id:'b1', code:'B1', name:'Blackwater Ward', item:'power fuse', items:'power fuses', exit:'east loading shutter',
+      active:8, sleepers:5, ammo:16, release:10, weapons:Object.freeze({rifle:'armory'})}),
+    Object.freeze({id:'b2', code:'B2', name:'Records & Morgue', item:'lift keycard', items:'lift keycards', exit:'freight lift',
+      active:6, sleepers:12, ammo:18, release:15, weapons:Object.freeze({shotgun:'m-security', rifle:'m-intake'})}),
+    Object.freeze({id:'b3', code:'B3', name:'The Hollow', item:'floodgate key', items:'floodgate keys', exit:'surface floodgate',
+      active:10, sleepers:9, ammo:20, release:25, weapons:Object.freeze({rifle:'h-guard', shotgun:'h-cell-a'})})
+  ]);
+  // Every run starts with the sidearm alone; the other guns lie somewhere below and are picked up when found.
+  const STARTING_WEAPONS = Object.freeze(['pistol']);
+  // Sleeping bodies build disturbance toward `wake` and lose it at `decay` per second when left alone. Distances in
+  // metres: a torch beam (within `cone` radians of its axis), a sprint, a walk or a crouch-walk inside its range, or
+  // lingering beside one (`near`); contact (`touch`) wakes at once. A gunshot wakes sleepers within noise x `shot`.
+  // A woken body needs `rise` seconds to stand, then rouses other sleepers within `chain` metres.
+  const SLEEP = Object.freeze({wake:1, decay:.3, touch:1, torch:15, cone:.45, run:9.5, walk:4, crouch:1.8, near:1.8,
+    shot:.7, rise:.9, chain:11});
+  // Disturbance per second a sleeper at `distance` gets from one survivor: {torch, moving, running, crouching}.
+  // torch means the beam is on the body with a clear line of sight. Infinity: woken at once.
+  function sleepDisturbance(distance, stimulus) {
+    const s = stimulus || {}, d = Number.isFinite(distance) ? Math.max(0, distance) : Infinity;
+    if (d < SLEEP.touch) return Infinity;
+    let rate = 0;
+    if (s.torch && d < SLEEP.torch) rate += 1.2 + 1.5 * (1 - d / SLEEP.torch);
+    if (s.moving && s.running) { if (d < SLEEP.run) rate += 2.6 * (1.3 - d / SLEEP.run); }
+    else if (s.moving && s.crouching) { if (d < SLEEP.crouch) rate += .9; }
+    else if (s.moving) { if (d < SLEEP.walk) rate += 1.7; }
+    else if (d < SLEEP.near) rate += .25;
+    return rate;
+  }
+  // Seconds until a gunshot of `noise` wakes a sleeper at `distance`, or -1 when it sleeps through it.
+  function shotWakeDelay(distance, noise) {
+    const reach = (Number(noise) || 0) * SLEEP.shot, d = Number(distance);
+    if (!(reach > 0) || !Number.isFinite(d) || d < 0 || d >= reach) return -1;
+    return .15 + .9 * d / reach;
+  }
   function seeded(seed) {
     return function () {
       seed |= 0; seed = seed + 0x6D2B79F5 | 0;
@@ -48,6 +86,74 @@
       {id:'refuge-d',name:'09 / Isolation D',type:'security',x:3,z:29,w:3,d:3,shelter:true},
       {id:'stores',name:'10 / Supply store',type:'lounge',x:11,z:25,w:3,d:3}
     ].map(r => ({...r,door:{x:r.x+(r.w>>1)-(r.w===3?1:0),z:r.z+r.d}}));
+  }
+  // Lower floors keep fixed rooms around their own hall plans. Each `optional` side passage opens on a coin flip and
+  // each `debris` cell is walled on one, so every seed reshuffles the shortcuts without moving a room.
+  const room = (id, name, type, x, z, w, d, flags) => Object.freeze({id, name, type, x, z, w, d, ...flags});
+  const FLOOR_PLANS = Object.freeze([null, Object.freeze({
+    rooms: [
+      room('m-intake', '01 / Intake', 'infirmary', 4, 6, 3, 3),
+      room('m-records', '02 / Records vault', 'archive', 10, 4, 5, 5, {fuse:true}),
+      room('m-chapel', '03 / Chapel of rest', 'lounge', 19, 6, 3, 3),
+      room('m-boiler', '04 / Boiler room', 'maintenance', 25, 4, 5, 5),
+      room('m-vault-a', '05 / Cold vault A', 'security', 4, 15, 3, 3, {shelter:true}),
+      room('m-morgue', '06 / Morgue', 'morgue', 10, 13, 5, 5, {fuse:true}),
+      room('m-security', '07 / Security', 'security', 19, 15, 3, 3),
+      room('m-staff', '08 / Staff room', 'lounge', 25, 15, 5, 3),
+      room('m-autopsy', '09 / Autopsy', 'morgue', 4, 22, 5, 5),
+      room('m-vault-b', '10 / Cold vault B', 'security', 12, 24, 3, 3, {shelter:true}),
+      room('m-crematory', '11 / Crematorium', 'generator', 19, 22, 5, 5, {fuse:true}),
+      room('m-vault-c', '12 / Cold vault C', 'security', 27, 24, 3, 3, {shelter:true})
+    ],
+    halls: [[1,1,33,2], [1,1,2,33], [32,1,33,33], [1,32,33,33], [16,1,17,33], [1,10,33,11], [1,19,33,20], [1,28,33,29]],
+    optional: [[8,3,8,9], [23,3,23,9], [18,3,22,4], [8,12,8,18], [3,12,8,12], [18,13,31,13], [23,12,23,18], [10,21,10,27],
+      [10,21,15,21], [25,21,25,27], [25,22,31,22], [5,30,5,31], [9,30,9,31], [13,30,13,31], [21,30,21,31], [25,30,25,31], [29,30,29,31]],
+    pillars: [], debris: []
+  }), Object.freeze({
+    rooms: [
+      room('h-guard', '01 / Guard post', 'armory', 4, 5, 3, 3),
+      room('h-pump', '02 / Pump room', 'generator', 10, 5, 5, 3, {fuse:true}),
+      room('h-safe-a', '03 / Bulkhead A', 'security', 18, 5, 3, 3, {shelter:true}),
+      room('h-control', '04 / Floodgate control', 'maintenance', 25, 5, 5, 3),
+      room('h-infirm', '05 / Sick bay', 'infirmary', 4, 12, 3, 3),
+      room('h-safe-b', '06 / Bulkhead B', 'security', 4, 19, 3, 3, {shelter:true}),
+      room('h-cell-b', '07 / Cell block B', 'security', 27, 12, 3, 3),
+      room('h-store', '08 / Flood store', 'lounge', 27, 19, 3, 3),
+      room('h-well', '09 / The Well', 'generator', 15, 15, 5, 5, {fuse:true}),
+      room('h-cell-a', '10 / Cell block A', 'security', 4, 28, 3, 3),
+      room('h-nest', '11 / The Nest', 'morgue', 10, 28, 5, 3, {fuse:true}),
+      room('h-safe-c', '12 / Bulkhead C', 'security', 18, 28, 3, 3, {shelter:true}),
+      room('h-cistern', '13 / Cistern', 'maintenance', 25, 28, 5, 3)
+    ],
+    halls: [[1,1,33,2], [1,1,2,33], [32,1,33,33], [1,32,33,33], [1,9,33,10], [1,24,33,25], [9,9,10,25], [24,9,25,25],
+      [11,11,23,23], [1,16,10,17], [24,16,33,17]],
+    optional: [[8,3,8,8], [16,3,16,8], [22,3,22,8], [23,3,23,8], [8,26,8,31], [16,26,16,31], [22,26,22,31], [23,26,23,31], [6,3,33,3]],
+    pillars: [[12,12], [22,12], [12,22], [22,22], [17,12], [12,17], [22,17]],
+    debris: [[14,12], [20,12], [12,14], [12,20], [22,14], [22,20], [14,22], [20,22]]
+  })]);
+  function generateFloor(index, random) {
+    const plan = FLOOR_PLANS[Math.max(0, Math.min(FLOOR_PLANS.length - 1, index | 0))];
+    if (!plan) return generateMaze(random);
+    random = random || Math.random;
+    const w = SIZE, grid = Array.from({length:w}, () => Array(w).fill(1)), reserved = new Set();
+    const rooms = plan.rooms.map(r => ({...r, door:{x:r.x+(r.w>>1)-(r.w===3?1:0), z:r.z+r.d}}));
+    for (const r of rooms) for (let z = r.z-1; z <= r.z+r.d; z++) for (let x = r.x-1; x <= r.x+r.w; x++) reserved.add(z*w+x);
+    const corridor = (x0, z0, x1, z1) => {
+      for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) if (!reserved.has(z*w+x)) grid[z][x] = 0;
+    };
+    for (const hall of plan.halls) corridor(...hall);
+    for (const hall of plan.optional) if (random() < .5) corridor(...hall);
+    for (const [x, z] of plan.pillars) grid[z][x] = 1;
+    for (const [x, z] of plan.debris) if (random() < .5) grid[z][x] = 1;
+    // Doors face south and run straight to the first open hall cell.
+    for (const r of rooms) {
+      for (let z = r.z; z < r.z+r.d; z++) for (let x = r.x; x < r.x+r.w; x++) grid[z][x] = 0;
+      grid[r.door.z][r.door.x] = 0;
+      for (let z = r.door.z+1; z < w-1 && grid[z][r.door.x] && !reserved.has(z*w+r.door.x); z++) grid[z][r.door.x] = 0;
+    }
+    corridor(1, 1, 5, 3);
+    grid[2][0] = grid[w-2][w-1] = 0;
+    return {grid, rooms};
   }
   function flood(grid, sx, sz, blocked) {
     const w = grid.length, distances = new Int32Array(w*w).fill(-1);
@@ -132,5 +238,5 @@
     const falloff=kind==='shotgun'?Math.max(.22,1-Math.max(0,distance-7)/25):kind==='pistol'?Math.max(.6,1-Math.max(0,distance-18)/70):1;
     return w.damage*falloff*(headshot?(monsterKind==='warden'?1.1:1.85):1);
   }
-  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,MONSTERS,PLAYER,seeded,generateMaze,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage};
+  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,MONSTERS,PLAYER,FLOORS,STARTING_WEAPONS,SLEEP,seeded,generateMaze,generateFloor,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage,sleepDisturbance,shotWakeDelay};
 });
