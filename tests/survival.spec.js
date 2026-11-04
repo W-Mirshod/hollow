@@ -119,6 +119,9 @@ async function gateHostUpdates(guest){
   });
   return gate;
 }
+// The host keys its confirmations by guest peer id; this test has a single guest.
+const hostGrants=pr=>Object.values(pr?.grants||{}).flat();
+const hostAck=pr=>Math.max(0,...Object.values(pr?.acks||{}).map(Number));
 function releaseHostUpdates(gate){
   const messages=gate.held.splice(0);gate.holding=false;
   for(const message of messages)gate.socket.send(message);
@@ -499,7 +502,7 @@ test('two real peers receive automatic pickups only after host confirmation, onc
       await pose(guest,{x:item.x,z:item.z});
       await expect.poll(async()=>pickup(await snapshot(guest),item).pending).toBe(true);
       await expect.poll(async()=>pickup(await snapshot(host),item).taken).toBe(true);
-      await expect.poll(()=>!!gate.latest?.grants?.some(grant=>grant.id===grantId)).toBe(true);
+      await expect.poll(()=>hostGrants(gate.latest).some(grant=>grant.id===grantId)).toBe(true);
       await renderedFrames(guest,2);
       const pending=await snapshot(guest);
       expect(pickup(pending,item),'The guest has not optimistically consumed the pickup').toMatchObject({taken:false,pending:true});
@@ -529,8 +532,8 @@ test('two real peers receive automatic pickups only after host confirmation, onc
     await pose(guest,{x:item.x,z:item.z});await expect.poll(async()=>pickup(await snapshot(guest),item).pending).toBe(true);
     await expect.poll(()=>gate.requests.some(action=>action.type==='loot'&&action.id===item.id)).toBe(true);
     const claim=gate.requests.find(action=>action.type==='loot'&&action.id===item.id);
-    await expect.poll(()=>gate.latest?.ack||0).toBeGreaterThanOrEqual(claim.n);
-    expect(gate.latest.grants.some(grant=>grant.id===item.id),'A host-owned pickup produces no guest grant').toBe(false);
+    await expect.poll(()=>hostAck(gate.latest)).toBeGreaterThanOrEqual(claim.n);
+    expect(hostGrants(gate.latest).some(grant=>grant.id===item.id),'A host-owned pickup produces no guest grant').toBe(false);
     expect(await inventory(guest)).toEqual(guestInventory);expect((await snapshot(guest)).decoys).toBe(beforeGuest.decoys);
     releaseHostUpdates(gate);
     await expect.poll(async()=>{const p=pickup(await snapshot(guest),item);return p.taken&&!p.pending;}).toBe(true);

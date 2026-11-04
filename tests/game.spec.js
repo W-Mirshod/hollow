@@ -148,7 +148,7 @@ test('two real browser peers synchronize map, monsters, fuses, doors, jumping an
     const code=await host.locator('#coopCode').textContent();await guest.locator('#coopBtn').click();await guest.locator('#coopCodeIn').fill(code);await guest.locator('#coopJoinForm button').click();
     await expect(host.locator('#coopStart')).toBeEnabled();await host.locator('#coopStart').click();
     await expect.poll(async()=>(await state(guest)).state).toBe('play');
-    // Co-op plays B1 with twelve creatures awake and B1's sleepers on the floor; the guest mirrors every slot.
+    // Two-player co-op plays B1 with twelve creatures awake and B1's sleepers on the floor; the guest mirrors every slot.
     expect((await state(host)).seed).toBe((await state(guest)).seed);
     const hostEnemies=(await state(host)).enemies;expect(hostEnemies.filter(x=>!x.dormant)).toHaveLength(12);
     await expect.poll(async()=>(await state(guest)).enemies.length).toBe(hostEnemies.length);
