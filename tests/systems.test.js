@@ -277,7 +277,9 @@ test('ammunition boxes and supply crates stock every gun, the rare rounds sparin
 });
 
 test('four monster archetypes include a slow Warden that survives more than twenty rifle hits', () => {
-  assert.deepEqual(Object.keys(rules.MONSTERS).sort(), ['crawler', 'shrieker', 'stalker', 'warden']);
+  // The Gravekeeper (boss: true) is S2's one-off boss, outside the shared pool and these archetype rules.
+  assert.deepEqual(Object.keys(rules.MONSTERS).filter(kind => !rules.MONSTERS[kind].boss).sort(), ['crawler', 'shrieker', 'stalker', 'warden']);
+  assert.deepEqual(Object.keys(rules.MONSTERS).filter(kind => rules.MONSTERS[kind].boss), ['gravekeeper']);
   const warden = rules.MONSTERS.warden;
   const bodyDamage = rules.weaponDamage('rifle', false, 5, 'warden');
   const headDamage = rules.weaponDamage('rifle', true, 5, 'warden');
@@ -291,7 +293,7 @@ test('four monster archetypes include a slow Warden that survives more than twen
     assert.ok(monster.hp > 0 && monster.radius > 0 && monster.damage > 0);
     assert.ok(monster.chase >= monster.walk && monster.head <= monster.height);
     assert.ok(monster.walk < monster.search && monster.search < monster.chase, `${kind}: search is a brisk patrol between walk and chase`);
-    if (kind !== 'warden') {
+    if (kind !== 'warden' && !monster.boss) {
       assert.ok(monster.hp < warden.hp);
       assert.ok(monster.damage < warden.damage);
       assert.ok(monster.walk > warden.walk);
@@ -338,7 +340,7 @@ test('shared design speeds: faster monsters, a realistic sprinting player and an
     assert.equal(Math.min(...Object.values(monsters).map(m => m[key])), monsters.warden[key], `warden is slowest at ${key}`);
   }
   for (const key of ['hp', 'damage']) {
-    assert.equal(Math.max(...Object.values(monsters).map(m => m[key])), monsters.warden[key], `warden has the most ${key}`);
+    assert.equal(Math.max(...Object.values(monsters).filter(m => !m.boss).map(m => m[key])), monsters.warden[key], `warden has the most ${key}`);
   }
 });
 

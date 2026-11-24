@@ -23,7 +23,17 @@
     'h-pump':{title:'PUMP ROOM / FLOOD LOG',text:'Three floodgate keys: the Pump Room, the Well and the Nest. The surface gate opens slowly, and the whole Hollow hears it grinding.'},
     'h-control':{title:'FLOODGATE CONTROL',text:'The gate motor needs twenty-five seconds. Do not stand at the gate while it opens. Find a door, hold it, and run the moment it is up.'},
     'h-well':{title:'THE WELL / DO NOT DESCEND',text:'They came up out of the water. Some are still lying around the rim as if they were sleeping. They are not sleeping.'},
-    'h-nest':{title:'THE NEST',text:'Count them before you cross. If one stirs, back away slowly. If one screams, run, because the rest are getting up.'}
+    'h-nest':{title:'THE NEST',text:'Count them before you cross. If one stirs, back away slowly. If one screams, run, because the rest are getting up.'},
+    'g-potting':{title:'HEAD GARDENER / VERMIN',text:'The rifle for the foxes lives in the potting shed, not the house. Whatever has been walking the hedges at night is not a fox. Take the rifle with you.'},
+    'g-glasshouse':{title:'GLASSHOUSE / LABEL ON A SEED TRAY',text:'Three gate keys: the Glasshouse, the Cottage and the Folly. Do not open the garden gate at night. Everything that sleeps under the lawn comes up to listen.'},
+    'g-cottage':{title:'COTTAGE / KITCHEN SLATE',text:'They came over the wall from the hospital and lay down in the borders as if they were tired. In the morning the beds were dug over from underneath.'},
+    'g-folly':{title:'CHALK ON THE FOLLY',text:'The garden gate takes thirty seconds to wind open. Beyond it is the old churchyard. Do not ring the bell. Whatever you do, do not ring the bell.'},
+    'g-icehouse':{title:'SCRATCHED INSIDE THE ICE HOUSE',text:'The door bolts from inside. Torch off, stay low and they walk straight past. I heard one stop at the door for an hour. It was listening for my breathing.'},
+    'y-gravedigger':{title:'GRAVEDIGGER / DAY BOOK',text:'Kept a gun in the hut since the graves started opening by themselves. Filled in the same grave three times this week. Every morning it is dug out again.'},
+    'y-chapel':{title:'CHAPEL / NOTICE TO MOURNERS',text:'Three crypt keys open the cemetery gate: the Chapel, the Mausoleum and the Charnel House. The gate is chained to the old bell. Using it rings the bell.'},
+    'y-mausoleum':{title:'BLACKWATER FAMILY / INSCRIPTION',text:'Here lies the Keeper of these graves, who would not leave them. When the bell is rung he rises to keep the gate. He is taller than any door.'},
+    'y-charnel':{title:'CHARNEL HOUSE / LAST ENTRY',text:'He does not stop and he does not tire. When he raises his arms, get away from him: the ground breaks where he strikes. Wounded, he screams the dead up out of their graves.'},
+    'y-crypt-b':{title:'SCRATCHED INTO THE CRYPT LID',text:'The Gravekeeper. It came up in front of the gate when the bell rang. The gate will not open while it walks. Kill it, then run and do not look back.'}
   });
   function randomSource(seed){
     let value=Number(seed)|0;

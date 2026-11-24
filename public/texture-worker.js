@@ -9,7 +9,10 @@ self.onmessage = ({ data }) => {
   visuals.configure({ quality: data.quality });
   const kinds = visuals.surfacePlan(data.quality, data.workers, data.order)[data.index] || [];
   self.postMessage({ kinds });
+  let settled = false;
   for (const kind of kinds) {
+    // Everything the ward needs is in: the surfaces above ground follow at leisure.
+    if (!settled && visuals.LATE_SURFACES && visuals.LATE_SURFACES.includes(kind)) { settled = true; self.postMessage({ settled: true }); }
     try {
       const painted = visuals.surface(kind), transfer = [];
       for (const value of Object.values(painted)) {
