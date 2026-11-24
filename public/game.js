@@ -621,11 +621,14 @@ function makeLoot(type,x,z,room){
   return {id:room.id+':'+type,type,x,z,g:group,taken:false,room};
 }
 // A gun lying on its case where someone dropped it, taken with E. weapon: its index in weaponDefs.
+// How each gun lies on its case: [shift along the case, height, case length].
+const WEAPON_LIE={pistol:[.05,.2,1.05],smg:[.03,.2,1.05],magnum:[.07,.185,1.05],marksman:[.24,.19,1.35],lmg:[.19,.215,1.3]};
 function makeWeaponLoot(index,x,z,room){
   const w=weaponDefs[index],group=new THREE.Group();group.position.set(x,0,z);dynamicWorld.add(group);
-  const crate=new THREE.Mesh(new THREE.BoxGeometry(.42,.16,1.05),new THREE.MeshStandardMaterial({color:lin(0x2d3429),roughness:.72,metalness:.3}));crate.position.y=.08;crate.userData.own=true;group.add(crate);
+  const [shift,lift,length]=WEAPON_LIE[w.id]||[.22,.2,1.05];
+  const crate=new THREE.Mesh(new THREE.BoxGeometry(.42,.16,length),new THREE.MeshStandardMaterial({color:lin(0x2d3429),roughness:.72,metalness:.3}));crate.position.y=.08;crate.userData.own=true;group.add(crate);
   const model=HollowVisuals.makeWeapon(THREE,w.id,{world:true});model.userData.decoration=true;
-  model.rotation.set(0,0,Math.PI/2);model.position.set(-.04,.2,w.id==='pistol'?.05:.22);group.add(model);
+  model.rotation.set(0,0,Math.PI/2);model.position.set(-.04,lift,shift);group.add(model);
   const label=worldLabel(w.name.toUpperCase()+' · [E]','#e7d9a2',1.2);label.scale.y=.4;label.position.set(0,.75,0);group.add(label);group.userData.label=label;
   return {id:room.id+':'+w.id,type:'weapon',weapon:index,x,z,g:group,taken:false,room};
 }
@@ -702,13 +705,13 @@ function collectLoot(l){
 function rewardLoot(type){
   if(type==='fuse'){fuses=roomLoot.filter(v=>v.type==='fuse'&&v.taken).length;showMsg(fuses===3?TEXT().all:`${TEXT().kick} recovered · ${fuses}/3.`,3.5);}
   else if(type==='medical'){P.health=Math.min(100,P.health+45);showMsg('Field dressing · +45 health.',2);}
-  else if(type==='ammo'){weapons[0].reserve+=20;weapons[1].reserve+=6;weapons[2].reserve+=3;reserve=weapons[weaponIndex].reserve;showMsg(ammoText([20,6,3]),3);}
-  else {weapons[0].reserve+=30;weapons[1].reserve+=12;weapons[2].reserve+=6;reserve=weapons[weaponIndex].reserve;decoys=Math.min(5,decoys+1);battery=1;showMsg('Supplies secured · ammunition, battery and a decoy.',3);}
+  else if(type==='ammo'){const drop=RULES.AMMO_DROPS.ammo;weaponDefs.forEach((w,i)=>weapons[i].reserve+=drop[w.id]||0);reserve=weapons[weaponIndex].reserve;showMsg(ammoText(drop),3);}
+  else {const drop=RULES.AMMO_DROPS.supplies;weaponDefs.forEach((w,i)=>weapons[i].reserve+=drop[w.id]||0);reserve=weapons[weaponIndex].reserve;decoys=Math.min(5,decoys+1);battery=1;showMsg('Supplies secured · ammunition, battery and a decoy.',3);}
   if(automaticLoot(type)&&mag===0&&reserve>0)startReload();
 }
-// Rounds for a gun not found yet are kept for it: they are in its reserve when it turns up.
+// Rounds for a gun not found yet are kept for it: they are in its reserve when it turns up. amounts: by gun id.
 function ammoText(amounts){
-  const got=weaponDefs.map((w,i)=>owned[i]?`+${amounts[i]} ${['carbine','sidearm','shells'][i]}`:'').filter(Boolean).join(' / ');
+  const got=weaponDefs.map((w,i)=>owned[i]&&amounts[w.id]?`+${amounts[w.id]} ${WEAPON_ROUNDS[w.id]||w.id}`:'').filter(Boolean).join(' / ');
   return `Ammunition · ${got}.`+(owned.every(Boolean)?'':' Spare rounds packed for guns not found yet.');
 }
 function queueAction(action){
@@ -776,8 +779,12 @@ const torch=HollowVisuals.makeFlashlight(THREE);
 const lensMat=torch.userData.lensMaterial;
 torch.position.set(-0.25,-0.27,-0.44);torch.rotation.set(0.06,-0.07,0);torch.visible=false;fpRig.add(torch);
 
-// Three distinct, fully modeled weapons share the same first-person rig.
+// Seven distinct, fully modeled weapons share the same first-person rig.
 const weaponDefs=RULES.WEAPONS;
+// HUD slot labels, the action shown over the rounds, and what an ammunition pickup calls each gun's rounds.
+const WEAPON_TAG={rifle:'AR',pistol:'M9',shotgun:'SG',smg:'SMG',magnum:'.44',marksman:'DMR',lmg:'LMG'};
+const WEAPON_ACTION={rifle:'AUTOMATIC',pistol:'SEMI-AUTOMATIC',shotgun:'PUMP ACTION',smg:'AUTOMATIC',magnum:'REVOLVER',marksman:'BOLT ACTION',lmg:'BELT FED'};
+const WEAPON_ROUNDS={rifle:'carbine',pistol:'sidearm',shotgun:'shells',smg:'SMG',magnum:'.44',marksman:'.308',lmg:'belt'};
 const weaponModels=weaponDefs.map(w=>HollowVisuals.makeWeapon(THREE,w.id));
 let weaponIndex=0,weapons=weaponDefs.map(w=>({mag:w.capacity,reserve:w.reserve}));
 let gun=weaponModels[0],gunMag=gun.userData.magazine,muzzleFlash=gun.userData.muzzleFlash;
@@ -798,7 +805,7 @@ function selectWeapon(index,step){
   if(!owned[index]||index===weaponIndex)return;
   weapons[weaponIndex].mag=mag;weapons[weaponIndex].reserve=reserve;
   gun.visible=false;weaponIndex=index;gun=weaponModels[index];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;
-  mag=weapons[index].mag;reserve=weapons[index].reserve;reloadT=0;fireT=.24;gunKick=0;flashT=0;semiFired=false;weaponAudio?.equip(weaponDefs[index].id);
+  mag=weapons[index].mag;reserve=weapons[index].reserve;reloadT=0;fireT=.24;gunKick=0;flashT=0;semiFired=false;shotT=9;weaponAudio?.equip(weaponDefs[index].id);
 }
 
 /* ---------- impacts ---------- */
@@ -1132,7 +1139,7 @@ addEventListener('keydown',e=>{
   if(!e.repeat){
     const actions={KeyF:'torch',KeyR:'reload',KeyE:'interact',KeyQ:'weapon',KeyV:'decoy',KeyM:'map',Space:'jump',Escape:'pause'};
     if(actions[e.code])inputAction(actions[e.code],true);
-    if(state==='play'&&['Digit1','Digit2','Digit3'].includes(e.code)){const i=Number(e.code.slice(-1))-1;if(owned[i])selectWeapon(i);else showMsg(`No ${weaponDefs[i].name} yet. Guns lie where their owners fell.`,2.2);}
+    if(state==='play'&&/^Digit[1-9]$/.test(e.code)&&Number(e.code.slice(-1))<=weaponDefs.length){const i=Number(e.code.slice(-1))-1;if(owned[i])selectWeapon(i);else showMsg(`No ${weaponDefs[i].name} yet. Guns lie where their owners fell.`,2.2);}
     if(['KeyC','ControlLeft','ControlRight'].includes(e.code))inputAction('crouch',true);
     if(state==='spect'&&(e.code==='Space'||e.code==='Tab')){e.preventDefault();cycleSpect();}
   }
@@ -1160,7 +1167,7 @@ function inputAction(action,pressed){
   if(action==='weapon'&&state==='play')selectWeapon(weaponIndex+1,1);
   if(action==='interact')interact();
   if(action==='decoy')throwDecoy();
-  if(action==='map'){mapExpanded=!mapExpanded;$('map').classList.toggle('expanded',mapExpanded);}
+  if(action==='map'){mapExpanded=!mapExpanded;$('map').classList.toggle('expanded',mapExpanded);mapT=0;}
 }
 const controls=window.HollowControls?HollowControls.create({canvas,onAction:inputAction,onLook:look,onMove:(x,y)=>{touchMove.x=x;touchMove.y=y;}}):null;
 function lock(){if(controls?controls.touch:IS_TOUCH)return;try{const r=canvas.requestPointerLock();if(r&&r.catch)r.catch(()=>showMsg('Click the game to capture the mouse.',2));}catch(e){}}
@@ -1295,7 +1302,7 @@ function updatePlayer(dt){
         const vault=roomProps.some(p=>p.h>.8&&p.h<=1.1&&Math.abs(P.pos.x-p.x)<p.w/2+PR+.18&&Math.abs(P.pos.z-p.z)<p.d/2+PR+.18);
         P.velY=vault?5.65:5.15;P.onGround=false;P.coyote=0;P.jumpBuffer=0;P.stamina=mv.stamina;sStep(.1,stepKind());
   }
-  const speed=mv.speed;
+  const speed=mv.speed*(weaponDefs[weaponIndex].move||1);
   const fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw),rx=Math.cos(P.yaw),rz=-Math.sin(P.yaw);
   if(slideT>0&&inputLength<.1)iz=1;
   const tx=(fx*iz+rx*ix)*speed,tz=(fz*iz+rz*ix)*speed;
@@ -1711,6 +1718,8 @@ function hitMonster(m,dmg,from,headshot,strength){
     showMsg(left?`${m.stats.name} down · ${left} threats remain.`:'The corridors are silent. Restore the exit power.',2.5);
   }else if(m.kind==='warden'&&noticeT<=0){noticeT=12;showMsg('It barely flinched. Save ammunition: break sight, lock a room, hide.',3.2);}
 }
+// Seconds since the drawn gun last fired: the bolt-action and the revolver work their bolt and cylinder by it.
+let shotT=9;
 function updateGun(dt){
   const visible=gunOut&&['play','caught','pause'].includes(state);
   weaponModels.forEach((model,i)=>{model.visible=visible&&i===weaponIndex;if(!model.visible)model.userData.muzzleFlash.visible=false;});
@@ -1718,7 +1727,9 @@ function updateGun(dt){
   if(!visible){setLight(muzzleLight,0);setLight(fpFlash,0);return;}
   if(state==='pause')return;
   const w=weaponDefs[weaponIndex];fireT-=dt;
+  const loaded=mag;
   if(state==='play'&&(mouseDown||fireQueued)&&fireT<=0&&!P.running&&(w.automatic||!semiFired))fire();
+  shotT=mag<loaded?0:shotT+dt;
   if(reloadT>0){reloadT=Math.max(0,reloadT-dt);if(reloadT===0){const take=infiniteAmmo()?w.capacity-mag:Math.min(w.capacity-mag,reserve);mag+=take;if(!infiniteAmmo())reserve-=take;weapons[weaponIndex]={mag,reserve};}}
   gunKick*=Math.exp(-dt*15);flashT-=dt;
   const progress=reloadT>0?1-reloadT/w.reload:0,rp=reloadT>0?Math.sin(Math.PI*progress):0;
@@ -1728,20 +1739,90 @@ function updateGun(dt){
   const wp=camFX.pose.weapon;
   gun.position.set(lerp(GUN_BASE.x,.025,ak)+rk*.04+wp.x,lerp(GUN_BASE.y,-.12,ak)-rp*.16-rk*.08+wp.y,GUN_BASE.z+ak*.07+wp.z);
   gun.rotation.set(rp*.45-rk*.35+wp.pitch,rk*.38+wp.yaw,rp*.6+wp.roll);
+  if(gun.userData.view){const v=gun.userData.view;gun.position.x+=lerp(v.hip[0],v.aim[0],ak);gun.position.y+=lerp(v.hip[1],v.aim[1],ak);gun.position.z+=lerp(v.hip[2],v.aim[2],ak);}
   if(gunMag)gunMag.visible=!(reloadT>0&&progress>.3&&progress<.65);
   if(gun.userData.bolt)gun.userData.bolt.position.z=(gun.userData.bolt.userData.restZ||0)+gunKick*.025;
+  // A gun with its own action (revolver, bolt-action, belt feed) poses its magazine and bolt itself.
+  if(gun.userData.pose)gun.userData.pose(reloadT>0?progress:-1,gunKick,shotT);
   const flashing=preferences.effects&&flashT>0;
   if(muzzleFlash){muzzleFlash.visible=flashing;if(flashing)muzzleFlash.rotation.z=Math.random()*6.28;}
   setLight(muzzleLight,flashing?3:0);setLight(fpFlash,flashing?3:0);
 }
 
 /* ---------- map ---------- */
-const mapCtx=$('map').getContext('2d');
+const mapEl=$('map'),mapCtx=mapEl.getContext('2d');
 function markVisited(){
   const cx=Math.floor(P.pos.x/S),cz=Math.floor(P.pos.z/S);
   if(cx>=0&&cz>=0&&cx<W&&cz<W)visited[cz*W+cx]=1;
 }
+// The plan is drawn in 150 units; the canvas behind it matches its shown size at the screen's pixel density (the minimap
+// and the M floor plan), measured by a ResizeObserver so drawing never forces a layout.
+let mapCss=0,mapGuns=[];
+if(window.ResizeObserver)new ResizeObserver(entries=>{const w=entries[0].contentRect.width;if(w>0&&w!==mapCss){mapCss=w;mapT=0;}}).observe(mapEl);
+function mapBacking(){
+  const css=mapCss||mapEl.clientWidth||112,dpr=Math.min(2,Math.max(1,window.devicePixelRatio||1)),size=Math.max(64,Math.round(css*dpr));
+  if(mapEl.width!==size){mapEl.width=size;mapEl.height=size;}
+  mapCtx.setTransform(size/150,0,0,size/150,0,0);
+  return {css,size};
+}
+// Gun pickups on the plan: a silhouette of each gun, muzzle east, in a 14-unit-high box `w` units long. Parts: r rect,
+// q rounded rect, p polygon, c circle, l line [x0,y0,x1,y1,width]; tone 1 metal, 2 furniture.
+const GUN_ICONS={
+  rifle:{w:32,parts:[[2,'p',0,4.2,6.5,3.8,6.5,7.6,1.2,9,0,9],[1,'r',6,3.6,2,3],[1,'r',7.5,3,9.5,4],[1,'r',9,1.6,5,1.4],[2,'r',17,3.3,7.5,3.4],
+    [1,'p',23.2,1.6,24.4,1.6,24.4,3.4,23.2,3.4],[1,'r',24.5,4.4,7.5,1.1],[2,'p',9.6,7,12.2,7,11.2,11.2,8.4,11.2],[2,'p',13.2,7,16.2,7,17.6,12.4,14.8,12.9]]},
+  pistol:{w:18,parts:[[2,'p',1.2,5.4,6.8,5.4,5.6,13,0,12.6],[2,'r',3.5,5.4,13.5,1.6],[2,'p',6.6,7,10,7,9,9.4,6.4,9.4],[1,'r',.5,2.2,17.5,3.4]]},
+  shotgun:{w:32,parts:[[2,'p',0,6.2,8.5,4.2,8.5,7.6,2.2,10.4,0,10.4],[1,'r',8.3,3.4,6.7,4],[1,'r',15,3.6,17,1.4],[1,'r',15,5.2,13.5,1.3],
+    [2,'q',17.5,4.6,7.5,3.2,.8],[1,'c',31.3,3.3,.6],[1,'p',10,7.4,13,7.4,12.6,8.8,10.2,8.8]]},
+  smg:{w:24,parts:[[2,'r',0,3,1.4,5.8],[1,'r',1,3.8,4,1.1],[1,'r',1,6,4,1.1],[1,'r',4.2,3,12.3,3.8],[1,'c',6.2,2.7,1.2],[1,'r',15.6,1.6,1.6,1.6],
+    [1,'r',12,2.2,6.5,1],[2,'r',12.6,4,5.8,3.6],[1,'r',18.4,4.2,3.6,1.2],[2,'r',21,3.7,3,2.2],[2,'p',6.4,6.8,9,6.8,8,11.4,5.4,11.4],[2,'p',10.2,6.8,12.6,6.8,13.4,13.8,11,13.8]]},
+  magnum:{w:24,parts:[[2,'p',2.4,6.2,6,6.2,5.6,9,4.8,13.2,2.4,13.6,.4,12.6,1.4,9],[1,'p',.8,.6,2.4,1.8,3.2,3.2,1.8,3],[1,'r',2.5,1.8,8.5,1],[1,'r',2.5,2.4,3,4.4],
+    [1,'p',6,6.6,8.8,6.6,8,9,5.8,9],[1,'r',10,3.1,14,2.1],[1,'r',10,5.2,12.8,1.5],[1,'p',22,1.6,23.4,1.6,23.6,3.1,21.6,3.1],[2,'q',5,2.1,5.6,6,1.3]]},
+  marksman:{w:36,parts:[[2,'p',0,4.4,3,4.4,5.5,6,9.5,6.4,23.5,6.2,23.5,7.8,9.5,8.8,4.5,10.4,0,11],[2,'p',7.4,8,9.8,8,9.4,11.8,6.8,11.8],
+    [1,'r',10,4.8,9,1.8],[1,'p',19,4.9,36,5.2,36,6,19,6.3],[1,'r',11.2,3.4,1.2,1.6],[1,'r',17,3.4,1.2,1.6],[1,'r',9,2.2,12,1.4],
+    [1,'p',20,2.2,22,1.2,23.2,1.2,23.2,4.6,22,4.6,20,3.6],[1,'p',7,1.6,9.6,1.9,9.6,3.9,7,4.2],[1,'r',14.2,1,1.6,1.4],[1,'l',12.2,6.4,12.8,8.3,.7],[1,'c',12.8,8.4,1.1]]},
+  lmg:{w:34,parts:[[2,'p',0,3.4,7,4,7,8.2,0,9.6],[1,'l',27,6,25,13.4,.9],[1,'l',28,6,30.4,13.4,.9],[1,'r',7,2.8,12,5.2],[1,'r',8.5,1.8,9,1.2],
+    [1,'r',20,.6,5,1.1],[1,'r',20.5,1.5,.9,2],[1,'r',23.6,1.5,.9,2],[1,'r',19,4.2,12,1.3],[2,'r',19,4.4,6,3.2],[1,'r',31,3.8,3,2.1],[1,'r',28.4,2,.9,2.4],
+    [2,'p',8,8,10.6,8,9.6,12,7,12],[2,'q',11,8,6.6,5.6,.7]]}
+};
+const gunIconCache=new Map();
+function gunIconPath(part){
+  const p=new Path2D(),[,type,...v]=part;
+  if(type==='r')p.rect(v[0],v[1],v[2],v[3]);
+  else if(type==='q'){const [x,y,w,h,r]=v;p.moveTo(x+r,y);p.arcTo(x+w,y,x+w,y+h,r);p.arcTo(x+w,y+h,x,y+h,r);p.arcTo(x,y+h,x,y,r);p.arcTo(x,y,x+w,y,r);p.closePath();}
+  else if(type==='c')p.arc(v[0],v[1],v[2],0,Math.PI*2);
+  else if(type==='l'){p.moveTo(v[0],v[1]);p.lineTo(v[2],v[3]);}
+  else{p.moveTo(v[0],v[1]);for(let i=2;i<v.length;i+=2)p.lineTo(v[i],v[i+1]);p.closePath();}
+  return p;
+}
+// One gun's icon at `unit` device pixels per icon unit: a soft shadow, a black outline round the whole shape, then the
+// parts in two tones. Painted once per kind and size, then only drawImage'd.
+function gunIcon(kind,unit){
+  const key=kind+':'+unit.toFixed(3);let icon=gunIconCache.get(key);if(icon)return icon;
+  if(gunIconCache.size>40)gunIconCache.clear();
+  const shape=GUN_ICONS[kind]||GUN_ICONS.rifle,line=Math.max(1.4,unit*.85),pad=Math.ceil(line*2+2);
+  const canvas=document.createElement('canvas');canvas.width=Math.ceil(shape.w*unit)+pad*2;canvas.height=Math.ceil(14*unit)+pad*2;
+  const x=canvas.getContext('2d');
+  x.translate(pad,pad);x.scale(unit,unit);x.lineJoin=x.lineCap='round';
+  const parts=shape.parts.map(part=>({part,path:gunIconPath(part),stroke:part[1]==='l'?part[6]:0}));
+  for(const [color,extra] of [['rgba(0,0,0,.4)',2.4],['#080a09',0]])for(const {path,stroke} of parts){
+    x.strokeStyle=color;x.lineWidth=(line*2+extra)/unit+stroke;x.stroke(path);}
+  for(const {part,path,stroke} of parts){const tone=part[0]===1?'#eef0ea':'#a7b3b5';
+    if(stroke){x.strokeStyle=tone;x.lineWidth=stroke;x.stroke(path);}else{x.fillStyle=tone;x.fill(path);}}
+  icon={canvas,w:canvas.width,h:canvas.height,pad};gunIconCache.set(key,icon);return icon;
+}
+// Untaken guns on this floor, each centred on where it lies. mapGuns keeps where they were drawn (CSS px on the map).
+function drawGunIcons(c,css,size){
+  const scale=size/css,base=Math.max(Math.min(15,css*.17),Math.min(44,css*.078)),unit=base*scale/32;
+  c.save();c.setTransform(1,0,0,1,0,0);mapGuns=[];
+  for(const l of roomLoot)if(l.type==='weapon'&&!l.taken&&l.g.visible){
+    const kind=weaponDefs[l.weapon].id,icon=gunIcon(kind,unit),x=l.x/(W*S)*size,z=l.z/(W*S)*size;
+    c.drawImage(icon.canvas,Math.round(x-icon.w/2),Math.round(z-icon.h/2));
+    mapGuns.push({id:l.id,kind,x:x/scale,z:z/scale,w:(icon.w-icon.pad*2)/scale,h:(icon.h-icon.pad*2)/scale});
+  }
+  c.restore();
+}
 function drawMap(){
+  const {css,size}=mapBacking();
   const c=mapCtx,sz=150,k=sz/W;c.clearRect(0,0,sz,sz);
   for(let z=0;z<W;z++)for(let x=0;x<W;x++){
     if(visited[z*W+x]){c.fillStyle='rgba(216,208,194,.42)';c.fillRect(x*k,z*k,k+0.5,k+0.5);continue;}
@@ -1754,9 +1835,8 @@ function drawMap(){
     if(r.shelter){c.strokeStyle='#89c7b7';c.lineWidth=1;c.strokeRect(x-2,z-2,4,4);}
     if(r.fuse&&!roomLoot.find(l=>l.room===r&&l.type==='fuse')?.taken){c.fillStyle='#e6b979';c.beginPath();c.moveTo(x,z-3);c.lineTo(x+3,z);c.lineTo(x,z+3);c.lineTo(x-3,z);c.fill();}
   }
-  // Guns not taken yet: a grey cross.
-  c.strokeStyle='#cfd6dc';c.lineWidth=1.5;
-  for(const l of roomLoot)if(l.type==='weapon'&&!l.taken&&l.g.visible){const x=l.x/S*k,z=l.z/S*k;c.beginPath();c.moveTo(x-3,z);c.lineTo(x+3,z);c.moveTo(x,z-3);c.lineTo(x,z+3);c.stroke();}
+  // Guns not taken yet: a silhouette of each.
+  drawGunIcons(c,css,size);
   c.fillStyle=exitPowered?'#96eac5':'#df6f4d';c.fillRect((W-1)*k,(W-2)*k,k,k);
   if(visited[(W-2)*W+(W-1)]){c.fillStyle='#ff3322';c.fillRect((W-1)*k,(W-2)*k,k,k);}
   const px=P.pos.x/S*k,pz=P.pos.z/S*k,fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw);
@@ -1906,8 +1986,8 @@ function updateHUD(){
   $('floorText').textContent=FLOOR().code+' · '+FLOOR().name.toUpperCase();$('wingText').textContent=T.wing;
   $('fpsText').textContent=Math.round(1000/frameAverage)+' FPS · '+qualityLevel.toUpperCase()+(renderScale<1?' '+Math.round(renderScale*100)+'%':'');
   $('weaponName').textContent=w.name;$('magTxt').textContent=mag;$('resTxt').textContent='/ '+(infiniteAmmo()?'∞':reserve);$('magTxt').style.color=mag===0?'var(--ember)':'';
-  $('ammoLbl').textContent=reloadT>0?`RELOADING · ${reloadT.toFixed(1)}s`:aiming?'AIMING':w.automatic?'AUTOMATIC':w.id==='shotgun'?'PUMP ACTION':'SEMI-AUTOMATIC';
-  if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+['AR','M9','SG'][i];$('weaponSlots').appendChild(slot);});}
+  $('ammoLbl').textContent=reloadT>0?`RELOADING · ${reloadT.toFixed(1)}s`:aiming?'AIMING':WEAPON_ACTION[w.id]||(w.automatic?'AUTOMATIC':'SEMI-AUTOMATIC');
+  if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+(WEAPON_TAG[v.id]||v.id.toUpperCase());$('weaponSlots').appendChild(slot);});}
   [...$('weaponSlots').children].forEach((slot,i)=>{slot.classList.toggle('selected',i===weaponIndex);slot.classList.toggle('locked',!owned[i]);slot.title=owned[i]?weaponDefs[i].name:'Not found yet';});
   $('reticleHit').style.opacity=hitMarkerT>0?1:0;$('cross').classList.toggle('aiming',aiming);
   let prompt='';const key=touch?'USE':'[E]';
@@ -1919,7 +1999,7 @@ function updateHUD(){
   }else if([...roomLoot.filter(l=>automaticLoot(l.type)),...ammoBoxes].some(l=>!l.taken&&pickupReach(l,P.pos,2.4)))prompt='WALK OVER · ammunition collects automatically';
   else if(P.hidden)prompt='CONCEALED · Stay quiet. Listen for footsteps to fade.';
   else if(currentShelter())prompt='SHELTER · Close and lock the door. Crouch. Torch off.';
-  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · grey crosses = guns · green squares = shelters · red = exit`;
+  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · gun icons = weapons · green squares = shelters · red = exit`;
   $('interactionPrompt').textContent=prompt;
   $('controlsHint').textContent=touch?'Left stick: move · Drag right: look · USE: interact':
     P.hidden?'E unlock & leave · Keep your torch off until the footsteps fade':
@@ -2134,7 +2214,7 @@ function readRemote(peer,pr){
   r.nm=String(pr.nm||'Partner').slice(0,18);if(r.nm!==r.lastNm){r.lastNm=r.nm;setAvatarName(r.rig,r.nm);}
   r.gn=Math.floor(finiteNumber(pr.gn,0,0,1e9));r.al=pr.al===0?0:1;r.out=pr.out?1:0;r.ph=typeof pr.ph==='string'?pr.ph:'';
   const q=r.raw;
-  if(Array.isArray(pr.p)){q.x=finiteNumber(pr.p[0],q.x,-110,W*S+60);q.z=finiteNumber(pr.p[1],q.z,-70,W*S+70);q.yaw=finiteNumber(pr.p[2],q.yaw);q.pitch=finiteNumber(pr.p[3],q.pitch,-1.35,1.35);q.torch=!!pr.p[4];q.run=!!pr.p[5];q.y=finiteNumber(pr.p[6],0,0,H);q.crouch=!!pr.p[7];q.hidden=!!pr.p[8];q.health=finiteNumber(pr.p[9],100,0,100);q.weapon=Math.floor(finiteNumber(pr.p[10],0,0,2));q.reload=!!pr.p[11];q.aim=!!pr.p[12];
+  if(Array.isArray(pr.p)){q.x=finiteNumber(pr.p[0],q.x,-110,W*S+60);q.z=finiteNumber(pr.p[1],q.z,-70,W*S+70);q.yaw=finiteNumber(pr.p[2],q.yaw);q.pitch=finiteNumber(pr.p[3],q.pitch,-1.35,1.35);q.torch=!!pr.p[4];q.run=!!pr.p[5];q.y=finiteNumber(pr.p[6],0,0,H);q.crouch=!!pr.p[7];q.hidden=!!pr.p[8];q.health=finiteNumber(pr.p[9],100,0,100);q.weapon=Math.floor(finiteNumber(pr.p[10],0,0,weaponDefs.length-1));q.reload=!!pr.p[11];q.aim=!!pr.p[12];
     if(!r.seen){r.pos.set(q.x,0,q.z);r.yaw=q.yaw;r.pitch=q.pitch;r.seen=true;}}
   // ff: the damage this partner's shots have done to each of the others, keyed by peer
   r.sh=finiteNumber(pr.sh,0,0);r.ff=pr.ff&&typeof pr.ff==='object'&&NET.myPeer?finiteNumber(pr.ff[NET.myPeer],0,0):0;r.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];
@@ -2946,6 +3026,7 @@ function snapshot(){return {
   performance:{fps:Math.round(1000/frameAverage),drawCalls:renderCalls,frames:renderedFrames,triangles:renderer.info.render.triangles,quality:qualityLevel,renderScale,pixelRatio:renderer.getPixelRatio(),wardDetail:wardDetail.value,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,backend:window.HollowBackend},
   rooms:specialRooms.map(r=>({id:r.id,name:r.name,x:r.x,z:r.z,w:r.w,d:r.d,shelter:!!r.shelter,fuse:!!r.fuse})),
   doors:roomDoors.map(d=>({id:d.id,x:d.box.x,z:d.box.z,open:d.open,locked:d.locked,health:d.health})),
+  mapGuns:mapGuns.map(g=>({...g})),
   loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending,...(l.type==='weapon'?{weapon:weaponDefs[l.weapon].id,visible:l.g.visible}:{})})),
   ammoPickups:ammoBoxes.map((b,i)=>({id:i,x:b.x,z:b.z,taken:b.taken,pending:!!b.pending})),
   enemies:monsters.slice(0,monCount).map((m,i)=>({index:i,kind:m.kind,x:m.pos.x,z:m.pos.z,hp:m.hp,dead:m.dead,state:m.state,speed:m.stats.chase,moveSpeed:m.g.userData.speed,stalkTime:m.stalkT,watchTime:m.watchT,lunge:m.lungeBoost>0,lungeCooldown:m.lungeCD,anim:animSummary(m),

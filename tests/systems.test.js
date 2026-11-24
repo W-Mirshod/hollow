@@ -201,9 +201,11 @@ test('circle/box wall contacts push out all faces, corners and embedded centers'
   }
 });
 
-test('three weapons have distinct immutable stats, limited reserves and bounded distance falloff', () => {
-  assert.equal(rules.WEAPONS.length, 3);
-  assert.deepEqual(rules.WEAPONS.map(weapon => weapon.id), ['rifle', 'pistol', 'shotgun']);
+test('seven weapons have distinct immutable stats, limited reserves and bounded distance falloff', () => {
+  assert.equal(rules.WEAPONS.length, 7);
+  // Saved kits index guns by position: the original three keep theirs, the newer guns are appended.
+  assert.deepEqual(rules.WEAPONS.map(weapon => weapon.id), ['rifle', 'pistol', 'shotgun', 'smg', 'magnum', 'marksman', 'lmg']);
+  assert.equal(new Set(rules.WEAPONS.map(weapon => weapon.name)).size, 7);
   assert.equal(Object.isFrozen(rules.WEAPONS), true);
   for (const weapon of rules.WEAPONS) {
     assert.equal(Object.isFrozen(weapon), true);
@@ -226,6 +228,52 @@ test('three weapons have distinct immutable stats, limited reserves and bounded 
   assert.ok(rules.WEAPONS[0].noise > rules.WEAPONS[1].noise);
   assert.ok(rules.WEAPONS[0].capacity + rules.WEAPONS[0].reserve < rules.MONSTERS.warden.hp * 2,
     'Two Wardens cost more body shots than the starting carbine inventory');
+});
+
+test('each new gun has a role: SMG spray, revolver headshots, a marksman rifle for Wardens and a heavy belt-fed gun', () => {
+  const gun = Object.fromEntries(rules.WEAPONS.map(weapon => [weapon.id, weapon])), M = rules.MONSTERS;
+  const hits = (kind, monster, headshot = false, distance = 5) => Math.ceil(M[monster].hp / rules.weaponDamage(kind, headshot, distance, monster));
+  const { rifle, pistol, smg, magnum, marksman, lmg } = gun;
+  // KV-9: faster, quieter, quicker to reload and a bigger magazine than the carbine, but weaker per round and at range.
+  assert.equal(smg.automatic, true);
+  assert.ok(smg.interval < rifle.interval && smg.damage < rifle.damage && smg.capacity > rifle.capacity);
+  assert.ok(smg.noise < rifle.noise && smg.noise > pistol.noise && smg.reload < rifle.reload);
+  assert.ok(rules.weaponDamage('smg', false, 25, 'stalker') < .6 * rules.weaponDamage('smg', false, 5, 'stalker'), 'it fades with range');
+  // .44: six rounds, slow and loud with a big kick; one headshot drops anything but a Warden.
+  assert.equal(magnum.capacity, 6); assert.equal(magnum.automatic, false);
+  assert.ok(magnum.recoil > pistol.recoil * 3 && magnum.noise > rifle.noise && magnum.interval > pistol.interval && magnum.reload > pistol.reload);
+  for (const monster of ['stalker', 'crawler', 'shrieker']) assert.equal(hits('magnum', monster, true), 1, `a .44 headshot drops a ${monster}`);
+  assert.equal(hits('magnum', 'stalker'), 2);
+  assert.ok(hits('magnum', 'warden') > magnum.capacity, 'a Warden still outlasts a full cylinder');
+  // M24: five rounds, a slow bolt, pinpoint and the loudest gun; one body shot drops the small creatures, four a Warden.
+  assert.equal(marksman.capacity, 5); assert.equal(marksman.automatic, false);
+  assert.ok(rules.WEAPONS.every(weapon => weapon === marksman || (weapon.spread > marksman.spread && weapon.noise < marksman.noise && weapon.interval < marksman.interval)));
+  for (const monster of ['stalker', 'crawler', 'shrieker']) assert.equal(hits('marksman', monster), 1);
+  assert.ok(hits('marksman', 'warden') <= 4 && hits('marksman', 'warden', true) <= 3, 'great against the Warden');
+  assert.ok(rules.weaponDamage('marksman', true, 5, 'warden') > rules.weaponDamage('marksman', false, 5, 'warden'));
+  assert.equal(rules.weaponDamage('marksman', false, 80, 'warden'), rules.weaponDamage('marksman', false, 2, 'warden'), 'no falloff');
+  // M249: a 100-round belt and a long reload; it sprays from the hip, climbs harder than the carbine and slows the carrier.
+  assert.equal(lmg.capacity, 100); assert.equal(lmg.automatic, true);
+  assert.ok(lmg.reload === Math.max(...rules.WEAPONS.map(weapon => weapon.reload)));
+  assert.ok(lmg.spread > 2.5 * rifle.spread && lmg.spread * .4 < 1.25 * rifle.spread, 'wild from the hip, steady aimed');
+  assert.ok(lmg.recoil > rifle.recoil && lmg.damage / lmg.interval > rifle.damage / rifle.interval);
+  assert.ok(lmg.move > .75 && lmg.move < 1);
+  assert.ok(rules.WEAPONS.filter(weapon => weapon !== lmg).every(weapon => weapon.move === undefined), 'only the M249 slows the survivor');
+});
+
+test('ammunition boxes and supply crates stock every gun, the rare rounds sparingly', () => {
+  const D = rules.AMMO_DROPS;
+  assert.ok(Object.isFrozen(D) && Object.isFrozen(D.ammo) && Object.isFrozen(D.supplies));
+  assert.deepEqual(Object.keys(D.ammo).sort(), rules.WEAPONS.map(weapon => weapon.id).sort());
+  assert.deepEqual(Object.keys(D.supplies).sort(), rules.WEAPONS.map(weapon => weapon.id).sort());
+  assert.deepEqual([D.ammo.rifle, D.ammo.pistol, D.ammo.shotgun], [20, 6, 3], 'the original guns keep their amounts');
+  assert.deepEqual([D.supplies.rifle, D.supplies.pistol, D.supplies.shotgun], [30, 12, 6]);
+  for (const weapon of rules.WEAPONS) {
+    const box = D.ammo[weapon.id], crate = D.supplies[weapon.id];
+    assert.ok(Number.isInteger(box) && Number.isInteger(crate) && box > 0 && crate > box, weapon.id);
+    assert.ok(box < weapon.capacity, `${weapon.id}: a box is less than a magazine`);
+  }
+  assert.ok(D.ammo.marksman < D.ammo.magnum && D.ammo.magnum <= D.ammo.shotgun, 'the heaviest rounds are the rarest');
 });
 
 test('four monster archetypes include a slow Warden that survives more than twenty rifle hits', () => {

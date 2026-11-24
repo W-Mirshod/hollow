@@ -1719,20 +1719,284 @@
       wood: gunMaterial(THREE, 'gun:wood', 0x7a5236, 0, 'gun-wood', null, world),
       brass: gunMaterial(THREE, 'gun:brass', 0xc29a55, 0.9, 'gun-metal', 0.6, world),
       rubber: gunMaterial(THREE, 'gun:rubber', 0x1c1f20, 0, 'gun-rubber', null, world),
-      glove: gunMaterial(THREE, 'gun:glove', 0x30352f, 0, 'gun-fabric', null, world)
+      glove: gunMaterial(THREE, 'gun:glove', 0x30352f, 0, 'gun-fabric', null, world),
+      od: gunMaterial(THREE, 'gun:od', 0x4f553c, 0, 'gun-polymer', null, world),
+      glass: gunMaterial(THREE, 'gun:glass', 0x2a4c5c, 0.6, 'gun-metal', 0.1, world)
     };
   }
 
+  // ---------- the guns found below B1 ----------
+  // Each builder adds its parts to g and its joints (k.magazine, k.bolt), and returns its muzzle, where the carrier's
+  // hands go (grips), the viewmodel hands, and pose(reload, kick, sinceShot): reload is the reload progress 0..1 or -1,
+  // kick the recoil impulse, sinceShot seconds since the last round. An optional view {hip, aim} nudges the viewmodel.
+  const GUN_MODELS = {
+    // KV-9: a compact 9 mm with a long straight magazine, a cocking tube over the barrel and a sliding stock.
+    smg(THREE, g, k) {
+      const { steel, edge, black, polymer, rubber, magazine, bolt } = k;
+      bevel(THREE, g, steel, 0, 0.012, -0.05, 0.056, 0.064, 0.33, 0.008);
+      bevel(THREE, g, black, 0, 0.046, -0.04, 0.03, 0.012, 0.25, 0.003);
+      for (let i = 0; i < 9; i++) box(THREE, g, black, 0, 0.053, 0.06 - i * 0.024, 0.032, 0.006, 0.009);
+      bevel(THREE, g, polymer, 0, -0.03, 0.045, 0.05, 0.042, 0.15, 0.008);
+      bevel(THREE, g, polymer, 0, -0.108, 0.08, 0.042, 0.13, 0.06, 0.01, -0.27);
+      ring(THREE, g, black, 0, -0.064, 0.025, 0.031, 0.005, 0, Math.PI / 2).scale.set(1, 0.72, 1.05);
+      box(THREE, g, steel, 0, -0.06, 0.03, 0.007, 0.032, 0.01, -0.3);
+      bevel(THREE, g, polymer, 0, -0.05, -0.06, 0.042, 0.045, 0.062, 0.006);
+      bevel(THREE, g, polymer, 0, -0.008, -0.175, 0.064, 0.07, 0.13, 0.012);
+      for (const side of [-1, 1]) for (let i = 0; i < 4; i++) box(THREE, g, black, side * 0.0322, -0.005, -0.13 - i * 0.026, 0.002, 0.032, 0.012);
+      cyl(THREE, g, steel, 0, 0.012, -0.28, 0.0105, 0.0105, 0.13, Math.PI / 2, 0, 0, 12);
+      cyl(THREE, g, steel, 0, 0.046, -0.2, 0.0095, 0.0095, 0.15, Math.PI / 2, 0, 0, 10);
+      cyl(THREE, g, black, 0, 0.012, -0.36, 0.0145, 0.0145, 0.052, Math.PI / 2, 0, 0, 12);
+      for (let i = 0; i < 3; i++) ring(THREE, g, black, 0, 0.012, -0.343 - i * 0.014, 0.0152, 0.0022);
+      // Rear drum sight and a hooded front post.
+      cyl(THREE, g, black, 0, 0.069, 0.075, 0.012, 0.012, 0.024, 0, 0, Math.PI / 2, 12);
+      box(THREE, g, k.sight, 0, 0.081, 0.075, 0.004, 0.004, 0.002);
+      bevel(THREE, g, black, 0, 0.06, -0.265, 0.014, 0.016, 0.022, 0.003);
+      ring(THREE, g, black, 0, 0.072, -0.265, 0.011, 0.0028);
+      box(THREE, g, k.sight, 0, 0.071, -0.256, 0.003, 0.003, 0.002);
+      // Retractable stock: twin rods and a rubber butt.
+      for (const side of [-1, 1]) cyl(THREE, g, edge, side * 0.021, 0.012, 0.2, 0.005, 0.005, 0.2, Math.PI / 2, 0, 0, 8);
+      bevel(THREE, g, black, 0, 0.0, 0.3, 0.054, 0.05, 0.022, 0.005);
+      bevel(THREE, g, rubber, 0, -0.012, 0.312, 0.05, 0.095, 0.016, 0.006);
+      magazine.position.set(0, -0.07, -0.06);
+      bevel(THREE, magazine, steel, 0, -0.05, -0.003, 0.03, 0.12, 0.05, 0.005, -0.06);
+      bevel(THREE, magazine, steel, 0, -0.155, -0.017, 0.03, 0.1, 0.05, 0.005, -0.18);
+      bevel(THREE, magazine, black, 0, -0.208, -0.027, 0.035, 0.014, 0.058, 0.003, -0.18);
+      for (const side of [-1, 1]) for (let i = 0; i < 2; i++) box(THREE, magazine, black, side * 0.0152, -0.07 - i * 0.07, -0.01 - i * 0.008, 0.002, 0.06, 0.008, -0.1);
+      bolt.position.set(0, 0.046, -0.235);
+      box(THREE, bolt, black, -0.022, 0, 0, 0.032, 0.008, 0.012);
+      oval(THREE, bolt, black, -0.04, 0, 0, 0.007, 0.007, 0.009);
+      return {
+        muzzle: new THREE.Vector3(0, 0.012, -0.387),
+        grips: { right: [0, -0.1, 0.078], left: [0, -0.045, -0.18] },
+        hands(hands) {
+          gripHand(THREE, g, hands, [0, -0.108, 0.08], -0.27, 0.021, 0.03, 0.05, [0.36, -0.5, 0.79]);
+          supportHand(THREE, g, hands, [0, -0.008, -0.185], 0.032, 0.035, [-0.42, -0.46, 0.78]);
+        }
+      };
+    },
+    // .44: a six-shot double-action revolver. The cylinder turns a chamber per shot and swings out on its crane.
+    magnum(THREE, g, k) {
+      const { steel, edge, black, wood, brass, magazine, bolt } = k;
+      // Frame: top strap, the window round the cylinder, recoil shield and grip frame.
+      bevel(THREE, g, steel, 0, 0.044, -0.004, 0.026, 0.012, 0.082, 0.004);
+      bevel(THREE, g, steel, 0, -0.019, -0.004, 0.03, 0.018, 0.074, 0.005);
+      bevel(THREE, g, steel, 0, 0.012, 0.036, 0.033, 0.075, 0.016, 0.005);
+      bevel(THREE, g, steel, 0, 0.014, -0.045, 0.028, 0.05, 0.012, 0.004);
+      bevel(THREE, g, steel, 0, -0.01, 0.06, 0.03, 0.05, 0.05, 0.007, -0.2);
+      // Six-inch barrel with a ventilated top rib and a full underlug round the ejector rod.
+      cyl(THREE, g, steel, 0, 0.031, -0.152, 0.0108, 0.0108, 0.21, Math.PI / 2, 0, 0, 14);
+      bevel(THREE, g, steel, 0, 0.044, -0.152, 0.012, 0.009, 0.21, 0.003);
+      for (let i = 0; i < 6; i++) box(THREE, g, black, 0, 0.0445, -0.07 - i * 0.033, 0.0125, 0.004, 0.012);
+      bevel(THREE, g, steel, 0, 0.013, -0.149, 0.019, 0.028, 0.204, 0.006);
+      bevel(THREE, g, black, 0, 0.054, -0.244, 0.005, 0.014, 0.022, 0.002);
+      box(THREE, g, k.sight, 0, 0.06, -0.237, 0.0055, 0.004, 0.002);
+      bevel(THREE, g, black, 0, 0.053, 0.03, 0.018, 0.009, 0.014, 0.002);
+      for (const side of [-1, 1]) box(THREE, g, k.sight, side * 0.0055, 0.055, 0.038, 0.004, 0.004, 0.002);
+      // Walnut grip and a slim backstrap; trigger guard and trigger.
+      bevel(THREE, g, wood, 0, -0.082, 0.07, 0.038, 0.12, 0.058, 0.014, -0.33);
+      oval(THREE, g, wood, 0, -0.136, 0.091, 0.019, 0.017, 0.03, -0.33);
+      bevel(THREE, g, edge, 0, -0.06, 0.103, 0.014, 0.09, 0.006, 0.002, -0.33);
+      ring(THREE, g, black, 0, -0.035, 0.0, 0.021, 0.0035, 0, Math.PI / 2).scale.set(1, 0.85, 1);
+      box(THREE, g, edge, 0, -0.03, 0.006, 0.006, 0.026, 0.008, -0.25);
+      for (const z of [-0.022, 0.016]) cyl(THREE, g, edge, -0.0155, -0.014, z, 0.004, 0.004, 0.002, 0, 0, Math.PI / 2, 8);
+      // The crane: the cylinder, its six rounds and the ejector rod swing out to the left about a pivot under it.
+      magazine.position.set(-0.011, -0.008, -0.004);
+      const cylinder = joint(THREE, magazine, 'cylinder', 0.011, 0.02, 0);
+      cyl(THREE, cylinder, steel, 0, 0, 0, 0.0225, 0.0225, 0.066, Math.PI / 2, 0, 0, 18);
+      for (let i = 0; i < 6; i++) {
+        const a = (i + 0.5) * TAU / 6;
+        box(THREE, cylinder, black, Math.cos(a) * 0.0213, Math.sin(a) * 0.0213, -0.006, 0.006, 0.004, 0.044, 0, 0, a + Math.PI / 2);
+      }
+      const rounds = joint(THREE, cylinder, 'rounds', 0, 0, 0);
+      for (let i = 0; i < 6; i++) {
+        const a = i * TAU / 6;
+        cyl(THREE, rounds, brass, Math.cos(a) * 0.0135, Math.sin(a) * 0.0135, 0.0345, 0.0066, 0.0066, 0.004, Math.PI / 2, 0, 0, 10);
+      }
+      cyl(THREE, magazine, steel, 0.011, 0.02, -0.06, 0.0042, 0.0042, 0.05, Math.PI / 2, 0, 0, 8);
+      box(THREE, magazine, steel, 0.004, 0.008, -0.036, 0.012, 0.016, 0.008);
+      // The hammer (bolt): it falls with each shot and is cocked again by the trigger.
+      bolt.position.set(0, 0.03, 0.045);
+      box(THREE, bolt, steel, 0, 0.004, 0.006, 0.008, 0.03, 0.012, -0.5);
+      bevel(THREE, bolt, steel, 0, 0.018, 0.018, 0.012, 0.007, 0.018, 0.002, -0.2);
+      let previous = -1, chamber = 0;
+      return {
+        muzzle: new THREE.Vector3(0, 0.031, -0.262), bore: 0.0115, cylinder, rounds,
+        // Held higher and further out than the pistol, so the cylinder and hammer show at the hip.
+        view: { hip: [0, 0.03, -0.02], aim: [0, 0, 0] },
+        grips: { right: [0, -0.085, 0.07], left: [-0.035, -0.105, 0.05] },
+        hands(hands) { gripHand(THREE, g, hands, [0, -0.082, 0.07], -0.33, 0.019, 0.029, 0.05, [0.34, -0.52, 0.78]); },
+        pose(reload, kick, since) {
+          if (since < previous) chamber++;
+          previous = since;
+          const swing = reload < 0 ? 0 : smoothstep(0.05, 0.18, reload) * (1 - smoothstep(0.8, 0.92, reload));
+          magazine.rotation.z = swing * 1.3;
+          // The ejector throws the empties out, then a speedloader drops in six fresh rounds.
+          rounds.position.z = reload < 0 ? 0 : smoothstep(0.22, 0.3, reload) * (1 - smoothstep(0.5, 0.56, reload)) * 0.035;
+          rounds.visible = reload < 0 || reload < 0.31 || reload > 0.5;
+          cylinder.rotation.z = (chamber + smoothstep(0, 0.12, since) - 1) * TAU / 6;
+          magazine.visible = true;
+          bolt.position.z = bolt.userData.restZ || 0;
+          bolt.rotation.x = since < 0.25 ? -0.65 * (1 - smoothstep(0, 0.05, since)) + 0.15 * kick : 0;
+        }
+      };
+    },
+    // M24: a bolt-action marksman rifle with a heavy barrel, a long scope and an olive synthetic stock.
+    marksman(THREE, g, k) {
+      const { steel, edge, black, rubber, brass, od, glass, magazine, bolt } = k;
+      // Stock: butt, comb, wrist and grip, the action bed and the forend.
+      bevel(THREE, g, od, 0, -0.038, 0.305, 0.05, 0.124, 0.15, 0.014);
+      bevel(THREE, g, od, 0, 0.002, 0.225, 0.044, 0.05, 0.19, 0.012, 0.06);
+      bevel(THREE, g, od, 0, -0.045, 0.14, 0.042, 0.07, 0.1, 0.012, -0.42);
+      bevel(THREE, g, od, 0, -0.088, 0.112, 0.04, 0.085, 0.052, 0.012, -0.45);
+      bevel(THREE, g, od, 0, -0.012, -0.035, 0.054, 0.05, 0.27, 0.012);
+      bevel(THREE, g, od, 0, -0.014, -0.34, 0.056, 0.046, 0.36, 0.014);
+      bevel(THREE, g, od, 0, -0.03, -0.18, 0.05, 0.03, 0.06, 0.008);
+      bevel(THREE, g, rubber, 0, -0.038, 0.385, 0.052, 0.13, 0.018, 0.006);
+      ring(THREE, g, black, 0, -0.045, 0.06, 0.022, 0.0035, 0, Math.PI / 2).scale.set(1, 0.8, 1.1);
+      box(THREE, g, steel, 0, -0.04, 0.064, 0.006, 0.026, 0.008, -0.2);
+      for (const z of [0.29, -0.43]) ring(THREE, g, edge, 0, -0.072 + (z < 0 ? 0.036 : 0) - (z > 0 ? 0.03 : 0), z, 0.008, 0.002, 0, Math.PI / 2);
+      // Receiver: the front ring and the rear bridge either side of the bolt's travel, open on the right.
+      cyl(THREE, g, steel, 0, 0.028, -0.1, 0.0175, 0.0175, 0.09, Math.PI / 2, 0, 0, 14);
+      cyl(THREE, g, steel, 0, 0.028, 0.065, 0.0175, 0.0175, 0.04, Math.PI / 2, 0, 0, 14);
+      bevel(THREE, g, steel, -0.008, 0.02, -0.018, 0.02, 0.026, 0.13, 0.004);
+      bevel(THREE, g, black, 0, 0.012, -0.018, 0.034, 0.012, 0.13, 0.003);
+      // Heavy free-floated barrel.
+      cyl(THREE, g, steel, 0, 0.028, -0.505, 0.0135, 0.0102, 0.72, Math.PI / 2, 0, 0, 14);
+      // Scope: rings, tube, turrets, objective and ocular bells, and its glass.
+      for (const z of [0.045, -0.105]) {
+        bevel(THREE, g, black, 0, 0.056, z, 0.022, 0.026, 0.018, 0.003);
+        ring(THREE, g, black, 0, 0.09, z, 0.0185, 0.0042);
+      }
+      cyl(THREE, g, black, 0, 0.09, -0.035, 0.0155, 0.0155, 0.3, Math.PI / 2, 0, 0, 16);
+      cyl(THREE, g, black, 0, 0.09, -0.21, 0.0155, 0.026, 0.05, Math.PI / 2, 0, 0, 16);
+      cyl(THREE, g, black, 0, 0.09, -0.262, 0.0265, 0.0265, 0.055, Math.PI / 2, 0, 0, 18);
+      ring(THREE, g, edge, 0, 0.09, -0.29, 0.0255, 0.0018);
+      cyl(THREE, g, black, 0, 0.09, 0.13, 0.021, 0.0155, 0.04, Math.PI / 2, 0, 0, 16);
+      cyl(THREE, g, black, 0, 0.09, 0.172, 0.0215, 0.0215, 0.045, Math.PI / 2, 0, 0, 16);
+      cyl(THREE, g, black, 0, 0.114, -0.035, 0.012, 0.012, 0.03, 0, 0, 0, 14);
+      cyl(THREE, g, edge, 0, 0.13, -0.035, 0.0105, 0.0105, 0.004, 0, 0, 0, 14);
+      cyl(THREE, g, black, 0.024, 0.09, -0.035, 0.011, 0.011, 0.026, 0, 0, Math.PI / 2, 14);
+      const lens = geometry(THREE, 'gun:lens', () => new THREE.CircleGeometry(1, 20));
+      add(THREE, g, lens, glass, 0, 0.09, -0.2896, 0.023, 0.023, 1, 0, Math.PI).castShadow = false;
+      add(THREE, g, lens, glass, 0, 0.09, 0.1946, 0.019, 0.019, 1).castShadow = false;
+      // Internal magazine: a hinged floorplate, with the rounds showing through the open action.
+      magazine.position.set(0, 0, -0.02);
+      bevel(THREE, magazine, black, 0, -0.04, 0.0, 0.036, 0.008, 0.09, 0.002);
+      const rounds = joint(THREE, magazine, 'rounds', 0, 0, 0);
+      for (const [x, y] of [[0.004, 0.02], [-0.006, 0.012]]) {
+        cyl(THREE, rounds, brass, x, y, 0.002, 0.0055, 0.0055, 0.056, Math.PI / 2, 0, 0, 10);
+        cyl(THREE, rounds, brass, x, y, -0.033, 0.0055, 0.003, 0.016, Math.PI / 2, 0, 0, 10);
+      }
+      // Bolt: body, shroud, and the handle that lifts and runs back to chamber each round.
+      bolt.position.set(0, 0.028, 0);
+      cyl(THREE, bolt, edge, 0, 0, -0.012, 0.0158, 0.0158, 0.112, Math.PI / 2, 0, 0, 14);
+      cyl(THREE, bolt, steel, 0, 0, 0.1, 0.0145, 0.012, 0.03, Math.PI / 2, 0, 0, 12);
+      link(THREE, bolt, edge, [0.014, 0, 0.038], [0.046, -0.022, 0.05], 0.0042);
+      oval(THREE, bolt, black, 0.049, -0.026, 0.052, 0.0105, 0.0105, 0.0105);
+      return {
+        muzzle: new THREE.Vector3(0, 0.028, -0.868), bore: 0.0095, rounds,
+        // Aimed with the eye over the scope's ocular, not pressed into it.
+        view: { hip: [0, 0, 0], aim: [0, -0.035, -0.06] },
+        grips: { right: [0, -0.082, 0.112], left: [0, -0.05, -0.33] },
+        hands(hands) {
+          gripHand(THREE, g, hands, [0, -0.085, 0.112], -0.45, 0.02, 0.026, 0.045, [0.37, -0.42, 0.82]);
+          supportHand(THREE, g, hands, [0, -0.014, -0.34], 0.028, 0.023, [-0.42, -0.46, 0.78]);
+        },
+        pose(reload, kick, since) {
+          let lift = 0, back = 0;
+          // The bolt is worked about .4 s after the shot, in time with its foley.
+          if (reload >= 0) { lift = smoothstep(0.02, 0.07, reload) * (1 - smoothstep(0.9, 0.96, reload)); back = smoothstep(0.07, 0.13, reload) * (1 - smoothstep(0.82, 0.88, reload)); }
+          else if (since < 1) { lift = smoothstep(0.36, 0.44, since) * (1 - smoothstep(0.7, 0.78, since)); back = smoothstep(0.44, 0.52, since) * (1 - smoothstep(0.6, 0.68, since)); }
+          bolt.rotation.z = lift * 1.2;
+          bolt.position.z = back * 0.085 + kick * 0.004;
+          magazine.visible = true;
+          rounds.visible = !(reload >= 0 && reload > 0.1 && reload < 0.22);
+        }
+      };
+    },
+    // M249: belt fed from a 100-round box, with a feed cover that lifts to lay a new belt, a carry handle and a bipod.
+    lmg(THREE, g, k) {
+      const { steel, edge, black, polymer, rubber, brass, od, magazine, bolt } = k;
+      bevel(THREE, g, black, 0, 0.0, 0.0, 0.07, 0.092, 0.36, 0.008);
+      for (const side of [-1, 1]) {
+        bevel(THREE, g, steel, side * 0.036, -0.004, -0.02, 0.004, 0.05, 0.28, 0.002);
+        for (let i = 0; i < 3; i++) cyl(THREE, g, edge, side * 0.0365, 0.025, 0.12 - i * 0.12, 0.004, 0.004, 0.003, 0, 0, Math.PI / 2, 6);
+      }
+      bevel(THREE, g, black, 0, 0.05, -0.165, 0.06, 0.02, 0.04, 0.004);
+      // Pistol grip, trigger guard, buffer and stock.
+      bevel(THREE, g, polymer, 0, -0.1, 0.092, 0.045, 0.14, 0.064, 0.01, -0.27);
+      ring(THREE, g, black, 0, -0.062, 0.04, 0.036, 0.006, 0, Math.PI / 2).scale.set(1, 0.75, 1.05);
+      box(THREE, g, steel, 0, -0.057, 0.047, 0.008, 0.034, 0.012, -0.3);
+      bevel(THREE, g, polymer, 0, -0.02, 0.29, 0.054, 0.098, 0.22, 0.014, -0.04);
+      bevel(THREE, g, polymer, 0, 0.004, 0.205, 0.044, 0.05, 0.06, 0.01);
+      bevel(THREE, g, rubber, 0, -0.026, 0.405, 0.058, 0.112, 0.018, 0.006);
+      // Barrel, heat shield, gas tube and block, handguard, front sight, carry handle and flash hider.
+      cyl(THREE, g, steel, 0, 0.012, -0.47, 0.0142, 0.0142, 0.56, Math.PI / 2, 0, 0, 14);
+      bevel(THREE, g, black, 0, 0.032, -0.3, 0.032, 0.008, 0.2, 0.003);
+      for (let i = 0; i < 6; i++) box(THREE, g, steel, 0, 0.0365, -0.215 - i * 0.034, 0.024, 0.002, 0.014);
+      cyl(THREE, g, steel, 0, -0.022, -0.39, 0.0075, 0.0075, 0.36, Math.PI / 2, 0, 0, 8);
+      bevel(THREE, g, black, 0, -0.008, -0.575, 0.03, 0.052, 0.04, 0.005);
+      bevel(THREE, g, black, 0, 0.042, -0.585, 0.008, 0.05, 0.016, 0.002);
+      bevel(THREE, g, polymer, 0, -0.024, -0.275, 0.074, 0.058, 0.17, 0.012);
+      for (const side of [-1, 1]) for (let i = 0; i < 5; i++) box(THREE, g, black, side * 0.0372, -0.024, -0.21 - i * 0.03, 0.002, 0.03, 0.012);
+      for (const z of [-0.23, -0.33]) link(THREE, g, black, [0, 0.035, z], [0, 0.086, z + 0.01], 0.006);
+      bevel(THREE, g, black, 0, 0.09, -0.275, 0.02, 0.014, 0.13, 0.005);
+      cyl(THREE, g, black, 0, 0.012, -0.76, 0.0165, 0.0165, 0.062, Math.PI / 2, 0, 0, 12);
+      for (let i = 0; i < 4; i++) box(THREE, g, black, Math.cos(i * TAU / 4) * 0.0168, 0.012 + Math.sin(i * TAU / 4) * 0.0168, -0.765, 0.004, 0.004, 0.04, 0, 0, i * TAU / 4);
+      // Bipod, folded back under the barrel.
+      for (const side of [-1, 1]) {
+        link(THREE, g, steel, [side * 0.012, -0.03, -0.6], [side * 0.016, -0.04, -0.385], 0.0055);
+        oval(THREE, g, rubber, side * 0.016, -0.041, -0.378, 0.008, 0.008, 0.012);
+      }
+      bevel(THREE, g, steel, 0, -0.03, -0.605, 0.036, 0.014, 0.02, 0.003);
+      // Feed cover over the tray, hinged at the front.
+      const cover = joint(THREE, g, 'cover', 0, 0.046, -0.13);
+      bevel(THREE, cover, black, 0, 0.009, 0.095, 0.066, 0.018, 0.19, 0.005);
+      bevel(THREE, cover, black, 0, 0.026, 0.16, 0.02, 0.018, 0.026, 0.004);
+      box(THREE, cover, k.sight, 0, 0.037, 0.162, 0.006, 0.003, 0.002);
+      // The ammunition box hangs under the left side; its belt climbs into the feed tray, each round pointing forward
+      // in its link.
+      magazine.position.set(-0.03, -0.046, -0.04);
+      bevel(THREE, magazine, od, -0.004, -0.068, 0, 0.068, 0.124, 0.13, 0.012);
+      bevel(THREE, magazine, black, -0.004, -0.004, 0, 0.072, 0.012, 0.134, 0.004);
+      for (let i = 0; i < 5; i++) {
+        const t = i / 4, x = -0.024 + t * 0.012, y = 0.009 + t * 0.068 - Math.sin(t * Math.PI) * 0.01;
+        cyl(THREE, magazine, brass, x, y, -0.006, 0.0052, 0.0052, 0.05, Math.PI / 2, 0, 0, 8);
+        box(THREE, magazine, black, x, y, 0.004, 0.0125, 0.0125, 0.022, 0, 0, 0.3 * (1 - t));
+      }
+      bolt.position.set(0.04, 0.0, -0.1);
+      bevel(THREE, bolt, black, 0.006, 0, 0, 0.016, 0.014, 0.03, 0.003);
+      oval(THREE, bolt, black, 0.017, 0, 0.004, 0.008, 0.009, 0.01);
+      return {
+        muzzle: new THREE.Vector3(0, 0.012, -0.792), bore: 0.0145, cover,
+        grips: { right: [0, -0.1, 0.095], left: [0, -0.06, -0.28] },
+        hands(hands) {
+          gripHand(THREE, g, hands, [0, -0.1, 0.092], -0.27, 0.0225, 0.032, 0.05, [0.36, -0.5, 0.79]);
+          supportHand(THREE, g, hands, [0, -0.024, -0.285], 0.037, 0.029, [-0.42, -0.46, 0.78]);
+        },
+        pose(reload, kick) {
+          const open = reload < 0 ? 0 : smoothstep(0.04, 0.13, reload) * (1 - smoothstep(0.7, 0.78, reload));
+          cover.rotation.x = -open * 1.1;
+          magazine.visible = reload < 0 || reload < 0.28 || reload > 0.52;
+          bolt.position.z = -0.1 + kick * 0.03;
+        }
+      };
+    }
+  };
+  // RULES.WEAPONS order: a carrier's weapon index picks from this list.
+  const WEAPON_KINDS = ['rifle', 'pistol', 'shotgun', ...Object.keys(GUN_MODELS)];
+
   // options.world: a third-person copy (scene-lit finishes, no first-person hands) for the co-op partner.
   function makeWeapon(THREE, requestedKind, options) {
-    const kind = ['rifle', 'pistol', 'shotgun'].includes(requestedKind) ? requestedKind : 'rifle';
+    const kind = WEAPON_KINDS.includes(requestedKind) ? requestedKind : 'rifle';
     const world = !!(options && options.world);
     const g = new THREE.Group(); g.name = kind;
-    const { steel, edge, black, polymer, wood, brass, rubber, glove } = gunPalette(THREE, world);
+    const palette = gunPalette(THREE, world), { steel, edge, black, polymer, wood, brass, rubber, glove } = palette;
     const sight = basic(THREE, 'gun:sight', 0x97d3b1);
     const magazine = joint(THREE, g, 'magazine', 0, 0, 0);
     const bolt = joint(THREE, g, 'bolt', 0, 0, 0);
-    let muzzle;
+    const extra = GUN_MODELS[kind] ? GUN_MODELS[kind](THREE, g, Object.assign({ sight, magazine, bolt }, palette)) : null;
+    let muzzle = extra && extra.muzzle;
 
     if (kind === 'rifle') {
       bevel(THREE, g, steel, 0, 0, -0.007, 0.065, 0.084, 0.30, 0.009);
@@ -1792,7 +2056,7 @@
       bevel(THREE, magazine, black, 0, 0.027, 0, 0.042, 0.065, 0.060, 0.005, -0.29);
       bevel(THREE, magazine, steel, 0, -0.005, 0, 0.056, 0.014, 0.077, 0.004, -0.29);
       muzzle = new THREE.Vector3(0, 0.028, -0.272);
-    } else {
+    } else if (kind === 'shotgun') {
       bevel(THREE, g, steel, 0, 0.004, -0.047, 0.075, 0.094, 0.265, 0.009);
       bevel(THREE, g, wood, 0, -0.048, 0.217, 0.068, 0.111, 0.255, 0.015, -0.22);
       bevel(THREE, g, rubber, 0, -0.071, 0.336, 0.076, 0.123, 0.025, 0.007, -0.22);
@@ -1816,13 +2080,15 @@
       muzzle = new THREE.Vector3(0, 0.023, -0.855);
     }
     // A real dark bore and milled crown catch the light at the business end.
-    ring(THREE, g, edge, muzzle.x, muzzle.y, muzzle.z + 0.012, kind === 'shotgun' ? 0.019 : 0.013, 0.0035);
+    const crown = extra && extra.bore ? [extra.bore * 0.9, 0.0025, extra.bore * 0.7] : null;
+    ring(THREE, g, edge, muzzle.x, muzzle.y, muzzle.z + 0.012, crown ? crown[0] : kind === 'shotgun' ? 0.019 : 0.013, crown ? crown[1] : 0.0035);
+    const boreSize = crown ? crown[2] : kind === 'shotgun' ? 0.016 : 0.011;
     const bore = add(THREE, g, geometry(THREE, 'bore', () => new THREE.CircleGeometry(1, 16)), rubber,
-      muzzle.x, muzzle.y, muzzle.z + 0.011, kind === 'shotgun' ? 0.016 : 0.011, kind === 'shotgun' ? 0.016 : 0.011, 1, 0, Math.PI);
+      muzzle.x, muzzle.y, muzzle.z + 0.011, boreSize, boreSize, 1, 0, Math.PI);
     bore.castShadow = false;
     const hands = { glove, rubber, sleeve: gunMaterial(THREE, 'flashlight:sleeve', 0x22292d, 0, 'gun-fabric', null, world) };
     // Where a carrier's hands hold the weapon (weapon space): firing grip, and the support hand (null: one-handed).
-    const grips = {
+    const grips = extra ? extra.grips : {
       rifle: { right: [0, -0.1, 0.07], left: [0, -0.045, -0.25] },
       pistol: { right: [0, -0.095, 0.045], left: [-0.035, -0.115, 0.03] },
       shotgun: { right: [0, -0.07, 0.125], left: [0, -0.07, -0.31] }
@@ -1834,11 +2100,13 @@
       supportHand(THREE, g, hands, [0, 0.003, -0.31], 0.037, 0.0425, [-0.42, -0.46, 0.78]);
     } else if (kind === 'pistol') {
       gripHand(THREE, g, hands, [0, -0.102, 0.042], -0.29, 0.026, 0.0435, 0.062, [0.34, -0.52, 0.78]);
+    } else if (extra) {
+      extra.hands(hands);
     } else {
       gripHand(THREE, g, hands, [0, -0.074, 0.13], -0.95, 0.034, 0.03, 0.03, [0.38, -0.36, 0.85]);
       supportHand(THREE, g, hands, [0, -0.026, -0.385], 0.0425, 0.045, [-0.42, -0.46, 0.78]);
     }
-    for (const z of [-0.1, 0.062]) {
+    if (!extra) for (const z of [-0.1, 0.062]) {
       cyl(THREE, g, edge, -0.036, 0.006, z, 0.0045, 0.0045, 0.003, 0, 0, Math.PI / 2, 6);
     }
     batch(THREE, g, { boxUV: 10 });
@@ -1847,6 +2115,10 @@
     bolt.userData.restZ = bolt.position.z;
     g.userData = { kind, world, magazine, muzzleFlash, muzzlePosition: muzzle, bolt, run: 0,
       grips: { right: new THREE.Vector3(...grips.right), left: grips.left && new THREE.Vector3(...grips.left) } };
+    // The new guns animate their own parts (cylinder, bolt handle, feed cover); a world copy only needs its joints.
+    if (extra) for (const key of ['cylinder', 'rounds', 'cover']) if (extra[key]) g.userData[key] = extra[key];
+    if (extra && extra.pose && !world) g.userData.pose = extra.pose;
+    if (extra && extra.view && !world) g.userData.view = extra.view;
     return g;
   }
 
@@ -1984,7 +2256,7 @@
     const torch = joint(THREE, aim, 'torch', -0.15, 0.06, -0.12);
     cyl(THREE, torch, mat.hardware, 0, 0, 0, 0.022, 0.022, 0.1, Math.PI / 2, 0, 0, 10);
     const mount = joint(THREE, aim, 'mount', 0, 0, 0);
-    const weapons = ['rifle', 'pistol', 'shotgun'].map(kind => {
+    const weapons = WEAPON_KINDS.map(kind => {
       const w = makeWeapon(THREE, kind, { world: true }); w.visible = kind === 'rifle'; mount.add(w);
       const flash = w.userData.muzzleFlash, cross = flash.clone(); cross.rotation.set(0, Math.PI / 2, 0); flash.add(cross);
       return w;
@@ -2019,7 +2291,9 @@
     const poles = { knee: [new THREE.Vector3(-0.15, 0, -1), new THREE.Vector3(0.15, 0, -1)],
       elbow: [new THREE.Vector3(-0.8, -1, 0.15), new THREE.Vector3(0.6, -1, 0.45)] };
     // Weapon placement in aim space, at rest and aimed down the sights: [x, y, z, adsX, adsY, adsZ, torso blade (rad)].
-    const MOUNT = { rifle: [0.1, -0.04, -0.31, 0.06, 0, -0.3, 0.35], pistol: [0.03, -0.07, -0.47, 0.01, -0.025, -0.5, 0.08], shotgun: [0.1, -0.045, -0.3, 0.06, -0.005, -0.29, 0.35] };
+    const MOUNT = { rifle: [0.1, -0.04, -0.31, 0.06, 0, -0.3, 0.35], pistol: [0.03, -0.07, -0.47, 0.01, -0.025, -0.5, 0.08], shotgun: [0.1, -0.045, -0.3, 0.06, -0.005, -0.29, 0.35],
+      smg: [0.09, -0.04, -0.36, 0.05, 0, -0.36, 0.3], magnum: [0.03, -0.07, -0.47, 0.01, -0.03, -0.5, 0.08],
+      marksman: [0.1, -0.05, -0.26, 0.06, -0.035, -0.25, 0.35], lmg: [0.1, -0.07, -0.3, 0.06, -0.035, -0.3, 0.38] };
     const st = { phase: 0, walk: 0, run: 0, crouch: 0, aim: 0, reload: 0, kick: 0, flash: 0, flinch: 0, flinchX: 0, t: 0, weapon: 0 };
 
     // Two-bone IK from a toward t (lengths l1, l2), bending toward pole; writes the joint and the (reachable) end.

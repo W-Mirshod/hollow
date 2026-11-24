@@ -36,7 +36,30 @@ test('the campaign has three frozen floors with rising pressure and weapons that
   });
   assert.deepEqual([...found].sort(), [...ids].sort(), 'every gun can be found');
   assert.equal(floors[0].release, 10, 'B1 keeps the original release time');
-  assert.deepEqual(Object.keys(floors[0].weapons), ['rifle'], 'B1 hides the carbine; the shotgun waits below');
+  assert.deepEqual(Object.keys(floors[0].weapons), ['rifle', 'smg'], 'B1 hides the carbine and the KV-9; the shotgun waits below');
+});
+
+test('guns turn up progressively: one more on B1, and a gun missed above lies again further down', () => {
+  const floors = rules.FLOORS, ids = rules.WEAPONS.map(w => w.id), first = {};
+  floors.forEach((floor, index) => {
+    const { rooms } = rules.generateFloor(index, rules.seeded(index)), used = new Set();
+    for (const [gun, roomId] of Object.entries(floor.weapons)) {
+      if (!(gun in first)) first[gun] = index;
+      assert.ok(!used.has(roomId), `${floor.id}: one gun per room (${roomId})`);
+      used.add(roomId);
+      assert.ok(rooms.some(r => r.id === roomId && !r.shelter && !r.fuse), `${floor.id}: ${gun} in ${roomId}`);
+    }
+  });
+  assert.ok(Object.keys(floors[0].weapons).length <= 2, 'the first floor stays tense: at most two guns lie there');
+  for (const id of ids.filter(id => !rules.STARTING_WEAPONS.includes(id))) assert.ok(id in first, `${id} lies somewhere`);
+  // The campaign floors B1-B3 bring the guns in order: the KV-9 on B1, the .44 on B2, the marksman rifle and M249 on B3.
+  const byCode = Object.fromEntries(floors.map(f => [f.code, f.weapons]));
+  assert.ok(byCode.B1.smg && byCode.B2.magnum && byCode.B3.marksman && byCode.B3.lmg);
+  // Every gun first found on one of B1-B3 lies again on the next of them, for a run that walked past it.
+  const order = ['B1', 'B2', 'B3'];
+  for (const [i, code] of order.slice(0, -1).entries()) {
+    for (const gun of Object.keys(byCode[code])) assert.ok(gun in byCode[order[i + 1]], `${gun} is found again below ${code}`);
+  }
 });
 
 test('floor B1 is the original ward and consumes the same random draws', () => {

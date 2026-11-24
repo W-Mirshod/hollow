@@ -10,8 +10,20 @@
   const WEAPONS = Object.freeze([
     Object.freeze({id:'rifle', name:'AR-27 · Carbine', capacity:30, reserve:15, damage:1, pellets:1, interval:.115, reload:2.15, spread:.008, recoil:.015, noise:32, automatic:true}),
     Object.freeze({id:'pistol', name:'M9 · Sidearm', capacity:12, reserve:12, damage:1.35, pellets:1, interval:.29, reload:1.45, spread:.005, recoil:.025, noise:18, automatic:false}),
-    Object.freeze({id:'shotgun', name:'SG-8 · Breacher', capacity:6, reserve:2, damage:.78, pellets:8, interval:.88, reload:2.85, spread:.059, recoil:.068, noise:45, automatic:false})
+    Object.freeze({id:'shotgun', name:'SG-8 · Breacher', capacity:6, reserve:2, damage:.78, pellets:8, interval:.88, reload:2.85, spread:.059, recoil:.068, noise:45, automatic:false}),
+    // Found below (appended: saves index guns by position). move: walking-speed factor while it is drawn.
+    Object.freeze({id:'smg', name:'KV-9 · Submachine gun', capacity:32, reserve:16, damage:.65, pellets:1, interval:.068, reload:1.75, spread:.012, recoil:.01, noise:24, automatic:true}),
+    Object.freeze({id:'magnum', name:'.44 · Revolver', capacity:6, reserve:6, damage:3.6, pellets:1, interval:.55, reload:3.1, spread:.005, recoil:.09, noise:50, automatic:false}),
+    Object.freeze({id:'marksman', name:'M24 · Marksman rifle', capacity:5, reserve:5, damage:7.5, pellets:1, interval:1.25, reload:3.4, spread:.0012, recoil:.11, noise:60, automatic:false}),
+    Object.freeze({id:'lmg', name:'M249 · Light machine gun', capacity:100, reserve:50, damage:1.05, pellets:1, interval:.08, reload:4.6, spread:.024, recoil:.02, noise:42, automatic:true, move:.86})
   ]);
+  // Rounds each gun gets from an ammunition box and from a supply crate (kept for guns not found yet).
+  const AMMO_DROPS = Object.freeze({
+    ammo: Object.freeze({rifle:20, pistol:6, shotgun:3, smg:16, magnum:3, marksman:2, lmg:15}),
+    supplies: Object.freeze({rifle:30, pistol:12, shotgun:6, smg:24, magnum:6, marksman:3, lmg:25})
+  });
+  // Headshot multipliers: a revolver round takes a head apart; a marksman round goes through a Warden's plating.
+  const HEADSHOT = Object.freeze({magnum:2.2}), WARDEN_HEADSHOT = Object.freeze({marksman:1.6});
   // Speeds in m/s. A lunge multiplies chase speed by lungeSpeed for lungeTime seconds when the
   // target is within lungeRange metres, then waits lungeCooldown seconds before the next one.
   const MONSTERS = Object.freeze({
@@ -32,11 +44,11 @@
   // once powered (B1 keeps HollowHorror.RELEASE_SECONDS). weapons: gun -> room id where it lies, if not yet owned.
   const FLOORS = Object.freeze([
     Object.freeze({id:'b1', code:'B1', name:'Blackwater Ward', item:'power fuse', items:'power fuses', exit:'east loading shutter',
-      active:8, sleepers:5, ammo:16, release:10, weapons:Object.freeze({rifle:'armory'})}),
+      active:8, sleepers:5, ammo:16, release:10, weapons:Object.freeze({rifle:'armory', smg:'stores'})}),
     Object.freeze({id:'b2', code:'B2', name:'Records & Morgue', item:'lift keycard', items:'lift keycards', exit:'freight lift',
-      active:6, sleepers:12, ammo:18, release:15, weapons:Object.freeze({shotgun:'m-security', rifle:'m-intake'})}),
+      active:6, sleepers:12, ammo:18, release:15, weapons:Object.freeze({shotgun:'m-security', rifle:'m-intake', magnum:'m-chapel', smg:'m-boiler'})}),
     Object.freeze({id:'b3', code:'B3', name:'The Hollow', item:'floodgate key', items:'floodgate keys', exit:'surface floodgate',
-      active:10, sleepers:9, ammo:20, release:25, weapons:Object.freeze({rifle:'h-guard', shotgun:'h-cell-a'})})
+      active:10, sleepers:9, ammo:20, release:25, weapons:Object.freeze({rifle:'h-guard', shotgun:'h-cell-a', marksman:'h-control', lmg:'h-cistern', magnum:'h-store', smg:'h-cell-b'})})
   ]);
   // Every run starts with the sidearm alone; the other guns lie somewhere below and are picked up when found.
   const STARTING_WEAPONS = Object.freeze(['pistol']);
@@ -235,8 +247,10 @@
   function insideRoom(room,x,z,margin){margin=margin||0;return x>room.x*CELL+margin&&x<(room.x+room.w)*CELL-margin&&z>room.z*CELL+margin&&z<(room.z+room.d)*CELL-margin;}
   function weaponDamage(kind,headshot,distance,monsterKind){
     const w=WEAPONS.find(v=>v.id===kind)||WEAPONS[0];
-    const falloff=kind==='shotgun'?Math.max(.22,1-Math.max(0,distance-7)/25):kind==='pistol'?Math.max(.6,1-Math.max(0,distance-18)/70):1;
-    return w.damage*falloff*(headshot?(monsterKind==='warden'?1.1:1.85):1);
+    const falloff=kind==='shotgun'?Math.max(.22,1-Math.max(0,distance-7)/25):kind==='pistol'?Math.max(.6,1-Math.max(0,distance-18)/70):
+      kind==='smg'?Math.max(.45,1-Math.max(0,distance-8)/24):kind==='magnum'?Math.max(.7,1-Math.max(0,distance-20)/60):
+      kind==='lmg'?Math.max(.75,1-Math.max(0,distance-25)/60):1;
+    return w.damage*falloff*(headshot?(monsterKind==='warden'?WARDEN_HEADSHOT[kind]||1.1:HEADSHOT[kind]||1.85):1);
   }
-  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,MONSTERS,PLAYER,FLOORS,STARTING_WEAPONS,SLEEP,seeded,generateMaze,generateFloor,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage,sleepDisturbance,shotWakeDelay};
+  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,AMMO_DROPS,MONSTERS,PLAYER,FLOORS,STARTING_WEAPONS,SLEEP,seeded,generateMaze,generateFloor,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage,sleepDisturbance,shotWakeDelay};
 });

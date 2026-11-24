@@ -94,29 +94,78 @@ test('four articulated creatures preserve the game animation contract at bounded
   }
 });
 
+const GUNS = Systems.WEAPONS.map(w => w.id);
+
 test('weapon models have independent moving magazines, bolts, and correctly oriented muzzles', () => {
   const muzzle = {};
-  for (const kind of ['rifle', 'pistol', 'shotgun']) {
-    const g = V.makeWeapon(THREE, kind), u = g.userData;
+  for (const kind of GUNS) for (const world of [false, true]) {
+    const g = V.makeWeapon(THREE, kind, world), u = g.userData;
     assert.equal(u.kind, kind);
-    assert.ok(u.magazine.isGroup && u.magazine.parent === g);
-    assert.ok(u.bolt.isGroup && u.bolt.parent === g);
+    assert.ok(u.magazine.isGroup && u.magazine.parent);
+    assert.ok(u.bolt.isGroup && u.bolt.parent);
     assert.ok(u.muzzleFlash.isMesh && !u.muzzleFlash.visible);
     assert.ok(u.muzzlePosition.z < 0);
     assert.ok(u.muzzleFlash.position.equals(u.muzzlePosition));
-    assert.ok(meshCount(g) <= 15);
-    muzzle[kind] = -u.muzzlePosition.z;
+    assert.ok(meshCount(g) <= 15, kind + ' meshes ' + meshCount(g));
+    assert.ok(triangleCount(g) <= 9000, kind + ' triangles ' + triangleCount(g));
+    if (world) {
+      assert.ok(u.grips.right.isVector3);
+      // The muzzle is the front of the gun: nothing pokes out past it.
+      g.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(g);
+      assert.ok(box.min.z > u.muzzlePosition.z - 0.02 && box.min.z < u.muzzlePosition.z + 0.002, kind + ' muzzle ' + box.min.z);
+    } else {
+      assert.equal(typeof u.pose === 'function', ['magnum', 'marksman', 'lmg'].includes(kind), kind + ' pose');
+      muzzle[kind] = -u.muzzlePosition.z;
+    }
     assertFiniteGeometry(g); V.disposeGroup(g);
   }
   assert.ok(muzzle.shotgun > muzzle.rifle && muzzle.rifle > muzzle.pistol);
+  assert.ok(muzzle.marksman > muzzle.shotgun && muzzle.lmg > muzzle.rifle);
+  assert.ok(muzzle.smg > muzzle.magnum && muzzle.magnum < muzzle.rifle);
+  const fallback = V.makeWeapon(THREE, 'blunderbuss');
+  assert.equal(fallback.userData.kind, 'rifle');
+  V.disposeGroup(fallback);
+});
+
+test('the revolver turns a chamber per shot and swings out, the M24 works its bolt after the shot, the M249 lifts its cover', () => {
+  const magnum = V.makeWeapon(THREE, 'magnum').userData;
+  magnum.pose(-1, 0, 9);
+  const rest = magnum.cylinder.rotation.z;
+  magnum.pose(-1, 1, 0); magnum.pose(-1, 0, 0.2);
+  assert.ok(Math.abs(magnum.cylinder.rotation.z - rest - Math.PI / 3) < 1e-6);
+  assert.equal(magnum.magazine.rotation.z, 0);
+  magnum.pose(0.4, 0, 9);
+  assert.ok(magnum.magazine.rotation.z > 1);
+  magnum.pose(0.99, 0, 9);
+  assert.ok(magnum.magazine.rotation.z < 1e-6);
+
+  const marksman = V.makeWeapon(THREE, 'marksman').userData;
+  const bolt = since => { marksman.pose(-1, 0, since); return [marksman.bolt.rotation.z, marksman.bolt.position.z]; };
+  assert.ok(bolt(0.1).every(v => Math.abs(v) < 1e-9));
+  const [lift, back] = bolt(0.56);
+  assert.ok(lift > 1 && back > 0.08);
+  assert.ok(bolt(0.9).every(v => Math.abs(v) < 1e-9));
+  marksman.pose(0.5, 0, 9);
+  assert.ok(marksman.bolt.rotation.z > 1 && marksman.bolt.position.z > 0.08);
+
+  const lmg = V.makeWeapon(THREE, 'lmg').userData;
+  lmg.pose(-1, 0, 9);
+  assert.ok(lmg.cover.rotation.x === 0 && lmg.magazine.visible);
+  lmg.pose(0.4, 0, 9);
+  assert.ok(lmg.cover.rotation.x < -1 && !lmg.magazine.visible);
+  lmg.pose(0.9, 0, 9);
+  assert.ok(lmg.magazine.visible && lmg.cover.rotation.x === 0);
 });
 
 test('the co-op survivor keeps both hands on each weapon and its feet on the floor in every pose', () => {
   const s = V.makeSurvivor(THREE), u = s.userData;
-  assert.equal(u.weapons.length, 3);
+  // The partner's weapon index is RULES.WEAPONS's.
+  assert.deepEqual(Array.from(u.weapons, w => w.userData.kind), GUNS);
+  assert.ok(u.weapons.every(w => w.userData.world));
   for (const [i, gun] of u.weapons.entries()) {
     u.setWeapon(i);
-    assert.deepEqual(Array.from(u.weapons, w => w.visible), [0, 1, 2].map(j => j === i));
+    assert.deepEqual(Array.from(u.weapons, w => w.visible), GUNS.map((_, j) => j === i));
     assert.ok(gun.userData.grips.right.isVector3);
     for (const crouch of [false, true]) for (const pitch of [-1, 0, 1]) for (const aim of [false, true]) for (const v of [0, 1.6, 5]) {
       for (let f = 0; f < 30; f++) u.animate({ vx: 0, vz: -v, yaw: 0, pitch, crouch, run: v > 2, aim }, 1 / 60);
@@ -130,9 +179,9 @@ test('the co-op survivor keeps both hands on each weapon and its feet on the flo
     }
   }
   u.fire();
-  assert.ok(u.weapons[2].userData.muzzleFlash.visible);
+  assert.ok(u.weapons[GUNS.length - 1].userData.muzzleFlash.visible);
   for (let f = 0; f < 10; f++) u.animate({}, 1 / 60);
-  assert.ok(!u.weapons[2].userData.muzzleFlash.visible);
+  assert.ok(!u.weapons[GUNS.length - 1].userData.muzzleFlash.visible);
   u.flinch(1); u.animate({}, 1 / 60);
   assertFiniteGeometry(s);
   V.disposeGroup(s);

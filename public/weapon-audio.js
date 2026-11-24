@@ -26,7 +26,24 @@
       crack: [2900, 7, .0055, .85], body: [700, 170, .55, .18, 3.2], thump: [130, 53, .12, .28, .72],
       // A light rattle with the blast, then the pump racked back and slammed home from ~.35 s.
       mech: [[.026, 1900, .02, .18], [.35, 1350, .05, .45, .007], [.47, 2500, .045, .55]],
-      thunks: [[.352, 190, .05, .3], [.472, 240, .045, .38]] }
+      thunks: [[.352, 190, .05, .3], [.472, 240, .045, .38]] },
+    // A quick, bright 9 mm crack with little body: built to be fired fifteen times a second.
+    smg: { level: .27, drive: 2, send: .38, ping: 3350, mechQ: 3.4,
+      crack: [4200, 8, .0024, .82], body: [1650, 540, .8, .045, 2.5], thump: [240, 90, .032, .065, .42],
+      mech: [[.019, 3200, .012, .36], [.029, 4300, .01, .24]] },
+    // The .44: a huge flat slap and boom that rings down the corridor, then the cylinder's loose rattle.
+    magnum: { level: .4, drive: 3.2, send: .85, ping: 2350, mechQ: 2.6,
+      crack: [3000, 10, .005, 1], body: [880, 200, .6, .16, 3.3], thump: [150, 52, .09, .22, .8],
+      mech: [[.022, 1650, .03, .2], [.05, 2600, .02, .16]] },
+    // The marksman rifle: the hardest crack of all, then the bolt worked up, back, forward and down from ~.4 s.
+    marksman: { level: .42, drive: 3.4, send: .95, ping: 2200, mechQ: 2.8,
+      crack: [3600, 11, .0045, 1], body: [1050, 230, .6, .15, 3.4], thump: [140, 50, .1, .24, .78],
+      mech: [[.022, 2100, .02, .14], [.4, 2900, .025, .45], [.47, 1500, .035, .5, .004], [.64, 2300, .03, .5], [.73, 1300, .04, .45, .003]],
+      thunks: [[.472, 210, .04, .22], [.732, 230, .04, .3]] },
+    // The belt-fed gun: heavier than the carbine, with the feed pawl and links chattering after every round.
+    lmg: { level: .34, drive: 2.7, send: .6, ping: 2500, mechQ: 2.8,
+      crack: [3300, 8, .004, .9], body: [1000, 300, .65, .11, 3.2], thump: [150, 54, .08, .16, .62],
+      mech: [[.018, 1900, .02, .38], [.03, 2700, .016, .3], [.043, 3700, .012, .22]] }
   };
   const IMPACTS = { flesh: { level: .34, send: .1 }, metal: { level: .34, send: .3 }, concrete: { level: .32, send: .2 },
     wood: { level: .6, send: .15 } };
@@ -34,7 +51,11 @@
   const CASINGS = {
     rifle: { level: .045, delay: [.42, .75], partials: [4300, 2.32, .5], ring: .08, bounces: 3, click: 5200 },
     pistol: { level: .04, delay: [.35, .6], partials: [6100, 1.93, .45], ring: .055, bounces: 3, click: 6500 },
-    shotgun: { level: .055, delay: [.45, .8], partials: [760, 2.95, .3], ring: .03, bounces: 2, click: 1400 }
+    shotgun: { level: .055, delay: [.45, .8], partials: [760, 2.95, .3], ring: .03, bounces: 2, click: 1400 },
+    // A revolver keeps its brass until the reload, so the .44 has none here; the marksman case flies when the bolt opens.
+    smg: { level: .035, delay: [.35, .6], partials: [6400, 1.9, .45], ring: .05, bounces: 3, click: 6800 },
+    marksman: { level: .055, delay: [.58, .8], partials: [3500, 2.4, .5], ring: .11, bounces: 3, click: 4600 },
+    lmg: { level: .05, delay: [.4, .7], partials: [4100, 2.3, .5], ring: .085, bounces: 3, click: 5000 }
   };
   const FLOORS = {
     concrete: { ring: 1, level: 1, tone: 1, click: 1 }, tile: { ring: 1.15, level: 1.05, tone: 1.04, click: 1.1 },
@@ -46,7 +67,12 @@
   const DRY = {
     rifle: [[0, 'b', 3400, .0003, .014, 1], [.001, 'c', 1350, .001, .035, .25], [.03, 'b', 2500, .0004, .01, .25]],
     pistol: [[0, 'b', 4200, .0003, .011, 1], [.001, 'c', 1800, .001, .03, .22]],
-    shotgun: [[0, 'b', 2300, .0004, .016, 1], [.001, 'c', 900, .001, .04, .3], [.04, 'b', 1800, .0005, .012, .2]]
+    shotgun: [[0, 'b', 2300, .0004, .016, 1], [.001, 'c', 900, .001, .04, .3], [.04, 'b', 1800, .0005, .012, .2]],
+    smg: [[0, 'b', 3800, .0003, .012, 1], [.001, 'c', 1500, .001, .03, .22]],
+    // The hammer falls on a spent chamber, and the cylinder indexes on.
+    magnum: [[0, 'b', 2600, .0004, .015, 1], [.001, 'c', 1100, .001, .05, .3], [.035, 'b', 3300, .0004, .01, .3]],
+    marksman: [[0, 'b', 3000, .0004, .014, 1], [.001, 'c', 1250, .001, .04, .26]],
+    lmg: [[0, 'b', 2900, .0004, .016, 1], [.001, 'c', 1000, .001, .045, .3], [.03, 'b', 2200, .0005, .012, .25]]
   };
   const EQUIP = {
     rifle: [[0, 'a', 1100, .05, .1, .5], [.05, 'b', 3800, .0005, .012, .32], [.085, 'b', 4300, .0005, .01, .24],
@@ -54,7 +80,19 @@
     pistol: [[0, 'a', 1500, .02, .03, .4], [.035, 'a', 2900, .012, .03, .45], [.11, 'b', 4200, .0004, .014, .7],
       [.112, 'c', 900, .001, .03, .2]],
     shotgun: [[0, 'a', 800, .07, .12, .5], [.06, 'b', 2100, .0006, .02, .3], [.09, 'b', 1900, .0006, .018, .26],
-      [.12, 'b', 2200, .0006, .02, .22], [.24, 'b', 1800, .0008, .04, .9], [.24, 'a', 420, .003, .07, .6], [.242, 'c', 330, .001, .06, .35]]
+      [.12, 'b', 2200, .0006, .02, .22], [.24, 'b', 1800, .0008, .04, .9], [.24, 'a', 420, .003, .07, .6], [.242, 'c', 330, .001, .06, .35]],
+    // Brought up, then the cocking handle slapped down.
+    smg: [[0, 'a', 1300, .04, .08, .5], [.05, 'b', 4000, .0005, .012, .3], [.09, 'b', 3600, .0005, .01, .25],
+      [.17, 'b', 3000, .0006, .025, .8], [.17, 'a', 700, .002, .045, .5], [.172, 'c', 600, .001, .04, .25]],
+    // Drawn, and the hammer thumbed back: two clicks.
+    magnum: [[0, 'a', 1200, .03, .06, .45], [.06, 'b', 3400, .0004, .012, .4], [.14, 'b', 2800, .0005, .02, .85],
+      [.142, 'c', 1300, .001, .05, .3], [.2, 'a', 900, .01, .04, .3]],
+    // Shouldered, and the bolt checked: up, back, home.
+    marksman: [[0, 'a', 900, .06, .1, .5], [.07, 'b', 2400, .0006, .02, .35], [.16, 'b', 2000, .0008, .03, .7],
+      [.16, 'a', 500, .003, .06, .55], [.24, 'b', 2900, .0006, .025, .8], [.242, 'c', 700, .001, .05, .3]],
+    // A heavy lift with the belt rattling, and the charging handle.
+    lmg: [[0, 'a', 700, .08, .14, .6], [.07, 'b', 1900, .0006, .02, .3], [.12, 'a', 480, .004, .06, .5], [.2, 'b', 1700, .0008, .04, .9],
+      [.2, 'a', 380, .003, .08, .65], [.203, 'c', 300, .001, .07, .35], [.3, 'b', 2600, .0006, .02, .4]]
   };
   const RELOADS = {
     // Mag release click, mag out, pouch rustle, mag in and seat; an empty rifle also slams its bolt home.
@@ -76,7 +114,41 @@
     shotgun: { nominal: 2.85, level: .38, shells: { empty: [.1, .27, .44, .61], full: [.12, .32, .52] },
       shell: [[0, 'a', 1450, .012, .03, .3], [.012, 'b', 2400, .0006, .016, .7], [.013, 'c', 270, .002, .05, .28]],
       pump: [[.8, 'a', 1300, .008, .05, .6], [.801, 'b', 1850, .002, .03, .4], [.84, 'a', 620, .003, .05, .7],
-        [.841, 'b', 2600, .0008, .035, 1], [.843, 'c', 900, .001, .05, .2]] }
+        [.841, 'b', 2600, .0008, .035, 1], [.843, 'c', 900, .001, .05, .2]] },
+    // Like the carbine, quicker and lighter; an empty KV-9 has its cocking handle slapped down.
+    smg: { nominal: 1.75, level: .36, steps: [
+      [.07, 'b', 4000, .0005, .01, .5], [.11, 'a', 1300, .015, .06, .42], [.16, 'a', 560, .002, .045, .45],
+      [.3, 'a', 1100, .03, .06, .2], [.4, 'a', 1400, .02, .05, .16],
+      [.56, 'a', 1600, .012, .035, .4], [.62, 'b', 3000, .0008, .025, .9], [.621, 'a', 700, .002, .05, .6], [.625, 'c', 1800, .001, .045, .18]],
+      empty: [[.82, 'b', 3500, .0006, .03, 1], [.821, 'a', 520, .002, .06, .75], [.825, 'c', 1300, .001, .06, .24]],
+      full: [[.8, 'a', 750, .01, .05, .25]] },
+    // Latch, the crane swung out with a ring, the ejector rod and six cases tinkling on the floor, a speedloader in and
+    // twisted free, the cylinder snapped shut; an empty revolver has its hammer thumbed back too.
+    magnum: { nominal: 3.1, level: .38, steps: [
+      [.04, 'b', 3600, .0005, .012, .55], [.09, 'a', 1400, .01, .05, .45], [.092, 'c', 1900, .001, .08, .22],
+      [.22, 'a', 900, .012, .05, .5], [.225, 'b', 2400, .0008, .02, .5],
+      [.28, 'c', 5200, .0005, .05, .3], [.3, 'c', 4700, .0005, .045, .26], [.325, 'c', 5600, .0005, .04, .24],
+      [.35, 'c', 4900, .0005, .04, .2], [.38, 'c', 5300, .0005, .035, .18], [.41, 'c', 4500, .0005, .035, .15],
+      [.48, 'a', 1500, .03, .06, .25], [.58, 'a', 1100, .01, .04, .45], [.6, 'b', 2500, .0008, .02, .6],
+      [.67, 'b', 3000, .0006, .015, .55], [.72, 'a', 620, .004, .05, .3],
+      [.82, 'b', 2700, .0008, .03, 1], [.821, 'a', 650, .002, .06, .65], [.823, 'c', 1500, .001, .06, .22]],
+      empty: [[.92, 'b', 3800, .0005, .02, .75]],
+      full: [[.9, 'a', 800, .01, .04, .2]] },
+    // The bolt opened, five rounds (four with one left) thumbed through the action, and the bolt closed.
+    marksman: { nominal: 3.4, level: .38, shells: { empty: [.18, .3, .42, .54, .66], full: [.24, .38, .52, .66] },
+      open: [[.04, 'b', 3000, .0006, .02, .6], [.045, 'c', 1100, .001, .04, .18], [.09, 'a', 1400, .01, .04, .5], [.1, 'b', 2200, .0008, .03, .55]],
+      shell: [[0, 'a', 1600, .01, .025, .3], [.01, 'b', 2700, .0006, .014, .65], [.011, 'c', 2900, .001, .03, .18]],
+      pump: [[.84, 'a', 1500, .008, .04, .55], [.85, 'b', 2300, .0008, .03, .7], [.91, 'b', 3100, .0006, .025, 1], [.912, 'c', 1100, .001, .05, .22]] },
+    // Feed cover up, the empty box unhooked, a full one hung, the belt laid link by link in the tray and the cover
+    // slammed; an empty gun is also charged.
+    lmg: { nominal: 4.6, level: .4, steps: [
+      [.04, 'b', 3000, .0006, .015, .55], [.08, 'a', 900, .01, .05, .45], [.082, 'c', 800, .001, .07, .2],
+      [.17, 'a', 700, .02, .06, .4], [.22, 'b', 2000, .0008, .02, .4], [.3, 'a', 420, .004, .07, .6],
+      [.4, 'a', 900, .04, .08, .25], [.46, 'a', 380, .004, .08, .7], [.462, 'b', 1600, .001, .03, .5],
+      [.55, 'b', 3400, .0005, .01, .3], [.58, 'b', 3200, .0005, .01, .28], [.61, 'b', 3500, .0005, .01, .26], [.64, 'a', 1200, .015, .04, .3],
+      [.74, 'b', 2400, .0008, .035, 1], [.741, 'a', 500, .003, .07, .75], [.745, 'c', 700, .001, .07, .25]],
+      empty: [[.88, 'b', 3000, .0006, .03, .9], [.881, 'a', 600, .002, .06, .65], [.885, 'c', 1200, .001, .06, .22]],
+      full: [[.86, 'a', 700, .01, .05, .25]] }
   };
   const MARKER = { level: .31, headshot: .8, armored: .92 };
   const DRY_LEVEL = .3, EQUIP_LEVEL = .3;
@@ -532,10 +604,9 @@
     }
     function sequence(id, empty) {
       const plan = RELOADS[id];
-      if (id === 'rifle') return plan.steps.concat(empty ? plan.empty : plan.full);
-      if (id === 'pistol') return plan.steps;
+      if (!plan.shells) return plan.steps.concat((empty ? plan.empty : plan.full) || []);
       const shells = plan.shells[empty ? 'empty' : 'full'];
-      return shells.flatMap(phase => plan.shell.map(([offset, ...rest]) => [phase + offset, ...rest])).concat(plan.pump);
+      return (plan.open || []).concat(shells.flatMap(phase => plan.shell.map(([offset, ...rest]) => [phase + offset, ...rest])), plan.pump);
     }
     function cancelReload() {
       const voice = reloading;
