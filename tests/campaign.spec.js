@@ -74,16 +74,16 @@ test('a run starts with the sidearm alone; the carbine lies in the B1 armory and
   expect(s).toMatchObject({floorCode:'B1',owned:['pistol'],weapon:'pistol',mag:12,reserve:12});
   await expect(page.locator("#resTxt")).toHaveText("/ ∞");
   expect(s.ammoPickups,'B1 stocks sixteen ammunition boxes (it had twelve)').toHaveLength(16);
-  await expect(page.locator('#weaponSlots span.locked')).toHaveCount(2);
+  await expect(page.locator('#weaponSlots span.locked')).toHaveCount(6);
   await expect(page.locator('body')).toHaveAttribute('data-floor','B1');
   await expect(page.locator('#floorTint')).toHaveCSS('opacity','0');
-  await expect(page.locator('#weaponSlots span.selected')).toHaveText('2');
+  await expect(page.locator('#weaponSlots span.selected')).toHaveText('2 M9');
   // A gun not found yet cannot be drawn: its key says so, and Q stays on the sidearm.
   await page.keyboard.press('1');await expect(page.locator('#msg')).toContainText('No AR-27');
   await page.keyboard.press('q');expect((await snapshot(page)).weapon).toBe('pistol');
-  const rifle=s.loot.find(l=>l.type==='weapon');
+  const rifle=s.loot.find(l=>l.type==='weapon'&&l.weapon==='rifle');
   expect(rifle).toMatchObject({id:'armory:rifle',weapon:'rifle',taken:false,visible:true});
-  expect(s.loot.filter(l=>l.type==='weapon'),'B1 hides the carbine only').toHaveLength(1);
+  expect(s.loot.filter(l=>l.type==='weapon').map(l=>[l.id,l.visible]),'B1 hides the carbine and the KV-9').toEqual([['armory:rifle',true],['stores:smg',true]]);
   await pose(page,await approach(page,rifle));
   await expect(page.locator('#interactionPrompt')).toContainText('Take the AR-27');
   await page.screenshot({path:'artifacts/campaign-rifle-found.png'});
@@ -94,7 +94,7 @@ test('a run starts with the sidearm alone; the carbine lies in the B1 armory and
   expect(armed.reserve).toBeGreaterThanOrEqual(15);
   expect(armed.hud.banner).toBe('NEW WEAPON');
   expect(armed.loot.find(l=>l.id==='armory:rifle')).toMatchObject({taken:true,visible:false});
-  await expect(page.locator('#weaponSlots span.locked')).toHaveCount(1);
+  await expect(page.locator('#weaponSlots span.locked')).toHaveCount(5);
   await expect(page.locator('#msg')).toContainText('AR-27 · Carbine · 30 loaded');
   await page.screenshot({path:'artifacts/campaign-new-weapon.png'});
   // Q now cycles through the two guns carried and never onto the shotgun, which waits on B2.
@@ -206,9 +206,10 @@ test('the B1 shutter leads down to B2 with everything carried; death there retri
   expect(b2.reserve).toBeGreaterThanOrEqual(out.reserve);expect(b2.seed).not.toBe(out.seed);expect(b2.rooms).toHaveLength(12);
   expect(b2.enemies.filter(e=>!e.dormant)).toHaveLength(6);expect(b2.ammoPickups).toHaveLength(18);
   const asleep=b2.enemies.filter(e=>e.dormant).length;expect(asleep).toBeGreaterThan(6);expect(asleep).toBeLessThanOrEqual(12);
-  expect(b2.loot.filter(l=>l.type==='weapon').map(l=>[l.id,l.visible])).toEqual([['m-security:shotgun',true],['m-intake:rifle',false]]);
+  // The KV-9 left lying in B1's stores lies again in the boiler room.
+  expect(b2.loot.filter(l=>l.type==='weapon').map(l=>[l.id,l.visible])).toEqual([['m-security:shotgun',true],['m-intake:rifle',false],['m-chapel:magnum',true],['m-boiler:smg',true]]);
   const save=await page.evaluate(()=>JSON.parse(localStorage.getItem('hollow.campaign')));
-  expect(save).toMatchObject({v:1,floor:1,kit:{health:60,owned:[true,true,false],weapon:0}});
+  expect(save).toMatchObject({v:1,floor:1,kit:{health:60,owned:[true,true,false,false,false,false,false],weapon:0}});
   await page.evaluate(()=>HollowTest.silence());
   await expect(page.locator('#floorText')).toHaveText('B2 · RECORDS & MORGUE');
   await expect(page.locator('#wingText')).toHaveText('BW / MORGUE LEVEL');
@@ -216,12 +217,12 @@ test('the B1 shutter leads down to B2 with everything carried; death there retri
   await expect(page.locator('#floorTint')).toHaveCSS('opacity','1');
   await expect(page.locator('#objectiveText')).toContainText('KEYCARDS');
   await page.screenshot({path:'artifacts/campaign-b2.png'});
-  // The shotgun waits in Security; with it every slot is open.
+  // The shotgun waits in Security; the .44 and the KV-9 stay locked until they are found.
   await pose(page,await approach(page,b2.loot.find(l=>l.id==='m-security:shotgun')));await page.keyboard.press('e');
   await expect.poll(async()=>(await snapshot(page)).weapon).toBe('shotgun');
   const full=await snapshot(page);
   expect(full).toMatchObject({weapon:'shotgun',owned:['rifle','pistol','shotgun'],mag:6});expect(full.hud.banner).toBe('NEW WEAPON');
-  await expect(page.locator('#weaponSlots span.locked')).toHaveCount(0);
+  await expect(page.locator('#weaponSlots span.locked')).toHaveCount(4);
   // Death below B1 restarts the floor with the kit carried down, so the shotgun is back in Security.
   expect(await page.evaluate(()=>{
     HollowTest.health(1);HollowTest.pose({x:51,z:55,yaw:Math.PI});HollowTest.enemy(1,{x:51,z:54,state:'chase',yaw:0});
@@ -248,7 +249,7 @@ test('the B1 shutter leads down to B2 with everything carried; death there retri
   expect(await snapshot(page)).toMatchObject({floorCode:'B2',owned:['rifle','pistol'],weapon:'rifle',health:60,mag:30});
 });
 
-test('kills bank across floors, and getting out of B3 records the whole run and clears the saved checkpoint',async({page})=>{
+test('kills bank across floors, and B3\'s surface floodgate leads up into the S1 garden with the run and a new checkpoint',async({page})=>{
   await ready(page);await start(page);
   // A shotgun headshot on a crawler down B1's central spine (tests/dopamine.spec.js) scores before the descent.
   const kill=await page.evaluate(()=>{
@@ -266,7 +267,9 @@ test('kills bank across floors, and getting out of B3 records the whole run and 
   const b3=await page.evaluate(()=>{HollowTest.floor(2);HollowTest.silence();return HollowGame.snapshot();});
   expect(b3).toMatchObject({floorCode:'B3',score:kill,savedFloor:2,owned:['rifle','pistol','shotgun']});
   expect(b3.rooms).toHaveLength(13);expect(b3.ammoPickups).toHaveLength(20);
-  expect(b3.loot.filter(l=>l.type==='weapon').every(l=>!l.visible),'guns already carried are not lying on B3').toBe(true);
+  const guns=b3.loot.filter(l=>l.type==='weapon');
+  expect(guns.filter(l=>b3.owned.includes(l.weapon)).map(l=>l.visible),'guns already carried are not lying on B3').toEqual([false,false]);
+  expect(guns.filter(l=>!b3.owned.includes(l.weapon)).map(l=>[l.weapon,l.visible])).toEqual([['marksman',true],['lmg',true],['magnum',true],['smg',true]]);
   await expect(page.locator('#floorText')).toHaveText('B3 · THE HOLLOW');
   await expect(page.locator('#wingText')).toHaveText('BW / CISTERN LEVEL');
   await expect(page.locator('body')).toHaveAttribute('data-floor','B3');
@@ -282,16 +285,24 @@ test('kills bank across floors, and getting out of B3 records the whole run and 
   await expect.poll(async()=>(await snapshot(page)).exitPowered).toBe(true);
   const open=await page.evaluate(()=>{for(let i=0;i<3;i++)HollowTest.advance(10);HollowTest.pose({x:100.5,z:100.5,yaw:-Math.PI/2});return HollowGame.snapshot();});
   expect(open.exitOpen).toBe(true);expect(open.hud.banner).toBe('FLOODGATE OPEN · RUN');
+  // B3 is no longer the way out: the floodgate opens on the night air, and the run goes on above ground
+  // (tests/above-ground.spec.js plays S1 and S2 through to the win).
   await page.keyboard.down('w');
-  try{await expect.poll(async()=>(await snapshot(page)).state,{timeout:90000}).toBe('win');}finally{await page.keyboard.up('w');}
-  await expect(page.locator('#win')).toBeVisible();
-  const fmt=n=>String(n).replace(/\B(?=(\d{3})+(?!\d))/g,',');
-  await expect(page.locator('#winRank')).toHaveText(new RegExp(`^Score ${fmt(kill.points)}\\. `));
-  expect((await snapshot(page)).savedFloor).toBe(0);
-  expect(await page.evaluate(()=>localStorage.getItem('hollow.campaign'))).toBeNull();
-  await page.screenshot({path:'artifacts/campaign-win.png'});
-  await page.locator('#menuBtn').click();await expect(page.locator('#menu')).toBeVisible();
-  await expect(page.locator('#continueBtn')).toBeHidden();
+  try{await expect(page.locator('#descend')).toBeVisible({timeout:90000});}finally{await page.keyboard.up('w');}
+  await expect(page.locator('#descendWay')).toHaveText('Above ground');
+  await expect(page.locator('#descendCode')).toHaveText('S1');
+  await expect(page.locator('#descendName')).toHaveText('The Overgrown Garden');
+  await expect(page.locator('#descendNote')).toContainText('Up through the surface floodgate, into the open air.');
+  await expect.poll(async()=>{const s=await snapshot(page);return s.state==='play'&&s.floor===3;},{timeout:60000}).toBe(true);
+  // The garden is a checkpoint, and says so as the card lifts.
+  await expect.poll(async()=>(await snapshot(page)).hud.banner,{intervals:[100,250]}).toBe('CHECKPOINT REACHED');
+  const s1=await snapshot(page);
+  expect(s1).toMatchObject({floorCode:'S1',score:kill,savedFloor:3,owned:['rifle','pistol','shotgun'],fuses:0,exitOpen:false,boss:null});
+  expect(s1.checkpoint).toMatchObject({floor:3,owned:['rifle','pistol','shotgun']});
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('hollow.campaign')).floor)).toBe(3);
+  await expect(page.locator('#floorText')).toHaveText('S1 · THE OVERGROWN GARDEN');
+  await expect(page.locator('body')).toHaveAttribute('data-floor','S1');
+  await page.screenshot({path:'artifacts/campaign-s1.png'});
 });
 
 test('a hunter snarls at arm\'s length and howls across the floor when it loses the trail',async({page})=>{

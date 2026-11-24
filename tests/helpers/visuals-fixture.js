@@ -29,9 +29,11 @@ function collidersForRooms(rooms, cellSize = 3) {
   const result = [];
   for (const room of rooms) {
     const width = room.w * cellSize, depth = room.d * cellSize;
-    const key = `${room.type}:${width}:${depth}`;
+    // Rooms above ground (a `look`) are dressed by decorateOutdoorRoom, as in game.js.
+    const key = `${room.look ? 'look:' + room.look : room.type}:${width}:${depth}`;
     if (!cache.has(key)) {
-      const model = visuals.decorateRoom(THREE, { width, depth, type: room.type });
+      const model = room.look ? visuals.decorateOutdoorRoom(THREE, { width, depth, look: room.look })
+        : visuals.decorateRoom(THREE, { width, depth, type: room.type });
       cache.set(key, model.userData.colliders.map(collider => ({ ...collider })));
       visuals.disposeGroup(model);
     }
@@ -41,4 +43,21 @@ function collidersForRooms(rooms, cellSize = 3) {
   return result;
 }
 
-module.exports = { collidersForRooms };
+// The grounds of an outdoor floor (rules.FLOORS[index].outdoor), dressed with the options game.js gives decorateGrounds.
+function collidersForGrounds(layout, index, seed, cellSize = 3) {
+  const rules = require('../../public/systems'), floor = rules.FLOORS[index], W = layout.grid.length;
+  const model = visuals.decorateGrounds(THREE, groundsOptions(floor, layout, seed, cellSize, W));
+  const colliders = model.userData.colliders.map(collider => ({ ...collider }));
+  visuals.disposeGroup(model);
+  return colliders;
+}
+// Mirrors groundsOptions() in game.js (the lobby pedestal and fallen chandelier, the gate approach and the boss's graves).
+function groundsOptions(floor, layout, seed, s, W) {
+  const avoid = [{ x: (W - 2 + .5) * s, z: (W - 2 + .5) * s, r: 4 }];
+  if (floor.boss) avoid.push({ x: (floor.boss.grave[0] + .5) * s, z: (floor.boss.grave[1] + .5) * s, r: 2.6 }, ...floor.boss.summons.map(([x, z]) => ({ x: (x + .5) * s, z: (z + .5) * s, r: 2 })));
+  return { grid: layout.grid, cellSize: s, height: 3.2, rooms: layout.rooms, seed, kind: floor.boss ? 'graveyard' : 'garden', avoid,
+    centre: floor.fountain ? [(floor.fountain[0] + .5) * s, (floor.fountain[1] + .5) * s] : null, boss: floor.boss || null, gate: [W - 1, W - 2],
+    landmarks: { ped: { x: 16.5, z: 7.5 }, chan: { x: 10.5, z: 7.5 } } };
+}
+
+module.exports = { collidersForRooms, collidersForGrounds, groundsOptions };

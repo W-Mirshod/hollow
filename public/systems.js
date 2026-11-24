@@ -10,15 +10,29 @@
   const WEAPONS = Object.freeze([
     Object.freeze({id:'rifle', name:'AR-27 · Carbine', capacity:30, reserve:15, damage:1, pellets:1, interval:.115, reload:2.15, spread:.008, recoil:.015, noise:32, automatic:true}),
     Object.freeze({id:'pistol', name:'M9 · Sidearm', capacity:12, reserve:12, damage:1.35, pellets:1, interval:.29, reload:1.45, spread:.005, recoil:.025, noise:18, automatic:false}),
-    Object.freeze({id:'shotgun', name:'SG-8 · Breacher', capacity:6, reserve:2, damage:.78, pellets:8, interval:.88, reload:2.85, spread:.059, recoil:.068, noise:45, automatic:false})
+    Object.freeze({id:'shotgun', name:'SG-8 · Breacher', capacity:6, reserve:2, damage:.78, pellets:8, interval:.88, reload:2.85, spread:.059, recoil:.068, noise:45, automatic:false}),
+    // Found below (appended: saves index guns by position). move: walking-speed factor while it is drawn.
+    Object.freeze({id:'smg', name:'KV-9 · Submachine gun', capacity:32, reserve:16, damage:.65, pellets:1, interval:.068, reload:1.75, spread:.012, recoil:.01, noise:24, automatic:true}),
+    Object.freeze({id:'magnum', name:'.44 · Revolver', capacity:6, reserve:6, damage:3.6, pellets:1, interval:.55, reload:3.1, spread:.005, recoil:.09, noise:50, automatic:false}),
+    Object.freeze({id:'marksman', name:'M24 · Marksman rifle', capacity:5, reserve:5, damage:7.5, pellets:1, interval:1.25, reload:3.4, spread:.0012, recoil:.11, noise:60, automatic:false}),
+    Object.freeze({id:'lmg', name:'M249 · Light machine gun', capacity:100, reserve:50, damage:1.05, pellets:1, interval:.08, reload:4.6, spread:.024, recoil:.02, noise:42, automatic:true, move:.86})
   ]);
+  // Rounds each gun gets from an ammunition box and from a supply crate (kept for guns not found yet).
+  const AMMO_DROPS = Object.freeze({
+    ammo: Object.freeze({rifle:20, pistol:6, shotgun:3, smg:16, magnum:3, marksman:2, lmg:15}),
+    supplies: Object.freeze({rifle:30, pistol:12, shotgun:6, smg:24, magnum:6, marksman:3, lmg:25})
+  });
+  // Headshot multipliers: a revolver round takes a head apart; a marksman round goes through a Warden's plating.
+  const HEADSHOT = Object.freeze({magnum:2.2}), WARDEN_HEADSHOT = Object.freeze({marksman:1.6});
   // Speeds in m/s. A lunge multiplies chase speed by lungeSpeed for lungeTime seconds when the
   // target is within lungeRange metres, then waits lungeCooldown seconds before the next one.
   const MONSTERS = Object.freeze({
     warden: Object.freeze({name:'Warden',hp:28,walk:1.2,chase:3.2,search:2.2,damage:68,radius:.58,height:2.8,head:2.35,hearing:17,vision:12,lungeRange:2.6,lungeSpeed:1.35,lungeTime:.5,lungeCooldown:3.4}),
     stalker: Object.freeze({name:'Stalker',hp:7,walk:1.6,chase:5.5,search:2.75,damage:32,radius:.34,height:2.65,head:2.12,hearing:11,vision:11,lungeRange:4.4,lungeSpeed:1.5,lungeTime:.42,lungeCooldown:2.6}),
     crawler: Object.freeze({name:'Crawler',hp:4,walk:1.9,chase:6.2,search:3.35,damage:19,radius:.43,height:.9,head:.55,hearing:8,vision:8,lungeRange:3.6,lungeSpeed:1.6,lungeTime:.35,lungeCooldown:2.8}),
-    shrieker: Object.freeze({name:'Shrieker',hp:6,walk:1.4,chase:4.4,search:2.6,damage:24,radius:.34,height:2.3,head:1.9,hearing:15,vision:16,lungeRange:3.2,lungeSpeed:1.45,lungeTime:.4,lungeCooldown:2.8})
+    shrieker: Object.freeze({name:'Shrieker',hp:6,walk:1.4,chase:4.4,search:2.6,damage:24,radius:.34,height:2.3,head:1.9,hearing:15,vision:16,lungeRange:3.2,lungeSpeed:1.45,lungeTime:.4,lungeCooldown:2.8}),
+    // The Graveyard's boss (boss: never in the shared pool, never stunned by a hit). Its lunge is the charge.
+    gravekeeper: Object.freeze({name:'The Gravekeeper',hp:90,walk:1.3,chase:3.6,search:2.4,damage:45,radius:.8,height:3.6,head:3.05,hearing:40,vision:30,lungeRange:4.5,lungeSpeed:1.5,lungeTime:.5,lungeCooldown:4,boss:true})
   });
   // Player movement (m/s) and stamina (0..1 per second). Sprinting reaches full speed over
   // sprintAccel seconds; at zero stamina the player is exhausted until exhaustedRecover.
@@ -27,16 +41,25 @@
     staminaDrain:1/7, staminaRegenIdle:1/5, staminaRegenMove:1/8,
     exhaustedRecover:.35, exhaustedSpeed:.85, jumpCost:.08, slideCost:.16, slideSpeed:7.5, slideTime:.65
   });
-  // The campaign: three floors, each with three objective items behind one exit. active: monsters awake on arrival;
+  // The campaign: three floors below and two above, each with three objective items behind one exit. active: monsters awake on arrival;
   // sleepers: bodies on the floor that wake when disturbed; ammo: supply boxes; release: seconds the exit takes to open
   // once powered (B1 keeps HollowHorror.RELEASE_SECONDS). weapons: gun -> room id where it lies, if not yet owned.
   const FLOORS = Object.freeze([
     Object.freeze({id:'b1', code:'B1', name:'Blackwater Ward', item:'power fuse', items:'power fuses', exit:'east loading shutter',
-      active:8, sleepers:5, ammo:16, release:10, weapons:Object.freeze({rifle:'armory'})}),
+      active:8, sleepers:5, ammo:16, release:10, weapons:Object.freeze({rifle:'armory', smg:'stores'})}),
     Object.freeze({id:'b2', code:'B2', name:'Records & Morgue', item:'lift keycard', items:'lift keycards', exit:'freight lift',
-      active:6, sleepers:12, ammo:18, release:15, weapons:Object.freeze({shotgun:'m-security', rifle:'m-intake'})}),
+      active:6, sleepers:12, ammo:18, release:15, weapons:Object.freeze({shotgun:'m-security', rifle:'m-intake', magnum:'m-chapel', smg:'m-boiler'})}),
     Object.freeze({id:'b3', code:'B3', name:'The Hollow', item:'floodgate key', items:'floodgate keys', exit:'surface floodgate',
-      active:10, sleepers:9, ammo:20, release:25, weapons:Object.freeze({rifle:'h-guard', shotgun:'h-cell-a'})})
+      active:10, sleepers:9, ammo:20, release:25, weapons:Object.freeze({rifle:'h-guard', shotgun:'h-cell-a', marksman:'h-control', lmg:'h-cistern', magnum:'h-store', smg:'h-cell-b'})}),
+    // Above ground (outdoor: a night sky, hedges or churchyard walls). S2's gate opens only once its boss is dead: the
+    // Gravekeeper rises from `grave` inside the open `arena` [x0, z0, x1, z1] (cells), and later calls the bodies in
+    // `summons` up out of their graves into the pool slots left free after active + sleepers.
+    Object.freeze({id:'garden', code:'S1', name:'The Overgrown Garden', item:'gate key', items:'gate keys', exit:'garden gate',
+      active:9, sleepers:11, ammo:22, release:30, outdoor:true, fountain:Object.freeze([17, 17]), weapons:Object.freeze({marksman:'g-potting', rifle:'g-orangery', magnum:'g-rose'})}),
+    Object.freeze({id:'graveyard', code:'S2', name:'Blackwater Graveyard', item:'crypt key', items:'crypt keys', exit:'cemetery gate',
+      active:8, sleepers:9, ammo:24, release:35, outdoor:true, weapons:Object.freeze({lmg:'y-gravedigger', shotgun:'y-vestry', marksman:'y-columbarium'}),
+      boss:Object.freeze({kind:'gravekeeper', grave:Object.freeze([29, 30]), arena:Object.freeze([21, 21, 33, 33]),
+        summons:Object.freeze([Object.freeze([23, 23]), Object.freeze([31, 23]), Object.freeze([23, 31])])})})
   ]);
   // Every run starts with the sidearm alone; the other guns lie somewhere below and are picked up when found.
   const STARTING_WEAPONS = Object.freeze(['pistol']);
@@ -130,6 +153,51 @@
     optional: [[8,3,8,8], [16,3,16,8], [22,3,22,8], [23,3,23,8], [8,26,8,31], [16,26,16,31], [22,26,22,31], [23,26,23,31], [6,3,33,3]],
     pillars: [[12,12], [22,12], [12,22], [22,22], [17,12], [12,17], [22,17]],
     debris: [[14,12], [20,12], [12,14], [12,20], [22,14], [22,20], [14,22], [20,22]]
+  }), Object.freeze({
+    // S1: hedged garden rooms around an open lawn with a fountain; `look` picks each room's outdoor dressing.
+    rooms: [
+      room('g-potting', '01 / Potting shed', 'armory', 4, 5, 3, 3, {look:'shed'}),
+      room('g-glasshouse', '02 / Glasshouse', 'maintenance', 10, 5, 5, 3, {fuse:true, look:'glasshouse'}),
+      room('g-icehouse', '03 / Ice house', 'security', 18, 5, 3, 3, {shelter:true, look:'icehouse'}),
+      room('g-orangery', '04 / Orangery', 'lounge', 24, 5, 5, 3, {look:'orangery'}),
+      room('g-herb', '05 / Physic garden', 'infirmary', 4, 12, 3, 3, {look:'herb'}),
+      room('g-bothy', '06 / Bothy', 'security', 4, 19, 3, 3, {shelter:true, look:'bothy'}),
+      room('g-aviary', '07 / Aviary', 'lounge', 28, 12, 3, 3, {look:'aviary'}),
+      room('g-rose', '08 / Rose walk', 'lounge', 28, 19, 3, 3, {look:'rose'}),
+      room('g-wild', '09 / Wild garden', 'morgue', 4, 28, 3, 3, {look:'wild'}),
+      room('g-cottage', '10 / Gardener\'s cottage', 'morgue', 10, 28, 5, 3, {fuse:true, look:'cottage'}),
+      room('g-summer', '11 / Summerhouse', 'security', 18, 28, 3, 3, {shelter:true, look:'summerhouse'}),
+      room('g-folly', '12 / The Folly', 'maintenance', 24, 28, 5, 3, {fuse:true, look:'folly'})
+    ],
+    halls: [[1,1,33,2], [1,1,2,33], [32,1,33,33], [1,32,33,33], [1,9,33,10], [1,24,33,25], [9,9,10,25], [24,9,25,25],
+      [11,11,23,23], [1,16,10,17], [24,16,33,17]],
+    optional: [[8,3,8,8], [16,3,16,8], [22,3,22,8], [30,3,30,8], [8,26,8,31], [16,26,16,31], [22,26,22,31], [30,26,30,31],
+      [3,11,3,15], [26,11,26,15], [26,18,26,22], [3,18,3,22]],
+    pillars: [[13,13], [14,13], [13,14], [21,13], [20,13], [21,14], [13,21], [14,21], [13,20], [21,21], [20,21], [21,20]],
+    debris: [[17,12], [12,17], [22,17], [17,22], [15,15], [19,15], [15,19], [19,19]]
+  }), Object.freeze({
+    // S2: crypts and chapels along gravel walks; the south-east plot before the gate is kept open for the boss fight.
+    rooms: [
+      room('y-sexton', '01 / Sexton\'s lodge', 'infirmary', 4, 5, 3, 3, {look:'lodge'}),
+      room('y-chapel', '02 / Cemetery chapel', 'maintenance', 10, 5, 5, 3, {fuse:true, look:'chapel'}),
+      room('y-crypt-a', '03 / Crypt of St Agnes', 'security', 18, 5, 3, 3, {shelter:true, look:'crypt'}),
+      room('y-gravedigger', '04 / Gravedigger\'s hut', 'armory', 23, 5, 3, 3, {look:'hut'}),
+      room('y-columbarium', '05 / Columbarium', 'lounge', 28, 5, 3, 3, {look:'columbarium'}),
+      room('y-ossuary', '06 / Ossuary', 'morgue', 4, 12, 3, 3, {look:'ossuary'}),
+      room('y-mausoleum', '07 / Blackwater mausoleum', 'morgue', 13, 12, 5, 5, {fuse:true, look:'mausoleum'}),
+      room('y-charnel', '08 / Charnel house', 'morgue', 27, 12, 3, 3, {fuse:true, look:'charnel'}),
+      room('y-crypt-b', '09 / Crypt of St Jude', 'security', 4, 19, 3, 3, {shelter:true, look:'crypt'}),
+      room('y-vestry', '10 / Vestry', 'lounge', 22, 12, 3, 3, {look:'vestry'}),
+      room('y-paupers', '11 / Paupers\' chapel', 'lounge', 4, 28, 3, 3, {look:'paupers'}),
+      room('y-embalm', '12 / Embalming house', 'maintenance', 10, 28, 5, 3, {look:'embalm'}),
+      room('y-crypt-c', '13 / Crypt of St Mary', 'security', 16, 28, 3, 3, {shelter:true, look:'crypt'})
+    ],
+    halls: [[1,1,33,2], [1,1,2,33], [32,1,33,33], [1,32,33,33], [1,9,33,10], [9,9,10,33], [19,9,20,33], [1,16,10,17],
+      [1,24,20,25], [11,19,20,20], [21,17,33,19], [23,20,24,20], [29,20,30,20], [21,21,33,33]],
+    optional: [[8,3,8,8], [16,3,16,8], [21,3,21,8], [26,3,26,8], [3,11,3,15], [8,11,8,15], [11,11,11,18], [26,11,26,16], [31,11,31,16],
+      [8,26,8,31], [15,26,15,31], [20,26,20,31], [3,18,3,22], [8,18,8,22], [26,20,27,20]],
+    pillars: [],
+    debris: [[10,21], [19,22], [22,18], [25,18], [28,18], [31,18]]
   })]);
   function generateFloor(index, random) {
     const plan = FLOOR_PLANS[Math.max(0, Math.min(FLOOR_PLANS.length - 1, index | 0))];
@@ -235,8 +303,10 @@
   function insideRoom(room,x,z,margin){margin=margin||0;return x>room.x*CELL+margin&&x<(room.x+room.w)*CELL-margin&&z>room.z*CELL+margin&&z<(room.z+room.d)*CELL-margin;}
   function weaponDamage(kind,headshot,distance,monsterKind){
     const w=WEAPONS.find(v=>v.id===kind)||WEAPONS[0];
-    const falloff=kind==='shotgun'?Math.max(.22,1-Math.max(0,distance-7)/25):kind==='pistol'?Math.max(.6,1-Math.max(0,distance-18)/70):1;
-    return w.damage*falloff*(headshot?(monsterKind==='warden'?1.1:1.85):1);
+    const falloff=kind==='shotgun'?Math.max(.22,1-Math.max(0,distance-7)/25):kind==='pistol'?Math.max(.6,1-Math.max(0,distance-18)/70):
+      kind==='smg'?Math.max(.45,1-Math.max(0,distance-8)/24):kind==='magnum'?Math.max(.7,1-Math.max(0,distance-20)/60):
+      kind==='lmg'?Math.max(.75,1-Math.max(0,distance-25)/60):1;
+    return w.damage*falloff*(headshot?(monsterKind==='warden'?WARDEN_HEADSHOT[kind]||1.1:HEADSHOT[kind]||1.85):1);
   }
-  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,MONSTERS,PLAYER,FLOORS,STARTING_WEAPONS,SLEEP,seeded,generateMaze,generateFloor,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage,sleepDisturbance,shotWakeDelay};
+  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,AMMO_DROPS,MONSTERS,PLAYER,FLOORS,STARTING_WEAPONS,SLEEP,seeded,generateMaze,generateFloor,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage,sleepDisturbance,shotWakeDelay};
 });

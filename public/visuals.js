@@ -685,12 +685,261 @@
     });
   }
 
+  // ---------- above ground ----------
+  // Pointed-leaf (lens) or round stamp of len x wid px at (cx, cy), wrapping around the tile: fn(index, u, v, edge) for
+  // every pixel inside, u along the stamp and v across it in -1..1, edge 0 on the outline and 1 on the axis.
+  function stamp(n, cx, cy, len, wid, angle, round, fn) {
+    const c = Math.cos(angle), s = Math.sin(angle), r = Math.ceil(Math.max(len, wid)) + 1;
+    const ex = Math.ceil(Math.abs(c) * len + Math.abs(s) * wid) + 1, ey = Math.ceil(Math.abs(s) * len + Math.abs(c) * wid) + 1;
+    for (let y = Math.floor(cy) - Math.min(r, ey); y <= Math.ceil(cy) + Math.min(r, ey); y++) {
+      const row = (((y % n) + n) % n) * n, dy = y - cy;
+      for (let x = Math.floor(cx) - Math.min(r, ex); x <= Math.ceil(cx) + Math.min(r, ex); x++) {
+        const dx = x - cx, u = (dx * c + dy * s) / len, v = (dy * c - dx * s) / wid;
+        const limit = round ? 1 - u * u : (1 - u * u) * (1 - u * u);
+        if (limit <= 0 || v * v >= limit) continue;
+        fn(row + (((x % n) + n) % n), u, v, 1 - Math.sqrt(v * v / limit));
+      }
+    }
+  }
+
+  // One 3 m wide x 3.2 m tall face of an overgrown box hedge (image top = hedge top): overlapping glossy leaves in
+  // clumps, deep dark gaps between sprigs, a few dead leaves, and bare woody stems and leaf litter at the foot.
+  function gardenHedge(n, seed) {
+    const N = n * n, random = seeded(seed * 4099 + 31), mm = n / 3000;
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N).fill(1), height = new Float32Array(N).fill(-38), top = new Float32Array(N).fill(-1e9);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 5, [[3, 3, 0.4], [8, 8, 0.35], [19, 19, 0.25]]), q, n);
+    const D = noiseField(n, seed + 6, [[64, 64, 0.5], [n >> 1, n >> 1, 0.5]]);
+    for (let i = 0; i < N; i++) { rgb[i * 3] = 0.012; rgb[i * 3 + 1] = 0.022; rgb[i * 3 + 2] = 0.01; }
+    // Woody stems in the gaps, mostly near the foot.
+    for (let i = 0; i < 70; i++) {
+      const x = random() * n, y = n * (0.55 + random() * 0.45), len = n * (0.05 + random() * 0.18), a = -Math.PI / 2 + (random() - 0.5) * 1.1;
+      stroke(n, x, y, x + Math.cos(a) * len, y + Math.sin(a) * len, Math.max(0.6, 7 * mm), (k, c) => {
+        if (c < 0.3 || height[k] > -20) return;
+        rgb[k * 3] = 0.075; rgb[k * 3 + 1] = 0.058; rgb[k * 3 + 2] = 0.038; rough[k] = 0.95; height[k] = -24 + c * 6;
+      });
+    }
+    const count = Math.round(30000 * (n >= 512 ? 1 : 0.75));
+    for (let i = 0; i < count; i++) {
+      const x = random() * n, y = random() * n, k0 = (y | 0) * n + (x | 0), clump = M[k0], hm = 3.2 * (1 - y / n);
+      // Thinner at the foot and in the gaps between clumps.
+      const keep = smoothstep(0.08, 0.5, hm) * (0.35 + 0.9 * smoothstep(0.3, 0.62, clump));
+      if (random() > keep) continue;
+      const len = (20 + random() * 16) * mm, wid = len * (0.42 + random() * 0.14), angle = random() * TAU;
+      const layer = (clump - 0.5) * 44 + random() * 22 - 6, dead = random() < 0.018;
+      const tone = 0.75 + random() * 0.5, yellow = random() * 0.35;
+      const r0 = dead ? 0.13 : (0.06 + 0.06 * yellow) * tone, g0 = dead ? 0.1 : (0.16 + 0.04 * yellow) * tone, b0 = dead ? 0.05 : 0.045 * tone;
+      const lit = Math.cos(angle - 2.2) * 0.18;
+      stamp(n, x, y, Math.max(0.8, len), Math.max(0.5, wid), angle, false, (k, u, v, e) => {
+        const h = layer + e * 3.2 - u * 1.5;
+        if (h <= top[k]) return;
+        top[k] = h; height[k] = h - (Math.abs(v) < 0.12 ? 0.5 : 0);
+        const shade = (1 + lit * u) * (0.82 + 0.18 * e) * (Math.abs(v) < 0.1 ? 0.8 : 1);
+        rgb[k * 3] = r0 * shade; rgb[k * 3 + 1] = g0 * shade; rgb[k * 3 + 2] = b0 * shade;
+        rough[k] = dead ? 0.85 : 0.42 + (1 - e) * 0.25 + D[k] * 0.12;
+      });
+    }
+    // Leaves deep in the hedge sit in shadow; litter collects along the foot.
+    for (let y = 0; y < n; y++) {
+      const hm = 3.2 * (1 - (y + 0.5) / n), foot = 1 - smoothstep(0.02, 0.22, hm);
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x, ao = 0.3 + 0.7 * smoothstep(-36, 14, height[i]), d = D[i];
+        let r = rgb[i * 3] * ao, g = rgb[i * 3 + 1] * ao, b = rgb[i * 3 + 2] * ao;
+        if (foot > 0) { const f = foot * (0.6 + 0.4 * d); r += (0.07 - r) * f; g += (0.055 - g) * f; b += (0.035 - b) * f; rough[i] += (0.95 - rough[i]) * f; height[i] += (-30 + d * 14 - height[i]) * f * 0.7; }
+        rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b);
+      }
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3200 / n, 0.55);
+  }
+
+  // One 3 m cell of a neglected lawn: matted, overgrown blades lying in swirls, clover, moss, bare earth, fallen leaves
+  // and a few pale flowers that catch the torch.
+  function gardenLawn(n, seed) {
+    const N = n * n, random = seeded(seed * 6151 + 7), mm = n / 3000;
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N), top = new Float32Array(N).fill(-1e9);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.45], [7, 7, 0.35], [16, 16, 0.2]]), q, n);
+    const F = upsample(noiseField(q, seed + 3, [[2, 2, 0.6], [5, 5, 0.4]]), q, n), D = noiseField(n, seed + 4, [[48, 48, 0.4], [n >> 1, n >> 1, 0.6]]);
+    for (let i = 0; i < N; i++) {
+      const d = D[i], m = M[i];
+      rgb[i * 3] = 0.058 + d * 0.025; rgb[i * 3 + 1] = 0.07 + d * 0.025 + m * 0.025; rgb[i * 3 + 2] = 0.034 + d * 0.012;
+      rough[i] = 0.95; height[i] = (d - 0.5) * 4 + (m - 0.5) * 6;
+    }
+    const blades = Math.round(42000 * (n >= 512 ? 1 : 0.6));
+    for (let i = 0; i < blades; i++) {
+      const x = random() * n, y = random() * n, k0 = (y | 0) * n + (x | 0);
+      if (random() > 0.15 + 0.95 * smoothstep(0.28, 0.55, M[k0])) continue;
+      const a = F[k0] * TAU * 1.5 + (random() - 0.5) * 2.2, len = (40 + random() * 80) * mm;
+      const layer = random() * 5 + M[k0] * 4, tone = 0.7 + random() * 0.6, dry = smoothstep(0.55, 0.85, D[k0]) * random();
+      stroke(n, x, y, x + Math.cos(a) * len, y + Math.sin(a) * len, Math.max(0.55, 1.1 * mm), (k, c, t) => {
+        const h = layer + t * 2.5 + c;
+        if (c < 0.35 || h <= top[k]) return;
+        top[k] = h; height[k] = Math.max(height[k], h);
+        const tip = t * t;
+        rgb[k * 3] = (0.055 + 0.1 * dry + tip * 0.04) * tone; rgb[k * 3 + 1] = (0.16 + 0.02 * dry + tip * 0.06) * tone; rgb[k * 3 + 2] = (0.04 + tip * 0.01) * tone;
+        rough[k] = 0.76 + 0.16 * dry;
+      });
+    }
+    // Clover and moss patches, then the fallen leaves and a few flowers on top.
+    for (let i = 0; i < 180; i++) {
+      const x = random() * n, y = random() * n, r = (9 + random() * 6) * mm;
+      for (let j = 0; j < 3; j++) {
+        const a = j * TAU / 3 + random() * 0.4;
+        stamp(n, x + Math.cos(a) * r * 0.9, y + Math.sin(a) * r * 0.9, r, r, a, true, (k, u, v, e) => {
+          const h = 7 + e * 1.5; if (h <= top[k]) return; top[k] = h; height[k] = h;
+          rgb[k * 3] = 0.06; rgb[k * 3 + 1] = 0.15 + e * 0.03; rgb[k * 3 + 2] = 0.05; rough[k] = 0.68;
+        });
+      }
+    }
+    for (let i = 0; i < 40; i++) {
+      const x = random() * n, y = random() * n, len = (24 + random() * 20) * mm, a = random() * TAU, rust = random();
+      stamp(n, x, y, len, len * (0.6 + random() * 0.3), a, true, (k, u, v, e) => {
+        const h = 9 + e * 1.2; if (h <= top[k]) return; top[k] = h; height[k] = h;
+        const s = 0.8 + 0.2 * e;
+        rgb[k * 3] = (0.13 + rust * 0.06) * s; rgb[k * 3 + 1] = (0.08 + rust * 0.03) * s; rgb[k * 3 + 2] = 0.035 * s; rough[k] = 0.8;
+      });
+    }
+    for (let i = 0; i < 26; i++) {
+      const x = random() * n, y = random() * n, r = (6 + random() * 4) * mm;
+      for (let j = 0; j < 5; j++) {
+        const a = j * TAU / 5;
+        stamp(n, x + Math.cos(a) * r, y + Math.sin(a) * r, r, r * 0.5, a, true, (k, u, v, e) => {
+          const h = 11 + e; if (h <= top[k]) return; top[k] = h; height[k] = h;
+          rgb[k * 3] = 0.62; rgb[k * 3 + 1] = 0.6; rgb[k * 3 + 2] = 0.52; rough[k] = 0.55;
+        });
+      }
+      stamp(n, x, y, r * 0.5, r * 0.5, 0, true, k => { top[k] = 12; height[k] = 12; rgb[k * 3] = 0.55; rgb[k * 3 + 1] = 0.42; rgb[k * 3 + 2] = 0.08; rough[k] = 0.6; });
+    }
+    for (let i = 0; i < N; i++) {
+      const ao = 0.55 + 0.45 * smoothstep(-2, 9, height[i]);
+      rgb[i * 3] = sat(rgb[i * 3] * ao); rgb[i * 3 + 1] = sat(rgb[i * 3 + 1] * ao); rgb[i * 3 + 2] = sat(rgb[i * 3 + 2] * ao);
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3000 / n, 0.8);
+  }
+
+  // One 3 m wide x 3.2 m tall face of an old churchyard wall: rubble stone laid in rough courses, deep crumbling mortar,
+  // moss in the joints and along the coping, lichen rosettes, rain streaks from the top and damp at the foot.
+  function graveWall(n, seed) {
+    const N = n * n, random = seeded(seed * 2909 + 13), mm = n / 3000, py = 3200 / n;
+    const D = noiseField(n, seed + 1, [[40, 40, 0.3], [120, 120, 0.35], [n >> 1, n >> 1, 0.35]]);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.4], [8, 8, 0.35], [19, 19, 0.25]]), q, n);
+    const L = upsample(noiseField(q, seed + 3, [[12, 12, 0.5], [29, 29, 0.5]]), q, n), S = noiseField(n, seed + 4, [[40, 3, 0.55], [104, 5, 0.45]]);
+    // Courses from the foot up (px rows, image top = wall top), each with its own stones (px columns, wrapping).
+    const courses = [];
+    for (let y = n; y > 0;) {
+      const h = Math.min(y, Math.round((140 + random() * 240) / py));
+      const stones = [];
+      let x = random() * n, total = 0;
+      while (total < n) { const w = Math.round((180 + random() * 440) * mm); stones.push({ x0: x + total, w: Math.min(w, n - total), tone: (random() - 0.5) * 0.11, warm: random(), bulge: 4 + random() * 9, tilt: (random() - 0.5) * 0.02 }); total += w; }
+      courses.push({ y0: y - h, y1: y, stones });
+      y -= h;
+    }
+    const rowCourse = new Int16Array(n);
+    courses.forEach((c, i) => { for (let y = Math.max(0, c.y0); y < c.y1; y++) rowCourse[y] = i; });
+    const joint = 16 * mm, round = 45 * mm;
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N);
+    for (let y = 0; y < n; y++) {
+      const c = courses[rowCourse[y]], hm = 3.2 * (1 - (y + 0.5) / n), dyTop = y + 0.5 - Math.max(0, c.y0), dyBot = c.y1 - y - 0.5;
+      const coping = smoothstep(2.9, 3.15, hm), damp = 1 - smoothstep(0.1, 0.9, hm);
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x, d = D[i], m = M[i];
+        let st = c.stones[0], lx = 0;
+        for (const s of c.stones) { const off = (((x - s.x0) % n) + n) % n; if (off < s.w) { st = s; lx = off + 0.5; break; } }
+        const dx = Math.min(lx, st.w - lx), dyy = Math.min(dyTop, dyBot);
+        let edge = Math.min(dx, dyy);
+        if (dx < round && dyy < round) edge = round - Math.hypot(round - dx, round - dyy);
+        edge += (L[i] - 0.5) * 50 * mm + (d - 0.5) * 16 * mm;
+        const stone = smoothstep(joint * 0.5, joint * 0.5 + 1.2, edge);
+        let r, g, b, ro, h;
+        const t = 0.21 + st.tone + (d - 0.5) * 0.12, warm = st.warm;
+        r = t * (1 + 0.08 * warm); g = t * (0.98 + 0.02 * warm); b = t * (0.9 - 0.06 * warm);
+        ro = 0.88 + (d - 0.5) * 0.1;
+        h = st.bulge * smoothstep(0, round * 1.2, edge) + (d - 0.5) * 3 + st.tilt * (lx - st.w / 2);
+        if (stone < 1) {
+          const mortar = 0.13 + d * 0.06;
+          r += (mortar * 1.02 - r) * (1 - stone); g += (mortar - g) * (1 - stone); b += (mortar * 0.9 - b) * (1 - stone);
+          ro += (0.97 - ro) * (1 - stone); h += (-11 + (d - 0.5) * 4 - h) * (1 - stone);
+        }
+        // Moss: in the joints and on the coping first, then over damp stone.
+        const mossAmount = smoothstep(0.5, 0.75, m * 0.7 + (1 - stone) * 0.35 + coping * 0.5 + damp * 0.15);
+        if (mossAmount > 0) { const v = mossAmount * (0.6 + 0.4 * d); r += (0.06 - r) * v; g += (0.085 - g) * v; b += (0.035 - b) * v; ro += (0.98 - ro) * v; h += 2.5 * v; }
+        const lichen = smoothstep(0.74, 0.8, M[(i * 7 + 11) % N] * 0.5 + d * 0.5) * stone * 0.5;
+        if (lichen > 0) { r += (0.34 - r) * lichen; g += (0.35 - g) * lichen; b += (0.28 - b) * lichen; h += 0.5 * lichen; }
+        const grime = smoothstep(0.35, 0.8, m) * 0.4;
+        r *= 1 - grime; g *= 1 - grime; b *= 1 - grime * 1.05;
+        const streak = smoothstep(0.55, 0.85, S[i]) * smoothstep(1.2, 3.1, hm) * 0.5;
+        r *= 1 - streak; g *= 1 - streak; b *= 1 - streak * 0.9;
+        const wet = damp * (0.5 + 0.5 * m);
+        r *= 1 - 0.45 * wet; g *= 1 - 0.42 * wet; b *= 1 - 0.38 * wet; ro -= 0.3 * wet;
+        rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b); rough[i] = ro; height[i] = h;
+      }
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3200 / n, 1.2);
+  }
+
+  // One 3 m cell of churchyard ground: dark wet loam and trodden gravel, dead grass in tussocks, moss, fallen leaves
+  // and standing water in the low spots.
+  function graveSoil(n, seed) {
+    const N = n * n, random = seeded(seed * 9973 + 5), mm = n / 3000;
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N), top = new Float32Array(N).fill(-1e9);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.45], [7, 7, 0.35], [15, 15, 0.2]]), q, n);
+    const G = upsample(noiseField(q, seed + 3, [[2, 2, 0.5], [5, 5, 0.3], [11, 11, 0.2]]), q, n), D = noiseField(n, seed + 4, [[40, 40, 0.35], [n >> 1, n >> 1, 0.65]]);
+    for (let i = 0; i < N; i++) {
+      const d = D[i], m = M[i];
+      rgb[i * 3] = 0.085 + d * 0.035; rgb[i * 3 + 1] = 0.068 + d * 0.028; rgb[i * 3 + 2] = 0.05 + d * 0.02;
+      rough[i] = 0.92; height[i] = (m - 0.5) * 12 + (d - 0.5) * 3; top[i] = height[i];
+    }
+    // Gravel where the paths are trodden.
+    const pebbles = Math.round(9000 * (n >= 512 ? 1 : 0.5));
+    for (let i = 0; i < pebbles; i++) {
+      const x = random() * n, y = random() * n, k0 = (y | 0) * n + (x | 0);
+      if (random() > smoothstep(0.42, 0.62, G[k0])) continue;
+      const r = (5 + random() * 10) * mm, tone = 0.11 + random() * 0.13, warm = random() * 0.03, base = height[k0];
+      stamp(n, x, y, Math.max(0.6, r), Math.max(0.5, r * (0.6 + random() * 0.4)), random() * TAU, true, (k, u, v, e) => {
+        const h = base + 2 + e * r / mm * 0.35; if (h <= top[k]) return; top[k] = h; height[k] = h;
+        const s = 0.75 + 0.25 * e;
+        rgb[k * 3] = (tone + warm) * s; rgb[k * 3 + 1] = tone * s; rgb[k * 3 + 2] = (tone - warm) * 0.95 * s; rough[k] = 0.7;
+      });
+    }
+    // Dead grass in tussocks away from the gravel.
+    const blades = Math.round(16000 * (n >= 512 ? 1 : 0.6));
+    for (let i = 0; i < blades; i++) {
+      const x = random() * n, y = random() * n, k0 = (y | 0) * n + (x | 0);
+      if (random() > smoothstep(0.5, 0.7, M[k0]) * (1 - smoothstep(0.45, 0.6, G[k0]))) continue;
+      const a = random() * TAU, len = (40 + random() * 70) * mm, tone = 0.6 + random() * 0.5, green = random() < 0.3, base = height[k0];
+      stroke(n, x, y, x + Math.cos(a) * len, y + Math.sin(a) * len, Math.max(0.55, 1 * mm), (k, c, t) => {
+        const h = base + 4 + t * 3; if (c < 0.35 || h <= top[k]) return; top[k] = h; height[k] = h;
+        rgb[k * 3] = (green ? 0.08 : 0.2) * tone; rgb[k * 3 + 1] = (green ? 0.12 : 0.16) * tone; rgb[k * 3 + 2] = (green ? 0.04 : 0.08) * tone; rough[k] = 0.8;
+      });
+    }
+    for (let i = 0; i < 60; i++) {
+      const x = random() * n, y = random() * n, len = (28 + random() * 22) * mm, rust = random(), base = height[(y | 0) * n + (x | 0)];
+      stamp(n, x, y, len, len * (0.6 + random() * 0.3), random() * TAU, true, (k, u, v, e) => {
+        const h = base + 6 + e; if (h <= top[k]) return; top[k] = h; height[k] = h;
+        rgb[k * 3] = 0.11 + rust * 0.05; rgb[k * 3 + 1] = 0.07 + rust * 0.025; rgb[k * 3 + 2] = 0.035; rough[k] = 0.75;
+      });
+    }
+    // Mud in the hollows: dark and flat.
+    for (let i = 0; i < N; i++) {
+      const m = M[i], wet = smoothstep(0.27, 0.22, m), damp = smoothstep(0.36, 0.27, m) * (1 - wet);
+      let r = rgb[i * 3], g = rgb[i * 3 + 1], b = rgb[i * 3 + 2];
+      const ao = 0.6 + 0.4 * smoothstep(-8, 8, height[i]);
+      r *= ao * (1 - 0.55 * wet - 0.2 * damp); g *= ao * (1 - 0.52 * wet - 0.2 * damp); b *= ao * (1 - 0.45 * wet - 0.18 * damp);
+      rough[i] += (0.86 - rough[i]) * wet; height[i] += (-5 - height[i]) * wet;
+      rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b);
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3000 / n, 0.9);
+  }
+
   const SURFACES = {
     'ward-wall': [wardWall, [512, 1024, 1024]], 'ward-floor': [wardFloor, [512, 1024, 1024]],
     'ward-ceiling': [wardCeiling, [256, 512, 512]], 'ward-macro': [wardMacro, [256, 256, 256]], 'ward-decals': [wardDecals, [128, 256, 256]],
     'gun-metal': [gunMetal, [256, 256, 256]], 'gun-polymer': [gunPolymer, [256, 256, 256]], 'gun-wood': [gunWood, [256, 256, 256]],
-    'gun-rubber': [gunRubber, [128, 128, 128]], 'gun-fabric': [gunFabric, [256, 256, 256]]
+    'gun-rubber': [gunRubber, [128, 128, 128]], 'gun-fabric': [gunFabric, [256, 256, 256]],
+    'garden-hedge': [gardenHedge, [256, 512, 1024]], 'garden-lawn': [gardenLawn, [256, 512, 1024]],
+    'grave-wall': [graveWall, [256, 512, 1024]], 'grave-soil': [graveSoil, [256, 512, 1024]]
   };
+  // Surfaces only the floors above ground use: workers paint them after every other surface, and the boot never
+  // waits for them (see surfacePlan and prepaint.js).
+  const LATE_SURFACES = Object.freeze(['garden-hedge', 'garden-lawn', 'grave-wall', 'grave-soil']);
   // standard()'s shared material maps are surfaces too ('material-skin', ...), so texture workers can paint them.
   const MATERIAL_KINDS = ['wall', 'floor', 'metal', 'skin', 'fabric', 'concrete', 'wood'];
   for (const kind of MATERIAL_KINDS) SURFACES['material-' + kind] = [() => materialSurface(kind), [256, 256, 256]];
@@ -761,14 +1010,14 @@
   }
 
   // Every surface at a quality tier split into `workers` lists of similar pixel counts. `order` is a list of kind lists:
-  // the first group leads every list, then the next, then the kinds in none; each group largest first.
+  // the first group leads every list, then the next, then the kinds in none, then LATE_SURFACES; each group largest first.
   function surfacePlan(quality, workers, order) {
     const tier = Object.prototype.hasOwnProperty.call(DETAIL, quality) ? DETAIL[quality] : detail, groups = order || [], rank = new Map();
     groups.forEach((kinds, i) => kinds.forEach(kind => { if (!rank.has(kind)) rank.set(kind, i); }));
     const lists = Array.from({ length: Math.max(1, Math.floor(workers) || 1) }, () => ({ cost: 0, kinds: [] }));
     Object.keys(SURFACES).map(kind => {
       const n = SURFACES[kind][1][tier];
-      return { kind, rank: rank.has(kind) ? rank.get(kind) : groups.length, cost: kind === 'ward-decals' ? n * n * 8 : n * n };
+      return { kind, rank: rank.has(kind) ? rank.get(kind) : groups.length + (LATE_SURFACES.includes(kind) ? 1 : 0), cost: kind === 'ward-decals' ? n * n * 8 : n * n };
     }).sort((a, b) => a.rank - b.rank || b.cost - a.cost).forEach(job => {
       const target = lists.reduce((best, list) => list.cost < best.cost ? list : best);
       target.kinds.push(job.kind); target.cost += job.cost;
@@ -1027,57 +1276,6 @@
     return add(THREE, parent, geom, mat, x, y, z, w, h, d, rx, ry, rz);
   }
 
-  // Off-centre cross sections, not scaled spheres: a collapsed cheek, shoulder or
-  // knuckle keeps its broken silhouette even when animation replaces joint Euler angles.
-  function anatomy(THREE, parent, mat, shape, x, y, z, w, h, d, rx, ry, rz) {
-    const geom = geometry(THREE, 'creature:hull:' + shape, () => {
-      // y, half-width, half-depth, lateral displacement, forward displacement.
-      const profiles = {
-        skull: [[-1, .36, .51, .06, .04], [-.46, .79, .78, -.06, 0], [.32, 1, .90, .03, -.06], [.80, .80, .82, -.12, -.16], [1, .38, .50, -.19, -.13]],
-        shard: [[-1, .22, .26, .16, 0], [-.32, .87, .91, -.09, .11], [.49, 1, .65, .08, -.07], [1, .12, .24, -.13, .08]],
-        chest: [[-1, .37, .67, .13, .13], [-.40, .64, .78, -.08, .04], [.30, 1, 1, -.10, -.10], [.78, .94, .88, .04, -.05], [1, .40, .72, .12, -.15]],
-        hump: [[-1, .66, .63, .18, .05], [-.35, 1, .97, -.05, -.08], [.30, .89, 1, -.18, -.05], [.86, .51, .76, -.25, -.13], [1, .14, .31, -.31, -.11]],
-        pelvis: [[-1, .51, .54, .20, .05], [-.50, .81, .66, .05, .15], [.25, 1, 1, -.09, -.03], [1, .64, .61, -.20, -.11]],
-        palm: [[-1, .52, .64, .10, .12], [-.50, 1, .65, -.13, .04], [.52, .78, .81, .05, 0], [1, .49, .58, .14, -.10]]
-      }[shape];
-      const section = [[-.64, .82], [.31, 1], [.92, .42], [.82, -.55], [.30, -.90], [-.55, -.80], [-1, -.15], [-.91, .45]];
-      const rings = profiles.map(([yy, ww, dd, xx, zz]) => section.map(([a, b]) => [xx + a * ww, yy, zz + b * dd]));
-      const positions = [], uv = [];
-      const face = (a, b, c, ta, tb, tc) => { positions.push(...a, ...b, ...c); uv.push(...ta, ...tb, ...tc); };
-      for (let row = 0; row < rings.length - 1; row++) for (let j = 0; j < 8; j++) {
-        // Leave the lower face physically open; sockets and a recessed mouth sit
-        // inside this shell rather than being a smile painted over a round head.
-        if (shape === 'skull' && row < 2 && (j === 0 || j === 1 || j === 7)) continue;
-        const next = (j + 1) % 8, a = rings[row][j], b = rings[row][next], c = rings[row + 1][next], d0 = rings[row + 1][j];
-        const ta = [j / 8, row / (rings.length - 1)], tb = [(j + 1) / 8, ta[1]];
-        const tc = [tb[0], (row + 1) / (rings.length - 1)], td = [ta[0], tc[1]];
-        face(a, b, c, ta, tb, tc); face(a, c, d0, ta, tc, td);
-      }
-      for (const row of [0, rings.length - 1]) {
-        if (shape === 'skull' && row === 0) continue;
-        const p = profiles[row], center = [p[3], p[0], p[4]];
-        for (let j = 0; j < 8; j++) {
-          const a = rings[row][j], b = rings[row][(j + 1) % 8];
-          const ta = [a[0] * .5 + .5, a[2] * .5 + .5], tb = [b[0] * .5 + .5, b[2] * .5 + .5];
-          if (row === 0) face(center, b, a, [.5, .5], tb, ta);
-          else face(center, a, b, [.5, .5], ta, tb);
-        }
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-      g.computeVertexNormals(); return g;
-    });
-    return add(THREE, parent, geom, mat, x, y, z, w, h, d, rx, ry, rz);
-  }
-
-  function sinew(THREE, parent, mat, from, to, radius) {
-    const a = new THREE.Vector3(...from), b = new THREE.Vector3(...to), delta = b.clone().sub(a);
-    const geom = geometry(THREE, 'creature:taper', () => new THREE.CylinderGeometry(.55, 1, 1, 5, 1));
-    const m = add(THREE, parent, geom, mat, (a.x + b.x) * .5, (a.y + b.y) * .5, (a.z + b.z) * .5, radius, delta.length(), radius);
-    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize()); return m;
-  }
-
   function cyl(THREE, parent, mat, x, y, z, top, bottom, len, rx, ry, rz, sides) {
     const count = sides || 10;
     const geom = geometry(THREE, 'cylinder:' + top + ':' + bottom + ':' + len + ':' + count,
@@ -1183,18 +1381,20 @@
   }
 
   // Smooth deterministic 3D value noise in [0, 1] for per-vertex tints.
+  function hash3(a, b, c) {
+    let v = (Math.imul(a, 374761393) + Math.imul(b, 668265263) + Math.imul(c, 1274126177)) | 0;
+    v = Math.imul(v ^ (v >>> 13), 1103515245); return ((v ^ (v >>> 16)) >>> 0) / 4294967296;
+  }
+  // (Closure-free: creature consolidation samples it several times per vertex.)
   function noise3(x, y, z) {
     const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z), tx = x - xi, ty = y - yi, tz = z - zi;
-    const h = (a, b, c) => {
-      let v = (Math.imul(a, 374761393) + Math.imul(b, 668265263) + Math.imul(c, 1274126177)) | 0;
-      v = Math.imul(v ^ (v >>> 13), 1103515245); return ((v ^ (v >>> 16)) >>> 0) / 4294967296;
-    };
     const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty), sz = tz * tz * (3 - 2 * tz);
-    const plane = c => {
-      const a = h(xi, yi, c) + (h(xi + 1, yi, c) - h(xi, yi, c)) * sx, b = h(xi, yi + 1, c) + (h(xi + 1, yi + 1, c) - h(xi, yi + 1, c)) * sx;
-      return a + (b - a) * sy;
-    };
-    const near = plane(zi); return near + (plane(zi + 1) - near) * sz;
+    let a = hash3(xi, yi, zi), b = hash3(xi, yi + 1, zi);
+    a += (hash3(xi + 1, yi, zi) - a) * sx; b += (hash3(xi + 1, yi + 1, zi) - b) * sx;
+    const near = a + (b - a) * sy;
+    a = hash3(xi, yi, zi + 1); b = hash3(xi, yi + 1, zi + 1);
+    a += (hash3(xi + 1, yi, zi + 1) - a) * sx; b += (hash3(xi + 1, yi + 1, zi + 1) - b) * sx;
+    return near + (a + (b - a) * sy - near) * sz;
   }
 
   // One organic material for every creature: vertex tints carry the anatomy, and a per-vertex `wet` value lets the
@@ -1205,14 +1405,15 @@
     const TSL = global.TSL;
     if (!THREE.MeshStandardNodeMaterial || !TSL) {
       const plain = standard(THREE, key, 0xffffff, 0.91, 0, 'skin');
-      plain.vertexColors = true; plain.flatShading = true; plain.side = THREE.DoubleSide;
+      plain.vertexColors = true; plain.side = THREE.DoubleSide;
       return plain;
     }
     const maps = materialMaps(THREE, 'skin');
     const m = new THREE.MeshStandardNodeMaterial({ color: 0xffffff, roughness: 0.91, metalness: 0, map: maps.albedo,
-      normalMap: maps.normal, roughnessMap: maps.roughness, vertexColors: true, flatShading: true, side: THREE.DoubleSide });
-    m.normalScale.set(0.18, 0.18);
-    m.roughnessNode = TSL.mix(TSL.float(0.95), TSL.float(0.4), TSL.attribute('wet', 'float')).mul(TSL.texture(maps.roughness).g.mul(0.4).add(0.64));
+      normalMap: maps.normal, roughnessMap: maps.roughness, vertexColors: true, side: THREE.DoubleSide });
+    m.normalScale.set(0.7, 0.7);
+    // Clammy skin and raw meat catch the torch in tight highlights; gowns, straps and bone stay dry.
+    m.roughnessNode = TSL.mix(TSL.float(0.95), TSL.float(0.24), TSL.attribute('wet', 'float')).mul(TSL.texture(maps.roughness).g.mul(0.4).add(0.64));
     m.userData.hollowShared = true; m.userData.hollowSurface = 'skin'; cache.set(key, m);
     return m;
   }
@@ -1220,21 +1421,46 @@
   // Garment folds/wrap seams are geometry; vertex tinting keeps even dressed articulated limbs at one draw per joint
   // without a material-array draw penalty. Tints: mottled, bruised skin; stained gowns; floor grime on whatever touches
   // the floor; blood darkening the lips and jaw (mouth: {front, eyeY} in head space).
-  function consolidateOrganicMaterials(THREE, root, palette, seed, mouth) {
+  // Baked on top: per-vertex tints authored with the geometry (wounds, keratin, gums, sockets), blood running down
+  // from the mouth and other `drips` ([x, y, z, half-width, length] in root space), and a cheap occlusion term that
+  // darkens undersides so the anatomy reads under a single torch.
+  function consolidateOrganicMaterials(THREE, root, palette, seed, mouth, drips) {
     const material = organicMaterial(THREE);
-    const mergeable = new Set([palette.skin, palette.bone, palette.dark, palette.tendon, palette.cloth, palette.bandage]);
-    const wetness = new Map([[palette.skin, 0.8], [palette.tendon, 1], [palette.dark, 1], [palette.bone, 0.55], [palette.cloth, 0.2], [palette.bandage, 0.1]]);
-    const point = new THREE.Vector3(), local = new THREE.Vector3(), s = seed * 7.31;
+    const wetness = new Map([[palette.skin, 0.36], [palette.tendon, 1], [palette.dark, 0.5], [palette.bone, 0.5], [palette.cloth, 0.2],
+      [palette.bandage, 0.1], [palette.flesh, 1], [palette.nail, 0.75], [palette.leather, 0.42], [palette.iron, 0.3], [palette.wood, 0.12]]);
+    const point = new THREE.Vector3(), local = new THREE.Vector3(), normal = new THREE.Vector3(), basis = new THREE.Matrix3(), s = seed * 7.31;
+    const tone = tints(THREE), bloodColor = tone.blood;
     root.updateMatrixWorld(true);
     root.traverse(o => {
-      if (!o.isMesh || !mergeable.has(o.material)) return;
-      const geom = o.geometry.clone(), color = o.material.color, positions = geom.attributes.position;
+      if (!o.isMesh || !wetness.has(o.material)) return;
+      // Cached primitives are copied; an owned loft is only ever used here, so it takes its colours in place.
+      const geom = o.geometry.userData.hollowShared ? o.geometry.clone() : o.geometry, color = o.material.color, positions = geom.attributes.position;
       // r128 aliases userData when cloning; never relabel the cached source as owned.
       geom.userData = Object.assign({}, geom.userData, { hollowShared: false });
-      const skin = o.material === palette.skin || o.material === palette.tendon;
-      const cloth = o.material === palette.cloth || o.material === palette.bandage, dark = o.material === palette.dark;
+      const skin = o.material === palette.skin || o.material === palette.tendon || o.material === palette.flesh;
+      const cloth = o.material === palette.cloth || o.material === palette.bandage || o.material === palette.leather;
+      const dark = o.material === palette.dark, iron = o.material === palette.iron;
       const jaw = o.parent && o.parent.name === 'jaw', head = o.parent && o.parent.name === 'head';
+      const tint = geom.attributes.tint, tintWet = geom.attributes.tintWet, normals = geom.attributes.normal;
+      basis.getNormalMatrix(o.matrixWorld);
       const values = new Float32Array(positions.count * 3), wet = new Float32Array(positions.count);
+      // Cavity: how far a vertex sits below its neighbours' mean, along its normal (umbrella Laplacian over the mean
+      // edge). Creases, dents and folds darken; ridges, knuckles and bone edges stay lit.
+      const cavity = geom.index && normals ? new Float32Array(positions.count) : null;
+      if (cavity) {
+        const sum = new Float32Array(positions.count * 5), idx = geom.index.array, P = positions.array;
+        for (let i = 0; i < idx.length; i += 3) for (let e = 0; e < 3; e++) {
+          const a = idx[i + e], b = idx[i + (e + 1) % 3], len = Math.hypot(P[a * 3] - P[b * 3], P[a * 3 + 1] - P[b * 3 + 1], P[a * 3 + 2] - P[b * 3 + 2]);
+          sum[a * 5] += P[b * 3]; sum[a * 5 + 1] += P[b * 3 + 1]; sum[a * 5 + 2] += P[b * 3 + 2]; sum[a * 5 + 3]++; sum[a * 5 + 4] += len;
+          sum[b * 5] += P[a * 3]; sum[b * 5 + 1] += P[a * 3 + 1]; sum[b * 5 + 2] += P[a * 3 + 2]; sum[b * 5 + 3]++; sum[b * 5 + 4] += len;
+        }
+        for (let i = 0; i < positions.count; i++) {
+          const n = sum[i * 5 + 3];
+          if (!n) continue;
+          const dx = sum[i * 5] / n - P[i * 3], dy = sum[i * 5 + 1] / n - P[i * 3 + 1], dz = sum[i * 5 + 2] / n - P[i * 3 + 2];
+          cavity[i] = (dx * normals.getX(i) + dy * normals.getY(i) + dz * normals.getZ(i)) / (sum[i * 5 + 4] / n + 1e-5);
+        }
+      }
       for (let i = 0; i < positions.count; i++) {
         local.fromBufferAttribute(positions, i).applyMatrix4(o.matrix);
         point.fromBufferAttribute(positions, i).applyMatrix4(o.matrixWorld);
@@ -1242,23 +1468,49 @@
         if (!dark) {
           const mottle = noise3(point.x * 9 + s, point.y * 9, point.z * 9), patch = noise3(point.x * 3.1 - s, point.y * 3.1 + 5, point.z * 3.1);
           if (skin) {
-            const k = 0.76 + 0.36 * mottle, bruise = smoothstep(0.58, 0.78, patch);
+            // Blotchy dead skin: bruised patches, yellow-brown rot, dark threads of veins and drier, flaking areas.
+            const k = 0.45 + 0.7 * mottle, bruise = smoothstep(0.56, 0.76, patch);
+            const rot = smoothstep(0.6, 0.8, noise3(point.x * 2.3 + s, point.y * 2.3 - 7, point.z * 2.3)) * 0.7;
+            const vein = patch > 0.4 ? (1 - smoothstep(0.012, 0.04, Math.abs(noise3(point.x * 13 - s, point.y * 6, point.z * 13) - 0.5))) * smoothstep(0.4, 0.62, patch) : 0;
             r *= k * (1 - 0.22 * bruise); g *= k * (1 - 0.4 * bruise); b *= k * (1 - 0.26 * bruise);
+            r += (tone.rot[0] * k - r) * rot; g += (tone.rot[1] * k - g) * rot; b += (tone.rot[2] * k - b) * rot;
+            r *= 1 - 0.55 * vein; g *= 1 - 0.62 * vein; b *= 1 - 0.42 * vein;
+            if (o.material === palette.skin) w *= 0.3 + 1.1 * smoothstep(0.35, 0.75, noise3(point.x * 6, point.y * 6 + s, point.z * 6));
           } else if (cloth) {
             const stain = smoothstep(0.52, 0.74, patch), blood = smoothstep(0.7, 0.86, mottle) * 0.75;
             r *= 1 - 0.28 * stain; g *= 1 - 0.36 * stain; b *= 1 - 0.55 * stain;
             r += (0.13 - r) * blood; g += (0.018 - g) * blood; b += (0.015 - b) * blood; w += 0.6 * blood;
+          } else if (iron) {
+            const rust = smoothstep(0.35, 0.7, mottle);
+            r *= 0.7 + 0.6 * rust; g *= 0.75 + 0.3 * rust; b *= 0.8 + 0.1 * rust; w *= 1 - rust;
           } else { const k = 0.82 + 0.26 * mottle; r *= k; g *= k; b *= k * 0.95; }
-          const grime = 1 - smoothstep(0.03, 0.34, point.y);
+          if (tint) {
+            const f = tint.getW(i);
+            if (f > 0) { r += (tint.getX(i) - r) * f; g += (tint.getY(i) - g) * f; b += (tint.getZ(i) - b) * f; w += (tintWet.getX(i) - w) * f; }
+          }
+          const grime = point.y < 0.75 ? Math.max(1 - smoothstep(0.03, 0.34, point.y), (1 - smoothstep(0.1, 0.75, point.y)) * 0.6 * noise3(point.x * 5, point.y * 5, point.z * 5 + s)) : 0;
           r *= 1 - 0.5 * grime; g *= 1 - 0.52 * grime; b *= 1 - 0.55 * grime;
           // Lips, chin and the jaw's inner face are crusted with old blood.
           let blood = 0;
-          if (mouth && jaw) blood = smoothstep(mouth.front * 0.4, mouth.front * 1.1, local.z) * 0.85;
+          if (mouth && jaw) blood = smoothstep(mouth.front * 0.4, mouth.front * 1.1, local.z) * (0.3 + 0.6 * smoothstep(0.3, 0.7, mottle));
           else if (mouth && head) blood = smoothstep(mouth.eyeY - 0.03, mouth.eyeY - 0.13, local.y) * smoothstep(mouth.front * 0.55, mouth.front * 1.05, local.z) * 0.7;
-          if (blood > 0) { r += (0.15 - r) * blood; g += (0.02 - g) * blood; b += (0.018 - b) * blood; w = Math.max(w, blood); }
+          for (const d of drips || []) {
+            const down = (d[1] - point.y) / d[4];
+            if (down < -0.05 || down > 1 || point.z < d[2] - 0.3) continue;
+            const wander = (noise3(point.y * 7 + d[0] * 13, d[2] * 5, s) - 0.5) * d[3] * 1.6, dx = Math.abs(point.x - d[0] - wander);
+            const rivulet = smoothstep(d[3] * (0.25 + 0.75 * noise3(point.x * 40, d[1], s + 3)), 0, dx);
+            blood = Math.max(blood, rivulet * smoothstep(-0.05, 0.06, down) * (1 - smoothstep(0.55, 1, down + 0.35 * noise3(point.x * 23, s, 1))) * 0.9);
+          }
+          if (blood > 0) { r += (bloodColor[0] - r) * blood; g += (bloodColor[1] - g) * blood; b += (bloodColor[2] - b) * blood; w = Math.max(w, blood * 0.8); }
+          if (normals) {
+            const up = normal.fromBufferAttribute(normals, i).applyMatrix3(basis).normalize().y;
+            const c = cavity ? cavity[i] : 0, ao = (0.66 + 0.34 * smoothstep(-0.85, 0.55, up)) * (1 - 0.62 * smoothstep(0.01, 0.22, c) + 0.14 * smoothstep(0.04, 0.3, -c));
+            r *= ao; g *= ao; b *= ao;
+          }
         }
         values[i * 3] = r; values[i * 3 + 1] = g; values[i * 3 + 2] = b; wet[i] = Math.min(1, w);
       }
+      geom.deleteAttribute('tint'); geom.deleteAttribute('tintWet');
       geom.setAttribute('color', new THREE.BufferAttribute(values, 3));
       geom.setAttribute('wet', new THREE.BufferAttribute(wet, 1));
       o.geometry = geom; o.material = material;
@@ -1278,30 +1530,28 @@
 
   function monsterPalette(THREE, kind) {
     const colors = {
-      warden: { skin: 0x666c63, bone: 0x96917d, cloth: 0x363c36, eyes: 0x292b28 },
-      stalker: { skin: 0x858b7d, bone: 0xa3a08a, cloth: 0x4b554d, eyes: 0x30322e },
-      crawler: { skin: 0x666e68, bone: 0x8b9282, cloth: 0x3e4945, eyes: 0x272c29 },
-      shrieker: { skin: 0x97988b, bone: 0xaaa28d, cloth: 0x62665b, eyes: 0x343530 }
+      warden: { skin: 0x4c5048, bone: 0x96917d, cloth: 0x363c36, eyes: 0x292b28 },
+      stalker: { skin: 0x4e5046, bone: 0xa3a08a, cloth: 0x4b554d, eyes: 0x30322e },
+      crawler: { skin: 0x4b514b, bone: 0x8b9282, cloth: 0x3e4945, eyes: 0x272c29 },
+      shrieker: { skin: 0x6c6c60, bone: 0xaaa28d, cloth: 0x4a4c43, eyes: 0x343530 },
+      gravekeeper: { skin: 0x535550, bone: 0xa49a7e, cloth: 0x2e2b25, eyes: 0x262624 }
     }[kind];
     return {
       skin: standard(THREE, kind + ':skin', colors.skin, 0.87, 0, 'skin'),
       bone: standard(THREE, kind + ':bone', colors.bone, 0.72, 0, 'skin'),
       cloth: standard(THREE, kind + ':gown', colors.cloth, 0.98, 0, 'fabric'),
-      bandage: standard(THREE, 'creature:bandage', 0x817c67, 0.98, 0, 'fabric'),
+      bandage: standard(THREE, 'creature:bandage', 0x6a6452, 0.98, 0, 'fabric'),
       dark: standard(THREE, 'creature:dark', 0x090b0a, 1, 0, 'skin'),
-      tendon: standard(THREE, 'creature:tendon', 0x514742, 0.94, 0, 'skin'),
+      tendon: standard(THREE, 'creature:tendon', 0x5a3c36, 0.94, 0, 'skin'),
+      // Tags only: everything below is baked into the one vertex-coloured organic batch.
+      flesh: standard(THREE, 'creature:flesh', 0x5e1f19, 0.9, 0, 'skin'),
+      nail: standard(THREE, 'creature:nail', 0x4a3f2c, 0.8, 0, 'skin'),
+      leather: standard(THREE, 'creature:leather', 0x2f251c, 0.85, 0, 'fabric'),
+      iron: standard(THREE, 'creature:iron', 0x3d3129, 0.9, 0, 'skin'),
+      wood: standard(THREE, 'creature:wood', 0x3a2e22, 0.9, 0, 'wood'),
       // Instance-owned for death/respawn writes; dry, recessed slits, not bright beads.
       eye: new THREE.MeshStandardMaterial({ color: colors.eyes, roughness: 0.92, metalness: 0, fog: true })
     };
-  }
-
-  function teeth(THREE, parent, mat, y, z, width, count, down, x) {
-    for (let i = 0; i < count; i++) {
-      if (i === 2 && count > 4) continue;
-      box(THREE, parent, mat, (x || 0) + (i / Math.max(1, count - 1) - .5) * width,
-        y + (down ? -1 : 1) * (i % 3) * .004, z + (i % 2) * .004,
-        .010, .014 + (i % 3) * .004, .012, .12, 0, (i % 2 ? 1 : -1) * .17);
-    }
   }
 
   // Unit cloth panel: shared topology, real pleats, a sagging seam and torn hem.
@@ -1368,56 +1618,361 @@
     return add(THREE, parent, geom, mat, x, y, z, w, h, depth);
   }
 
-  function hookedHand(THREE, parent, p, at, side, size, crawling) {
-    const point = (x, y, z) => [at[0] + x * size, at[1] + (crawling ? z : y) * size, at[2] + (crawling ? -y : z) * size];
-    anatomy(THREE, parent, p.skin, 'palm', ...point(0, -.06, .006), .064 * size, .092 * size, .032 * size,
-      crawling ? -Math.PI / 2 : 0, 0, side * .075);
-    for (let f = 0; f < 4; f++) {
-      const x = (f - 1.5) * .031, length = [.22, .31, .27, .18][f];
-      const a = point(x, -.105, .012), b = point(x * 1.3 + side * .007, -.11 - length * .65, -.012);
-      const c = point(x * 1.5 + side * .017, -.11 - length, -.034), tip = point(x * 1.6 + side * .023, -.058 - length, .07);
-      sinew(THREE, parent, p.bone, point(x * .65, -.015, .022), a, .010 * size);
-      sinew(THREE, parent, p.skin, a, b, .015 * size);
-      sinew(THREE, parent, p.skin, b, c, .010 * size);
-      sinew(THREE, parent, p.bone, c, tip, .007 * size);
-    }
-    sinew(THREE, parent, p.skin, point(side * .046, -.035, .018), point(side * .12, -.14, -.004), .020 * size);
-    sinew(THREE, parent, p.skin, point(side * .12, -.14, -.004), point(side * .086, -.20, .067), .012 * size);
+  // Linear tint colours (wounds, gore, keratin, sockets...) baked into vertex colours by consolidateOrganicMaterials.
+  function tints(THREE) {
+    const res = store(THREE);
+    if (res.tints) return res.tints;
+    const lin = hex => { const c = new THREE.Color(hex); return [c.r, c.g, c.b]; };
+    res.tints = { wound: lin(0x4a0c08), gore: lin(0x170303), blood: lin(0x300505), nail: lin(0x2b2316), socket: lin(0x070606),
+      gum: lin(0x45130e), bruise: lin(0x3d2f3d), tooth: lin(0xc2b590), drool: lin(0x8c7a68), rot: lin(0x3a3a24), rust: lin(0x6a3317),
+      brass: lin(0x3a301b), verdigris: lin(0x26342b), moss: lin(0x2f3a22), wax: lin(0x8d8468) };
+    return res.tints;
   }
 
-  function patientLimb(THREE, p, limb, name, bend, end, width, side, handSize, crawling) {
-    sinew(THREE, limb, p.skin, [0, 0, 0], bend, width);
-    sinew(THREE, limb, p.bone, [side * .012, -.025, .025], [bend[0], bend[1] * .93, bend[2] + .024], width * .18);
-    anatomy(THREE, limb, p.cloth, 'shard', side * .012, -.045, -.008, width * 1.18, .14, width,
-      crawling ? .6 : .07, .12, crawling ? side * 1.1 : side * .18);
-    const distal = joint(THREE, limb, name, ...bend);
-    anatomy(THREE, distal, p.bone, 'shard', 0, -.008, .012, width * .72, .083, width * .64, .1, 0, side * .21);
-    sinew(THREE, distal, p.skin, [0, 0, 0], end, width * .64);
-    sinew(THREE, distal, p.bone, [side * .014, -.025, .025], [end[0], end[1] * .93, end[2] + .020], width * .16);
-    wraps(THREE, distal, p.bandage, 0, -.018, .004, width * .71, side < 0 ? 3 : 1);
-    if (side < 0) rag(THREE, limb, p.bandage, side * width, -.16, .035, .065, .23, .013, crawling ? 1.25 : 0, 0, -.18);
-    if (handSize) hookedHand(THREE, distal, p, end, side, handSize, crawling);
-    else {
-      anatomy(THREE, distal, p.skin, 'palm', end[0], end[1] - .014, end[2] + .060, width * .76, .15, .05, -Math.PI / 2, side * .18);
-      for (let i = 0; i < 3; i++) sinew(THREE, distal, p.bone,
-        [end[0] + (i - 1) * .034, end[1] - .008, end[2] + .12],
-        [end[0] + (i - 1) * .040, end[1] - .025, end[2] + .21 - i * .019], width * .13);
+  function spline(a, b, c, d, t) {
+    const t2 = t * t, t3 = t2 * t;
+    return .5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (3 * b - a - 3 * c + d) * t3);
+  }
+  const pair = r => typeof r === 'number' ? [r, r] : r;
+
+  // A swept organic tube in the parent's space: a Catmull-Rom spine through `points`, elliptical sections (radius or
+  // [width, depth] half-axes per point) carried by parallel transport, smooth normals, rounded caps and UVs scaled to
+  // metres (the skin maps stay one size on a finger and a torso). Options: sides, seg (samples per span), up (initial
+  // depth axis), lump (seeded flesh noise), folds [count, amplitude] (cloth), sculpt [{at, to?, r, d, wound, dark}]
+  // (dents, ridges and raw wounds; `to` makes a capsule), tint(t, a, x, y, z) -> [r, g, b, weight, wet],
+  // skip(t, a, x, y, z) (torn gaps, given each quad's centre), caps [start, end].
+  function loft(THREE, parent, mat, points, radii, options) {
+    const o = options || {}, sides = o.sides || 8, seg = o.seg || 2, n = points.length, T = tints(THREE);
+    const caps = o.caps || [true, true], lump = o.lump || 0, seed = o.seed || 0, sculpt = o.sculpt || [], folds = o.folds;
+    const C = [], R = [];
+    for (let i = 0; i < n - 1; i++) {
+      const i0 = Math.max(0, i - 1), i3 = Math.min(n - 1, i + 2), a = pair(radii[i0]), b = pair(radii[i]), c = pair(radii[i + 1]), d = pair(radii[i3]);
+      for (let s = 0; s < (i === n - 2 ? seg + 1 : seg); s++) {
+        const t = s / seg;
+        C.push(new THREE.Vector3(spline(points[i0][0], points[i][0], points[i + 1][0], points[i3][0], t),
+          spline(points[i0][1], points[i][1], points[i + 1][1], points[i3][1], t), spline(points[i0][2], points[i][2], points[i + 1][2], points[i3][2], t)));
+        R.push([Math.max(0, spline(a[0], b[0], c[0], d[0], t)), Math.max(0, spline(a[1], b[1], c[1], d[1], t))]);
+      }
     }
+    const m = C.length, stride = sides + 1, count = m * stride + 2;
+    const pos = new Float32Array(count * 3), uv = new Float32Array(count * 2), tint = new Float32Array(count * 4), wetT = new Float32Array(count);
+    let painted = false, length = 0;
+    const tan = new THREE.Vector3(), nrm = new THREE.Vector3(...(o.up || [0, 0, 1])), bin = new THREE.Vector3();
+    const dir = new THREE.Vector3(), p = new THREE.Vector3(), q = new THREE.Vector3(), seam = [];
+    const paint = (k, c) => {
+      if (!c || !(c[3] > 0)) return;
+      const w = Math.min(1, c[3]), was = tint[k * 4 + 3], total = Math.min(1, was + w * (1 - was)), f = total > 0 ? w / total : 0;
+      for (let ch = 0; ch < 3; ch++) tint[k * 4 + ch] += (c[ch] - tint[k * 4 + ch]) * f;
+      wetT[k] += ((c[4] == null ? 1 : c[4]) - wetT[k]) * f; tint[k * 4 + 3] = total; painted = true;
+    };
+    const frames = [];
+    for (let i = 0; i < m; i++) {
+      tan.copy(C[Math.min(m - 1, i + 1)]).sub(C[Math.max(0, i - 1)]).normalize();
+      nrm.addScaledVector(tan, -nrm.dot(tan));
+      if (nrm.lengthSq() < 1e-10) { nrm.set(Math.abs(tan.x) < .9 ? 1 : 0, Math.abs(tan.x) < .9 ? 0 : 1, 0); nrm.addScaledVector(tan, -nrm.dot(tan)); }
+      nrm.normalize(); bin.crossVectors(tan, nrm).normalize();
+      frames.push([tan.clone(), nrm.clone(), bin.clone()]);
+      if (i) length += C[i].distanceTo(C[i - 1]);
+      const t = i / (m - 1), [rx, rz] = R[i];
+      for (let j = 0; j <= sides; j++) {
+        // `focus` crowds the samples toward the depth axis (a face, a sternum) and thins them out behind.
+        const a = (j % sides) / sides, k = i * stride + j, ang = a * TAU - (o.focus || 0) * Math.sin(a * TAU - Math.PI / 2);
+        dir.copy(bin).multiplyScalar(Math.cos(ang) * rx).addScaledVector(nrm, Math.sin(ang) * rz);
+        p.copy(C[i]).add(dir);
+        let f = 1;
+        if (lump) f += lump * (noise3(p.x * 11 + seed, p.y * 11, p.z * 11 - seed) - .5) * 2;
+        if (folds) f += folds[1] * Math.sin(ang * folds[0] + seed) * (folds[2] ? Math.pow(t, folds[2]) : 1);
+        p.copy(C[i]).addScaledVector(dir, f);
+        const len = dir.length();
+        for (const s of sculpt) {
+          let dist;
+          if (s.to) {
+            const ax = s.to[0] - s.at[0], ay = s.to[1] - s.at[1], az = s.to[2] - s.at[2], l2 = ax * ax + ay * ay + az * az;
+            const h = clamp(((p.x - s.at[0]) * ax + (p.y - s.at[1]) * ay + (p.z - s.at[2]) * az) / l2, 0, 1);
+            dist = Math.hypot(p.x - s.at[0] - ax * h, p.y - s.at[1] - ay * h, p.z - s.at[2] - az * h);
+          } else dist = Math.hypot(p.x - s.at[0], p.y - s.at[1], p.z - s.at[2]);
+          if (dist >= s.r) continue;
+          const w = 1 - dist / s.r, fall = w * w * (3 - 2 * w);
+          if (s.d && len > 1e-6) p.addScaledVector(dir, s.d * fall / len);
+          if (s.wound) {
+            paint(k, [...T.wound, fall * s.wound * 1.4, 1]);
+            if (fall > .55) paint(k, [...T.gore, (fall - .55) * 2.2 * s.wound, 1]);
+          }
+          if (s.dark) paint(k, [...T.socket, fall * s.dark, .6]);
+          if (s.color) paint(k, [...s.color, fall * (s.weight == null ? 1 : s.weight), s.wet == null ? .5 : s.wet]);
+        }
+        if (o.tint) paint(k, o.tint(t, a, p.x, p.y, p.z));
+        pos[k * 3] = p.x; pos[k * 3 + 1] = p.y; pos[k * 3 + 2] = p.z;
+        uv[k * 2] = a * Math.max(1, Math.round(TAU * (rx + rz) * .5 * 3)); uv[k * 2 + 1] = length * 3;
+      }
+    }
+    const index = [];
+    for (let i = 0; i < m - 1; i++) for (let j = 0; j < sides; j++) {
+      const a = i * stride + j, b = a + 1, c = a + stride, d = c + 1;
+      if (o.skip) {
+        const mid = ch => (pos[a * 3 + ch] + pos[b * 3 + ch] + pos[c * 3 + ch] + pos[d * 3 + ch]) * .25;
+        if (o.skip((i + .5) / (m - 1), (j + .5) / sides, mid(0), mid(1), mid(2))) continue;
+      }
+      index.push(a, c, b, b, c, d);
+    }
+    for (const [end, ring] of [[0, 0], [1, m - 1]]) {
+      const k = m * stride + end;
+      // An unused cap vertex sits on its ring's centre, not at the origin, so it never stretches an unbatched mesh's bounds.
+      if (!caps[end] || Math.max(...R[ring]) < 1e-4) { pos[k * 3] = C[ring].x; pos[k * 3 + 1] = C[ring].y; pos[k * 3 + 2] = C[ring].z; continue; }
+      const [tg] = frames[ring], r = (R[ring][0] + R[ring][1]) * .5 * (o.dome == null ? .6 : o.dome);
+      q.copy(C[ring]).addScaledVector(tg, end ? r : -r);
+      pos[k * 3] = q.x; pos[k * 3 + 1] = q.y; pos[k * 3 + 2] = q.z; uv[k * 2] = .5; uv[k * 2 + 1] = end ? length * 3 : 0;
+      for (let ch = 0; ch < 4; ch++) tint[k * 4 + ch] = tint[(ring * stride) * 4 + ch];
+      wetT[k] = wetT[ring * stride];
+      for (let j = 0; j < sides; j++) {
+        const a = ring * stride + j;
+        if (end) index.push(k, a + 1, a); else index.push(k, a, a + 1);
+      }
+    }
+    for (let i = 0; i < m; i++) seam.push([i * stride, i * stride + sides]);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    if (painted) { g.setAttribute('tint', new THREE.BufferAttribute(tint, 4)); g.setAttribute('tintWet', new THREE.BufferAttribute(wetT, 1)); }
+    g.setIndex(index); g.computeVertexNormals();
+    // The UV seam duplicates a column of vertices: give both copies the averaged normal so the tube shades as one.
+    const nr = g.attributes.normal;
+    for (const [a, b] of seam) {
+      p.fromBufferAttribute(nr, a).add(q.fromBufferAttribute(nr, b)).normalize();
+      nr.setXYZ(a, p.x, p.y, p.z); nr.setXYZ(b, p.x, p.y, p.z);
+    }
+    return add(THREE, parent, g, mat);
+  }
+
+  // First point where a ray (parent space) meets an owned loft: seats ribs, staples, straps and spines on a body.
+  function surf(THREE, meshes, origin, direction, lift) {
+    const [ox, oy, oz] = origin, len = Math.hypot(...direction), dx = direction[0] / len, dy = direction[1] / len, dz = direction[2] / len;
+    let best = Infinity;
+    // Two-sided Moller-Trumbore straight off the index and position arrays (thousands of rays per creature).
+    for (const mesh of Array.isArray(meshes) ? meshes : [meshes]) {
+      const P = mesh.geometry.attributes.position.array, idx = mesh.geometry.index.array;
+      for (let i = 0; i < idx.length; i += 3) {
+        const a = idx[i] * 3, b = idx[i + 1] * 3, c = idx[i + 2] * 3;
+        const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2], e2x = P[c] - P[a], e2y = P[c + 1] - P[a + 1], e2z = P[c + 2] - P[a + 2];
+        const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x, det = e1x * px + e1y * py + e1z * pz;
+        if (Math.abs(det) < 1e-12) continue;
+        const inv = 1 / det, tx = ox - P[a], ty = oy - P[a + 1], tz = oz - P[a + 2], u = (tx * px + ty * py + tz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x, v = (dx * qx + dy * qy + dz * qz) * inv;
+        if (v < 0 || u + v > 1) continue;
+        const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (t >= 0 && t < best) best = t;
+      }
+    }
+    if (best === Infinity) return [...origin];
+    // lift > 0 sinks the point into the surface, < 0 stands it proud.
+    const t = best + (lift || 0);
+    return [ox + dx * t, oy + dy * t, oz + dz * t];
+  }
+
+  // Tapered tube through points (tendons, ribs, drool, straps' loose ends).
+  function strand(THREE, parent, mat, points, r0, r1, options) {
+    const n = points.length;
+    return loft(THREE, parent, mat, points, points.map((_, i) => r0 + (r1 - r0) * i / (n - 1)),
+      Object.assign({ sides: 4, seg: 1, caps: [true, r1 > .002] }, options));
+  }
+
+  // A curved needle (tooth, claw, spur) from base to tip, its middle pushed by `bow`.
+  function fang(THREE, parent, mat, base, tip, r, bow, tint, sides) {
+    const mid = [0, 1, 2].map(k => (base[k] + tip[k]) * .5 + (bow ? bow[k] : 0));
+    return loft(THREE, parent, mat, [base, mid, tip], [r, r * .62, 0], { sides: sides || 3, seg: 1, caps: [true, false], tint });
+  }
+
+  // Uneven needle teeth along a jaw arc (parent space): count across width at height y, raked back by `curve`; a
+  // missing centre tooth keeps the throat open, a seeded few are broken or absent. Roots are gum-red, points stained.
+  function dentition(THREE, parent, p, o) {
+    const T = tints(THREE), random = seeded(o.seed || 1), dirY = o.down ? -1 : 1;
+    const tint = t => t < .22 ? [...T.gum, (1 - t / .22) * .85, 1] : t > .7 ? [...T.nail, (t - .7) * 1.6, .7] : null;
+    for (let i = 0; i < o.count; i++) {
+      const u = o.count > 1 ? i / (o.count - 1) * 2 - 1 : 0, roll = random(), len = o.length * (.55 + .75 * random());
+      if (Math.abs(u) < .6 / Math.max(1, o.count - 1) || roll < (o.missing || .08)) continue;
+      const x = o.x + u * o.width * .5, z = o.z - o.curve * u * u, y = o.y + (random() - .5) * .006;
+      const tip = [x + u * (o.splay || .2) * len, y + dirY * len, z + (o.rake == null ? -.25 : o.rake) * len];
+      fang(THREE, parent, p.bone, [x, y - dirY * .006, z], tip, o.radius * (.7 + .5 * random()), [0, 0, o.hook == null ? .12 * len : o.hook * len], tint);
+    }
+  }
+
+  // Leather/canvas band (cached open 12-gon) around a limb or torso, optional iron buckle on its +z face.
+  function band(THREE, parent, mat, at, rx, rz, h, rot, buckle) {
+    const geom = geometry(THREE, 'creature:band', () => new THREE.CylinderGeometry(1, 1, 1, 12, 1, true));
+    const m = add(THREE, parent, geom, mat, at[0], at[1], at[2], rx, h, rz, ...(rot || [0, 0, 0]));
+    if (buckle) {
+      const e = new THREE.Euler(...(rot || [0, 0, 0])), f = new THREE.Vector3(0, 0, rz + .006).applyEuler(e);
+      box(THREE, parent, buckle, at[0] + f.x, at[1] + f.y, at[2] + f.z, h * 1.25, h * 1.1, .008, ...(rot || [0, 0, 0]));
+    }
+    return m;
+  }
+
+  // A strap that hugs a body: rays from around `c` (in the plane tilted by rot) seat a closed loop on the reference
+  // lofts, then a flat [thickness, height] section is swept round it. `from`/`to` (0..1) leave part of the loop off.
+  function girdle(THREE, parent, mat, ref, c, o) {
+    const n = o.n || 14, e = new THREE.Euler(...(o.rot || [0, 0, 0])), d = new THREE.Vector3(), pts = [];
+    const from = o.from || 0, to = o.to == null ? 1 : o.to, closed = from === 0 && to === 1;
+    for (let i = 0; i <= (closed ? n : n - 1); i++) {
+      const a = (from + (to - from) * (i % (closed ? n : Infinity)) / (closed ? n : n - 1)) * TAU;
+      d.set(Math.sin(a), 0, Math.cos(a)).applyEuler(e);
+      pts.push(surf(THREE, ref, [c[0] + d.x, c[1] + d.y, c[2] + d.z], [-d.x, -d.y, -d.z], -(o.thick || .008) * (1 + .4 * Math.sin(a * 5 + c[1] * 9))));
+    }
+    return loft(THREE, parent, mat, pts, pts.map(() => [o.thick || .008, o.height || .05]), { sides: 4, seg: 1, up: [0, 1, 0],
+      caps: [!closed, !closed], tint: o.tint, lump: o.lump || 0, seed: o.seed || 0 });
+  }
+
+  // A flat plank or blade: a convex outline [[u, v]...] (counter-clockwise) extruded `depth` thick along local z,
+  // optionally cupped (z += cup * u * u), placed at `at` with Euler `rot`. tint(u, v) paints it like a loft.
+  function slab(THREE, parent, mat, outline, depth, at, rot, o) {
+    o = o || {};
+    const pos = [], uv = [], index = [], tint = [], wetT = [], n = outline.length, cup = o.cup || 0;
+    let painted = false;
+    const vert = (u, v, z) => {
+      pos.push(u, v, z + cup * u * u); uv.push(u * 3, v * 3);
+      const c = o.tint ? o.tint(u, v) : null;
+      if (c && c[3] > 0) { tint.push(c[0], c[1], c[2], Math.min(1, c[3])); wetT.push(c[4] == null ? .5 : c[4]); painted = true; } else { tint.push(0, 0, 0, 0); wetT.push(0); }
+      return pos.length / 3 - 1;
+    };
+    const cu = outline.reduce((sum, q) => sum + q[0], 0) / n, cv = outline.reduce((sum, q) => sum + q[1], 0) / n;
+    for (const side of [1, -1]) {
+      const z = side * depth / 2, c = vert(cu, cv, z), ring = outline.map(q => vert(q[0], q[1], z));
+      for (let i = 0; i < n; i++) { const a = ring[i], b = ring[(i + 1) % n]; if (side > 0) index.push(c, a, b); else index.push(c, b, a); }
+    }
+    for (let i = 0; i < n; i++) {
+      const p0 = outline[i], p1 = outline[(i + 1) % n];
+      const a = vert(p0[0], p0[1], depth / 2), b = vert(p1[0], p1[1], depth / 2), c = vert(p0[0], p0[1], -depth / 2), d = vert(p1[0], p1[1], -depth / 2);
+      index.push(a, c, b, b, c, d);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    if (painted) { g.setAttribute('tint', new THREE.Float32BufferAttribute(tint, 4)); g.setAttribute('tintWet', new THREE.Float32BufferAttribute(wetT, 1)); }
+    g.setIndex(index); g.computeVertexNormals();
+    return add(THREE, parent, g, mat, at[0], at[1], at[2], 1, 1, 1, ...(rot || [0, 0, 0]));
+  }
+
+  // The part of a convex outline between u0 and u1 (one plank of a lid).
+  function clipStrip(outline, u0, u1) {
+    let poly = outline;
+    for (const [edge, keep] of [[u0, 1], [u1, -1]]) {
+      const out = [];
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length], ia = (a[0] - edge) * keep >= 0, ib = (b[0] - edge) * keep >= 0;
+        if (ia) out.push(a);
+        if (ia !== ib) { const t = (edge - a[0]) / (b[0] - a[0]); out.push([edge, a[1] + (b[1] - a[1]) * t]); }
+      }
+      poly = out;
+    }
+    return poly;
+  }
+
+  // A row of surgical staples across an incision running from a to b (points on the skin, offset along `out`).
+  function staples(THREE, parent, p, a, b, n, out) {
+    const T = tints(THREE);
+    strand(THREE, parent, p.flesh, [a, [0, 1, 2].map(k => (a[k] + b[k]) * .5 + out[k] * .004), b], .007, .005,
+      { sides: 3, tint: () => [...T.wound, .7, 1] });
+    const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], across = Math.atan2(dy, dx) + Math.PI / 2;
+    for (let i = 0; i < n; i++) {
+      const f = (i + .5) / n;
+      box(THREE, parent, p.iron, a[0] + dx * f + out[0] * .006, a[1] + dy * f + out[1] * .006, a[2] + dz * f + out[2] * .006,
+        .026, .004, .004, 0, Math.atan2(out[0], out[2]), across);
+    }
+  }
+
+  // Long bony hand at `at`: palm, four jointed fingers ending in hooked keratin claws, and a thumb. Local frame: fingers
+  // hang along -y and curl toward +z; crawling hands lie palm-down with the fingers forward and claws dug into the floor.
+  function claws(THREE, parent, p, at, o) {
+    const T = tints(THREE), s = o.size || 1, side = o.side || 1, reach = o.length || 1, crawl = !!o.crawling, w = o.thick || 1;
+    const pt = (x, y, z) => crawl ? [at[0] + x * s, at[1] - z * s, at[2] - y * s] : [at[0] + x * s, at[1] + y * s, at[2] + z * s];
+    const up = crawl ? [0, 1, 0] : [0, 0, 1], curl = o.curl == null ? .55 : o.curl, claw = o.claw || 1;
+    loft(THREE, parent, p.skin, [pt(0, .012, 0), pt(0, -.045, .008), pt(side * .004, -.092, .014)],
+      [[.026 * w, .016 * w], [.039 * w, .017 * w], [.043 * w, .014 * w]], { sides: 6, seg: 1, up });
+    const nail = (bloody) => t => t > .64 ? [...(bloody ? T.blood : T.nail), Math.min(1, (t - .64) * 4), .8] : null;
+    const digit = (base, lengths, bend, r, splay, bloody) => {
+      const pts = [base];
+      let ang = .05, x = base[0], y = base[1], z = base[2];
+      for (let k = 0; k < lengths.length; k++) {
+        ang += bend[k]; x += splay * lengths[k]; y -= Math.cos(ang) * lengths[k]; z += Math.sin(ang) * lengths[k]; pts.push([x, y, z]);
+      }
+      const radii = pts.map((_, k) => r * (k === pts.length - 1 ? 0 : k >= pts.length - 3 ? .62 - (k - pts.length + 3) * .2 : 1 - k * .14));
+      loft(THREE, parent, p.skin, pts.map(q => pt(...q)), radii, { sides: 4, seg: 1, up, tint: nail(bloody), caps: [true, false] });
+    };
+    const fingers = o.fingers || [.86, 1, .95, .74];
+    for (let f = 0; f < fingers.length; f++) {
+      const x = (f - (fingers.length - 1) / 2) * .022 * w, L = fingers[f] * reach;
+      digit([x, -.09, .014], [.05 * L, .04 * L, .032 * L, .03 * claw, .028 * claw], [curl * .25, curl * .4, curl * .5, .55, .75],
+        .0105 * w, x * .9, f === 1 || f === 3);
+    }
+    if (o.thumb !== false) digit([side * .036 * w, -.035, .02], [.038 * reach, .032 * reach, .026 * claw, .022 * claw], [.5, .35, .5, .7],
+      .011 * w, side * .38, false);
+  }
+
+  // Foot planted on the floor (floorY in the parent's space): heel, arch and ball, four long toes with curled nails.
+  function talons(THREE, parent, p, at, floorY, o) {
+    const T = tints(THREE), s = o.size || 1, w = o.width || 1, x0 = at[0], z0 = at[2];
+    loft(THREE, parent, p.skin, [[x0, floorY + .036 * s, z0 - .065 * s], [x0, floorY + .05 * s, z0], [x0, floorY + .046 * s, z0 + .065 * s],
+      [x0, floorY + .03 * s, z0 + .13 * s]], [[.03 * w, .033 * s], [.038 * w, .042 * s], [.046 * w, .032 * s], [.05 * w, .021 * s]],
+    { sides: 6, seg: 1, up: [0, 1, 0], lump: .06, seed: x0 * 9 });
+    const nail = t => t > .6 ? [...T.nail, Math.min(1, (t - .6) * 3.5), .7] : null;
+    for (let i = 0; i < (o.toes || 4); i++) {
+      const u = i / ((o.toes || 4) - 1) - .5, x = x0 + u * .07 * w, l = (1 - Math.abs(u) * .6) * (o.length || 1) * s;
+      strand(THREE, parent, p.skin, [[x, floorY + .026 * s, z0 + .12 * s], [x + u * .02, floorY + .024 * s, z0 + (.12 + .05 * l) * s],
+        [x + u * .03, floorY + .016 * s, z0 + (.12 + .085 * l) * s], [x + u * .034, floorY + .002, z0 + (.12 + .11 * l) * s]],
+      .011 * w, .002, { sides: 3, tint: nail });
+    }
+  }
+
+  // Thigh + shin under hip and knee joints, knobbed knee, calf, exposed tibia, Achilles tendon and a planted foot.
+  function bodyLeg(THREE, p, limb, name, bend, end, o) {
+    const w = o.width, side = o.side, seed = o.seed || 1, hipY = o.hipY, mass = o.mass || 0;
+    const lerp3 = (f, dz) => [bend[0] * f, bend[1] * f, bend[2] * f + (dz || 0)];
+    const e = end, at = f => [e[0] * f, e[1] * f, e[2] * f];
+    const thigh = mass ? [{ at: lerp3(.4, w * .9), r: w * 1.6, d: w * mass }, { at: lerp3(.55, -side * w * .8), r: w * 1.2, d: w * mass * .6 }] : [];
+    const calf = mass ? [{ at: [e[0] * .28, e[1] * .28, e[2] * .28 - w * .85], r: w * 1.1, d: w * mass * .8 }] : [];
+    loft(THREE, limb, p.skin, [[0, .07, -.01], lerp3(.3, w * .3), lerp3(.68, w * .1), [bend[0], bend[1] - .02, bend[2]]],
+      [[w * 1.2, w * 1.15], [w * 1.05, w * 1.1], [w * .76, w * .8], [w * .7, w * .72]], { sides: 8, seg: 2, lump: o.lump || .07, seed, sculpt: thigh.concat(o.thigh || []) });
+    const distal = joint(THREE, limb, name, ...bend);
+    loft(THREE, distal, p.skin, [[0, .045, -.005], [e[0] * .28, e[1] * .28, e[2] * .28 - w * .42], at(.62), [e[0], e[1] + .03, e[2]]],
+      [[w * .78, w * .8], [w * .74, w * .86], [w * .5, w * .52], [w * .42, w * .44]], { sides: 8, seg: 2, lump: o.lump || .07, seed: seed + 3, sculpt: calf.concat(o.shin || []) });
+    loft(THREE, distal, p.bone, [[0, .02, w * .62], [0, -.018, w * .82], [0, -.05, w * .6]], [w * .32, w * .38, w * .2], { sides: 5, seg: 1 });
+    strand(THREE, distal, p.bone, [[0, -.07, w * .7], [e[0] * .5, e[1] * .5, e[2] * .5 + w * .5], [e[0], e[1] + .06, e[2] + w * .34]], w * .16, w * .12, { sides: 3 });
+    strand(THREE, distal, p.tendon, [[e[0] * .35, e[1] * .35, e[2] * .35 - w * .8], [e[0], e[1] + .02, e[2] - w * .5]], w * .2, w * .14, { sides: 3 });
+    talons(THREE, distal, p, e, -(hipY + bend[1]), { size: o.foot || 1, width: o.footWidth || w / .072 * .9, length: o.toes || 1 });
+    return distal;
+  }
+
+  // Upper arm + forearm under shoulder and elbow joints, a bony elbow spur, forearm tendons and a clawed hand.
+  function bodyArm(THREE, p, limb, name, bend, end, o) {
+    const T = tints(THREE), w = o.width, seed = o.seed || 2, lerp3 = (f, dz) => [bend[0] * f, bend[1] * f, bend[2] * f + (dz || 0)], mass = o.mass || 0, e = end;
+    // `mass` swells biceps, triceps and the forearm's flexors into a labourer's (or a brute's) arm.
+    const upper = mass ? [{ at: lerp3(.45, w * .9), r: w * 1.7, d: w * mass }, { at: lerp3(.38, -w * .9), r: w * 1.5, d: w * mass * .7 }] : [];
+    const fore = mass ? [{ at: [e[0] * .22, e[1] * .22, e[2] * .22 + w * .6], r: w * 1.3, d: w * mass * .8 }] : [];
+    loft(THREE, limb, p.skin, [[0, .05, -.01], lerp3(.28, w * .18), lerp3(.65), [bend[0], bend[1] - .015, bend[2]]],
+      [[w * 1.3, w * 1.2], [w * 1.08, w * 1.06], [w * .78, w * .8], [w * .72, w * .74]], { sides: 8, seg: 2, lump: o.lump || .07, seed, sculpt: upper.concat(o.upper || []) });
+    const distal = joint(THREE, limb, name, ...bend);
+    loft(THREE, distal, p.skin, [[0, .035, 0], [e[0] * .3, e[1] * .3, e[2] * .3 + w * .12], [e[0] * .72, e[1] * .72, e[2] * .72], [e[0], e[1] + .01, e[2]]],
+      [[w * .8, w * .78], [w * .84, w * .8], [w * .6, w * .52], [w * .5, w * .38]], { sides: 8, seg: 2, lump: o.lump || .07, seed: seed + 5, sculpt: fore.concat(o.fore || []) });
+    fang(THREE, distal, p.bone, [0, .01, -w * .45], [0, -.01, -w * 1.25], w * .32, [0, .012, 0], null, 4);
+    for (const dx of [-.4, .45]) strand(THREE, distal, p.tendon, [[dx * w, -.03, w * .55], [e[0] * .5 + dx * w * .8, e[1] * .5, e[2] * .5 + w * .56],
+      [e[0] + dx * w * .6, e[1] + .02, e[2] + w * .26]], w * .1, w * .07, { sides: 3, tint: () => [...T.bruise, .5, .5] });
+    if (o.hand !== false) claws(THREE, distal, p, e, Object.assign({ side: o.side }, o.hand));
     return distal;
   }
 
   // Every creature of a kind is the same model (fixed seeds), so each kind is built once per THREE and then cloned.
-  // A clone owns copies of its geometry and its eye material: disposing it, or a death/respawn write to its eyes,
-  // never reaches the template or a sibling.
+  // A clone owns copies of its geometry and its unique materials (eyes; the Gravekeeper's lantern): disposing it, or a
+  // death/respawn write to its eyes, never reaches the template or a sibling.
   function makeMonster(THREE, requestedKind) {
-    const kind = ['warden', 'stalker', 'crawler', 'shrieker'].includes(requestedKind) ? requestedKind : 'stalker';
+    const kind = ['warden', 'stalker', 'crawler', 'shrieker', 'gravekeeper'].includes(requestedKind) ? requestedKind : 'stalker';
     const templates = store(THREE).monsters;
     if (!templates.has(kind)) templates.set(kind, buildMonster(THREE, kind));
     return cloneMonster(templates.get(kind));
   }
 
   function cloneMonster(template) {
-    const source = template.userData, eye = source.eyeMat.clone(), nodes = new Map();
+    const source = template.userData, nodes = new Map();
+    const owned = new Map(source.resources.uniqueMaterials.map(material => [material, material.clone()]));
     // Object3D.clone() copies userData through JSON, which cannot carry the joint references: they are remapped below.
     template.userData = {};
     let g;
@@ -1434,189 +1989,577 @@
     pair(template, g);
     g.traverse(o => {
       if (!o.isMesh) return;
-      if (o.material === source.eyeMat) o.material = eye;
+      if (owned.has(o.material)) o.material = owned.get(o.material);
       if (!o.geometry.userData.hollowShared) {
         const geom = o.geometry.clone();
         geom.userData = Object.assign({}, geom.userData);
         o.geometry = geom;
       }
     });
-    const remap = value => value && value.isObject3D ? nodes.get(value) : Array.isArray(value) ? value.map(remap) : value;
+    const remap = value => value && value.isObject3D ? nodes.get(value) : owned.has(value) ? owned.get(value) : Array.isArray(value) ? value.map(remap) : value;
     const data = {};
     for (const key of Object.keys(source)) data[key] = remap(source[key]);
-    g.userData = Object.assign(data, { eyeMat: eye, glow: { intensity: 0 }, resources: { uniqueMaterials: [eye] } });
+    g.userData = Object.assign(data, { glow: { intensity: 0 }, resources: { uniqueMaterials: [...owned.values()] } });
     return g;
   }
 
+  // Joint layout per kind (root space, metres; +z is the creature's front). These match RULES.MONSTERS and the
+  // monster-anim.js RIGS mirror: hips, shoulders, the neck pivot (= head hit height), knee/elbow bends and ankle/wrist ends.
+  const FORMS = {
+    warden: { height: 2.8, head: 2.35, radius: .58, stride: .27, hips: [[-.245, 1.10, -.035], [.255, 1.02, .045]],
+      shoulders: [[-.48, 2.30, .015], [.47, 2.13, .055]], neck: [-.055, 2.35, .28],
+      knees: [[-.075, -.47, .10], [.065, -.42, -.04]], ankles: [[.025, -.55, -.085], [-.012, -.51, .09]],
+      elbows: [[-.075, -.64, .09], [.105, -.53, -.03]], wrists: [[.025, -.69, .035], [-.015, -.79, .16]],
+      rest: { neck: [.12, 0, -.03], head: [.13, -.08, -.13], jaw: [.06, 0, 0] }, jaw: [.022, .035, .025] },
+    stalker: { height: 2.65, head: 2.12, radius: .34, stride: .44, hips: [[-.135, 1.30, -.045], [.135, 1.21, .045]],
+      shoulders: [[-.27, 2.18, -.035], [.255, 2.02, .04]], neck: [.075, 2.12, .18],
+      knees: [[-.09, -.58, .02], [.105, -.63, .18]], ankles: [[.08, -.65, -.065], [-.14, -.51, -.13]],
+      elbows: [[-.055, -.65, .045], [.085, -.43, -.075]], wrists: [[-.015, -.78, .055], [-.035, -.52, .15]],
+      rest: { neck: [.02, -.04, .08], head: [.10, -.12, -.34], jaw: [-.04, 0, 0] }, jaw: [-.018, .035, .025] },
+    crawler: { height: .9, head: .55, radius: .43, stride: .2, hips: [[-.20, .52, -.36], [.225, .45, -.43]],
+      shoulders: [[-.245, .61, .22], [.26, .54, .16]], neck: [-.065, .55, .46],
+      knees: [[-.36, .10, -.30], [.29, .20, -.20]], ankles: [[.12, -.55, -.09], [.20, -.56, .13]],
+      elbows: [[-.34, .08, .12], [.33, .04, .25]], wrists: [[.17, -.61, .33], [.17, -.50, .24]],
+      rest: { neck: [.05, .12, .06], head: [.11, -.16, -.42] }, jaw: null },
+    shrieker: { height: 2.3, head: 1.9, radius: .34, stride: .44, hips: [[-.15, 1.03, -.07], [.12, 1.08, .015]],
+      shoulders: [[-.26, 1.78, .015], [.24, 1.71, -.025]], neck: [.015, 1.9, .17],
+      knees: [[-.05, -.42, -.02], [.07, -.50, .10]], ankles: [[.02, -.54, .10], [-.02, -.51, -.07]],
+      elbows: [[-.06, -.43, .10], [.12, -.52, -.02]], wrists: [[.035, -.44, .17], [-.17, -.34, .28]],
+      rest: { neck: [-.03, .10, .04], head: [-.07, .09, .12], jaw: [.04, 0, 0] }, jaw: [.008, .09, .025] },
+    gravekeeper: { height: 3.6, head: 3.05, radius: .8, stride: .36, hips: [[-.2, 1.72, -.04], [.2, 1.66, .04]],
+      shoulders: [[-.42, 2.86, -.02], [.44, 2.78, .06]], neck: [0, 3.05, .3],
+      knees: [[-.04, -.82, .1], [.05, -.78, .06]], ankles: [[.02, -.86, -.08], [-.02, -.84, -.06]],
+      elbows: [[-.1, -.78, .12], [.08, -.7, .16]], wrists: [[.02, -.82, .1], [-.02, -.62, .32]],
+      rest: { neck: [.3, 0, .04], head: [.12, .06, -.15], jaw: [.08, 0, 0] }, jaw: [0, 0, .06] }
+  };
+
+  // Shared skeleton: joint groups, rest Eulers, then the kind's body; consolidated and batched once per kind.
   function buildMonster(THREE, kind) {
-    const g = new THREE.Group(), p = monsterPalette(THREE, kind);
+    const g = new THREE.Group(), p = monsterPalette(THREE, kind), form = FORMS[kind];
     g.name = 'Blackwater Ward / ' + kind;
     if (!THREE.ColorManagement || !THREE.ColorManagement.enabled) p.eye.color.convertSRGBToLinear();
-    const heavy = kind === 'warden', crawling = kind === 'crawler', screaming = kind === 'shrieker';
-    // These dimensions match RULES.MONSTERS. The head pivot is the hit-height;
-    // hunched backs, a long cranial vault and splayed limbs supply the silhouette.
-    const form = {
-      warden: { height: 2.8, head: 2.35, radius: .58, hips: [[-.245, 1.10, -.035], [.255, 1.02, .045]], shoulders: [[-.48, 2.30, .015], [.47, 2.13, .055]], neck: [-.055, 2.35, .28] },
-      stalker: { height: 2.65, head: 2.12, radius: .34, hips: [[-.135, 1.30, -.045], [.135, 1.21, .045]], shoulders: [[-.27, 2.18, -.035], [.255, 2.02, .04]], neck: [.075, 2.12, .18] },
-      crawler: { height: .9, head: .55, radius: .43, hips: [[-.20, .52, -.36], [.225, .45, -.43]], shoulders: [[-.245, .61, .22], [.26, .54, .16]], neck: [-.065, .55, .46] },
-      shrieker: { height: 2.3, head: 1.9, radius: .34, hips: [[-.15, 1.03, -.07], [.12, 1.08, .015]], shoulders: [[-.26, 1.78, .015], [.24, 1.71, -.025]], neck: [.015, 1.9, .17] }
-    }[kind];
     const legL = joint(THREE, g, 'legL', ...form.hips[0]), legR = joint(THREE, g, 'legR', ...form.hips[1]);
     const armL = joint(THREE, g, 'armL', ...form.shoulders[0]), armR = joint(THREE, g, 'armR', ...form.shoulders[1]);
     const neck = joint(THREE, g, 'neck', ...form.neck), head = joint(THREE, neck, 'head', 0, 0, 0);
-    const knees = [], elbows = [];
-    let jaw = null;
-
-    if (crawling) {
-      // A collapsed patient held off the floor by inverted, uneven elbows/knees.
-      anatomy(THREE, g, p.skin, 'chest', .01, .54, -.055, .265, .53, .16, Math.PI / 2, .04, -.08);
-      anatomy(THREE, g, p.skin, 'hump', .035, .74, -.19, .125, .147, .27, .09, .1, -.08);
-      rag(THREE, g, p.cloth, -.045, .773, -.18, .39, .56, .026, -Math.PI / 2, .07, -.13);
-      for (let i = 0; i < 6; i++) {
-        const z = -.49 + i * .145, x = Math.sin(i * .9) * .043;
-        anatomy(THREE, g, p.bone, 'shard', x, .745 + Math.sin(i * .7) * .026, z, .028, .053, .048, -.18, .1, -.15);
-        sinew(THREE, g, p.bone, [x, .745, z], [-.245, .565, z + .045], .020);
-        if (i !== 2) sinew(THREE, g, p.bone, [x, .723, z], [.23, .55, z - .025], .014);
-      }
-      sinew(THREE, g, p.tendon, [-.07, .65, .25], [-.065, .55, .49], .055);
-      const bends = [[-.36, .10, -.30], [.29, .20, -.20], [-.34, .08, .12], [.33, .04, .25]];
-      const ends = [[.12, -.55, -.09], [.20, -.56, .13], [.17, -.61, .33], [.17, -.50, .24]];
-      for (const [i, limb] of [legL, legR, armL, armR].entries()) {
-        const distal = patientLimb(THREE, p, limb, ['kneeL', 'kneeR', 'elbowL', 'elbowR'][i], bends[i], ends[i], i < 2 ? .072 : .067, i % 2 ? 1 : -1, .86, true);
-        (i < 2 ? knees : elbows).push(distal);
-      }
-      box(THREE, g, p.bandage, -.11, .798, -.31, .075, .013, .09, 0, .12, -.08);
-    } else {
-      const hipY = (form.hips[0][1] + form.hips[1][1]) * .5;
-      anatomy(THREE, g, p.cloth, 'pelvis', .015, hipY + .025, -.015, heavy ? .28 : .18, .22, heavy ? .19 : .12, .08, .08, -.12);
-      if (heavy) {
-        anatomy(THREE, g, p.skin, 'chest', .025, 1.79, .01, .49, .56, .28, .10, 0, -.04);
-        anatomy(THREE, g, p.skin, 'hump', -.105, 2.19, -.18, .45, .60, .36, -.20, .02, .11);
-        anatomy(THREE, g, p.tendon, 'shard', .045, 1.40, .245, .19, .26, .035, .12, 0, .12);
-        rag(THREE, g, p.cloth, -.13, 1.24, .295, .43, .97, .027, 0, -.06, .08);
-        rag(THREE, g, p.cloth, .24, 1.17, .17, .22, .72, .025, .08, .9, -.13);
-        // Canvas restraints bite across the hunch; no armour or ornamental chains.
-        box(THREE, g, p.bandage, -.025, 2.13, .285, .88, .12, .032, .10, 0, -.20);
-        box(THREE, g, p.cloth, .015, 1.80, .275, .70, .115, .035, .06, 0, .14);
-        box(THREE, g, p.bandage, -.23, 2.12, .315, .09, .77, .029, .12, -.08, .38);
-        box(THREE, g, p.bandage, .20, 2.0, .295, .08, .61, .030, .10, .08, -.32);
-        box(THREE, g, p.dark, .28, 1.84, .311, .145, .12, .023, 0, 0, .14);
-        box(THREE, g, p.bandage, .28, 1.84, .325, .09, .066, .016, 0, 0, .14);
-        rag(THREE, g, p.bandage, -.34, 1.77, .315, .08, .34, .019, 0, -.2, -.24);
-      } else if (screaming) {
-        anatomy(THREE, g, p.skin, 'chest', .02, 1.39, -.025, .23, .41, .14, -.08, -.1, .075);
-        anatomy(THREE, g, p.tendon, 'shard', -.02, 1.20, .105, .07, .22, .035, .08, 0, -.15);
-        rag(THREE, g, p.cloth, .10, 1.24, .145, .25, .45, .022, 0, -.12, -.14);
-        rag(THREE, g, p.cloth, .02, 1.46, -.16, .40, .56, .026, .1, Math.PI, .12);
-        rag(THREE, g, p.bandage, .12, 1.63, .12, .065, .40, .013, 0, .2, -.20);
-      } else {
-        anatomy(THREE, g, p.skin, 'chest', -.045, 1.72, -.018, .228, .47, .155, .08, .12, -.13);
-        anatomy(THREE, g, p.tendon, 'shard', .045, 1.46, .122, .070, .25, .034, .12, 0, .14);
-        rag(THREE, g, p.cloth, .095, 1.40, .15, .24, .52, .025, 0, -.08, .13);
-        rag(THREE, g, p.cloth, -.10, 1.68, -.165, .30, .80, .022, .08, Math.PI, -.1);
-        rag(THREE, g, p.cloth, -.26, 2.05, .04, .14, .40, .025, .05, -.3, -.18);
-      }
-      for (let i = 0; i < 5; i++) {
-        const yy = (heavy ? 2.16 : screaming ? 1.68 : 2.03) - i * (screaming ? .088 : .12);
-        const w = (heavy ? .37 : .205) * (1 - i * .065), front = heavy ? .315 : .173;
-        for (const side of [-1, 1]) {
-          const a = [-.024, yy - (side > 0 ? i * .007 : 0), front];
-          const b = [side * w * .63, yy + (side < 0 ? .053 : .013), front - .02];
-          if (side < 0 || i !== 2) sinew(THREE, g, p.bone, a, b, heavy ? .023 : .015);
-          sinew(THREE, g, p.bone, b, [side * w, yy - .035, front - .11], heavy ? .018 : .012);
-        }
-        anatomy(THREE, g, p.bone, 'shard', Math.sin(i) * .026, hipY + .20 + i * (heavy ? .23 : .14), heavy ? -.29 : -.17, .025, .059, .047, -.15, .12, .18);
-      }
-      const legBends = heavy ? [[-.075, -.47, .10], [.065, -.42, -.04]]
-        : screaming ? [[-.05, -.42, -.02], [.07, -.50, .10]] : [[-.09, -.58, .02], [.105, -.63, .18]];
-      const legEnds = heavy ? [[.025, -.55, -.085], [-.012, -.51, .09]]
-        : screaming ? [[.02, -.54, .10], [-.02, -.51, -.07]] : [[.08, -.65, -.065], [-.14, -.51, -.13]];
-      const armBends = heavy ? [[-.075, -.64, .09], [.105, -.53, -.03]]
-        : screaming ? [[-.06, -.43, .10], [.12, -.52, -.02]] : [[-.055, -.65, .045], [.085, -.43, -.075]];
-      const armEnds = heavy ? [[.025, -.69, .035], [-.015, -.79, .16]]
-        : screaming ? [[.035, -.44, .17], [-.17, -.34, .28]] : [[-.015, -.78, .055], [-.035, -.52, .15]];
-      for (let i = 0; i < 2; i++) {
-        const side = i ? 1 : -1;
-        knees.push(patientLimb(THREE, p, i ? legR : legL, i ? 'kneeR' : 'kneeL', legBends[i], legEnds[i], heavy ? .14 : .072, side, 0, false));
-        elbows.push(patientLimb(THREE, p, i ? armR : armL, i ? 'elbowR' : 'elbowL', armBends[i], armEnds[i], heavy ? .12 : .054, side, heavy ? 1.27 : screaming ? .93 : 1, false));
-      }
-      sinew(THREE, neck, p.skin, [0, -.23, -.17], [0, .035, -.035], heavy ? .14 : .065);
-      sinew(THREE, neck, p.bone, [-.04, -.22, -.075], [.023, .09, -.08], heavy ? .028 : .019);
-    }
-
-    const skullW = heavy ? .205 : crawling ? .125 : .12, front = heavy ? .208 : .142;
-    const eyeY = screaming ? .132 : crawling ? .055 : .105;
-    anatomy(THREE, head, p.skin, 'skull', 0, crawling ? .03 : heavy ? .075 : screaming ? .14 : .13, -.035,
-      skullW, heavy ? .28 : crawling ? .205 : screaming ? .225 : .36, heavy ? .185 : .135, .06, -.08, .035);
-    for (const side of [-1, 1]) {
-      const xx = side * skullW * (side < 0 ? .48 : .43), yy = eyeY - (side > 0 ? .03 : 0);
-      hollow(THREE, head, p.dark, xx, yy, front, heavy ? .064 : .044, side < 0 ? .042 : .032, .037);
-      sinew(THREE, head, p.skin, [side * .012, yy + .043, front + .027], [xx * 1.55, yy + .030, front + .010], heavy ? .031 : .021);
-      anatomy(THREE, head, p.skin, 'shard', side * skullW * .74, yy - .11, front - .013, heavy ? .058 : .034, .14, .047, .1, side * .3, side * .23);
-    }
-    // One almost lost slit; the other socket is occluded. No paired catchlights.
-    box(THREE, head, p.eye, skullW * .43, eyeY - .03, front - .012, .019, .005, .003, 0, 0, -.12);
-    anatomy(THREE, head, p.bone, 'shard', -.018, eyeY - .072, front + .009, .023, .083, .032, .15, -.14, -.16);
-    rag(THREE, head, p.bandage, -skullW * .51, eyeY + .062, front + .021, skullW * .83, crawling ? .18 : .22, .013, 0, -.16, .17);
-    if (crawling) {
-      hollow(THREE, head, p.dark, -.012, -.075, front + .006, .071, .108, .065);
-      sinew(THREE, head, p.skin, [-.105, .015, .09], [-.095, -.15, .18], .027);
-      sinew(THREE, head, p.bone, [-.095, -.15, .18], [-.023, -.18, .20], .022);
-      sinew(THREE, head, p.skin, [.092, .005, .09], [.055, -.157, .19], .022);
-      teeth(THREE, head, p.bone, -.012, front + .018, .045, 3, true, -.008);
-      head.rotation.set(.11, -.16, -.42); neck.rotation.set(.05, .12, .06);
-    } else {
-      jaw = joint(THREE, head, 'jaw', heavy ? .022 : screaming ? .008 : -.018, screaming ? .09 : .035, .025);
-      const drop = heavy ? .255 : screaming ? .565 : .33, width = heavy ? .145 : screaming ? .108 : .087;
-      hollow(THREE, jaw, p.dark, -.014, -drop * .52, front + .01, width, drop * (screaming ? .64 : .60), screaming ? .14 : .095);
-      for (const side of [-1, 1]) {
-        const hinge = [side * skullW * .82, .01, front * .58];
-        const corner = [side * width, -drop * (side < 0 ? .81 : .74), front + .022];
-        const chin = [side * (screaming ? .037 : .022), -drop * (side < 0 ? 1 : .94), front + .06];
-        sinew(THREE, jaw, p.skin, hinge, corner, heavy ? .047 : .027);
-        sinew(THREE, jaw, p.bone, corner, chin, heavy ? .030 : .021);
-        if (screaming) {
-          sinew(THREE, jaw, p.tendon, [side * .07, -.06, front - .024], [side * .049, -.47, front + .025], .016);
-          teeth(THREE, jaw, p.bone, chin[1] + .025, front + .062, .031, 2, false, side * .067);
-        }
-      }
-      teeth(THREE, head, p.bone, .018, front + .03, heavy ? .14 : .085, heavy ? 7 : 5, true);
-      if (!screaming) {
-        sinew(THREE, jaw, p.skin, [-.023, -drop, front + .06], [.033, -drop * .94, front + .065], .021);
-        teeth(THREE, jaw, p.bone, -drop + .028, front + .066, .08, 4, false, .008);
-      }
-      rag(THREE, jaw, p.bandage, -width, -drop * .53, front * .55, .05, heavy ? .22 : .27, .013, 0, -.45, -.18);
-      if (heavy) {
-        box(THREE, head, p.cloth, -.017, eyeY + .082, front - .002, .38, .061, .029, .1, -.1, -.14);
-        wraps(THREE, neck, p.bandage, 0, -.145, -.07, .145, 2);
-        head.rotation.set(.13, -.08, -.13); neck.rotation.set(.12, 0, -.03); jaw.rotation.x = .06;
-      } else if (screaming) {
-        // The mouth continues down between two pulled-apart mandibular rails.
-        sinew(THREE, neck, p.tendon, [-.06, -.40, -.07], [-.11, .13, .025], .023);
-        sinew(THREE, neck, p.tendon, [.07, -.36, -.04], [.085, .10, .013], .018);
-        for (let i = 0; i < 4; i++) box(THREE, neck, p.bone, .008, -.13 - i * .055, .043, .061, .015, .032, 0, 0, i * .04);
-        head.rotation.set(-.07, .09, .12); neck.rotation.set(-.03, .10, .04); jaw.rotation.x = .04;
-      } else {
-        head.rotation.set(.10, -.12, -.34); neck.rotation.set(.02, -.04, .08); jaw.rotation.x = -.04;
-      }
-    }
-    // Immutable local XYZ Euler baselines for additive animation. Distortions are
-    // also in mesh endpoints and the head child, so the legacy animator is safe.
+    const jaw = form.jaw ? joint(THREE, head, 'jaw', ...form.jaw) : null;
+    const rig = { g, legL, legR, armL, armR, neck, head, jaw, knees: [], elbows: [], form };
+    const body = BODIES[kind](THREE, p, rig);
+    for (const [name, part] of [['neck', neck], ['head', head], ['jaw', jaw]]) if (part && form.rest[name]) part.rotation.set(...form.rest[name]);
     const restPose = {};
-    for (const part of [legL, legR, armL, armR, neck, head, ...knees, ...elbows, ...(jaw ? [jaw] : [])]) {
+    for (const part of [legL, legR, armL, armR, neck, head, ...rig.knees, ...rig.elbows, ...(jaw ? [jaw] : [])]) {
       restPose[part.name] = Object.freeze({ x: part.rotation.x, y: part.rotation.y, z: part.rotation.z });
     }
-    consolidateOrganicMaterials(THREE, g, p, { warden: 1, stalker: 2, crawler: 3, shrieker: 4 }[kind], { front, eyeY });
+    consolidateOrganicMaterials(THREE, g, p, { warden: 1, stalker: 2, crawler: 3, shrieker: 4, gravekeeper: 5 }[kind], { front: body.front, eyeY: body.eyeY }, body.drips);
     batch(THREE, g);
-    const glow = { intensity: 0 }; // Compatibility handle only; never drives light or emission.
-    g.userData = {
+    g.userData = Object.assign({
       kind, direction: 'Blackwater Ward', legL, legR, armL, armR, neck, head, jaw, restPose: Object.freeze(restPose),
-      eyeMat: p.eye, eyeColor: p.eye.color.getHex(), glow, limbs: [legL, legR, armL, armR], knees, elbows, phase: 0,
-      twitch: 0, twitchT: 1, speed: 0, chasing: false,
-      height: form.height, bodyRadius: form.radius, headHeight: form.head,
-      stride: crawling ? .2 : heavy ? .27 : .44, resources: { uniqueMaterials: [p.eye] }
-    };
+      eyeMat: p.eye, eyeColor: p.eye.color.getHex(), glow: { intensity: 0 }, limbs: [legL, legR, armL, armR], knees: rig.knees, elbows: rig.elbows,
+      phase: 0, twitch: 0, twitchT: 1, speed: 0, chasing: false, height: form.height, bodyRadius: form.radius, headHeight: form.head,
+      stride: form.stride, resources: { uniqueMaterials: [p.eye, ...(body.materials || [])] }
+    }, body.userData);
     return g;
+  }
+
+  // Seats a hanging limb pair: legs then arms, both sides, with the kind's options per side.
+  function limbs(THREE, p, rig, legs, arms) {
+    const f = rig.form;
+    for (let i = 0; i < 2; i++) {
+      const side = i ? 1 : -1;
+      rig.knees.push(bodyLeg(THREE, p, i ? rig.legR : rig.legL, i ? 'kneeR' : 'kneeL', f.knees[i], f.ankles[i],
+        Object.assign({ side, hipY: f.hips[i][1], seed: 11 + i }, legs(i))));
+      rig.elbows.push(bodyArm(THREE, p, i ? rig.armR : rig.armL, i ? 'elbowR' : 'elbowL', f.elbows[i], f.wrists[i],
+        Object.assign({ side, seed: 21 + i }, arms(i))));
+    }
+  }
+
+  // Ribs as arcs seated on a reference torso surface at each height: `buried` sinks them into taut skin; `lift` stands
+  // them proud of a flayed cavity. sides: -1 (L), 1 (R).
+  function ribcage(THREE, parent, p, ref, o) {
+    for (let i = 0; i < o.count; i++) {
+      const y = o.top - i * o.gap;
+      for (const side of o.sides) {
+        const exposed = o.exposed && o.exposed(side, i), lift = exposed ? -.02 : o.buried, pts = [];
+        if (o.only && !exposed) continue;
+        for (const [ang, dy] of [[-.48, .03], [-.28, .02], [0, 0], [.27, -.035], [.43, -.07]]) {
+          if (ang > .4 && !exposed && i > 3) continue;
+          const a = ang * Math.PI, dx = side * Math.cos(a), dz = Math.sin(a);
+          const cx = o.center[0] + (o.lean || 0) * (y - o.top), cz = o.center[1];
+          pts.push(surf(THREE, ref, [cx + dx * 1.2, y + dy, cz + dz * 1.2], [-dx, 0, -dz], lift));
+        }
+        strand(THREE, parent, p.bone, pts, o.radius * (exposed ? 1.15 : 1), o.radius * .8, { sides: 4, caps: [false, true] });
+      }
+    }
+  }
+
+  // Spinous processes down the back: bony knobs seated on the reference surface, pointing back and down.
+  function vertebrae(THREE, parent, p, ref, o) {
+    for (let i = 0; i < o.count; i++) {
+      const y = o.from + (o.to - o.from) * i / (o.count - 1), x = (o.x || 0) + Math.sin(i * 1.7) * .006;
+      const at = surf(THREE, ref, [x, y, (o.z || 0) - 1], [0, 0, 1], .006), r = o.radius * (1 - .25 * Math.abs(i / (o.count - 1) - .45));
+      fang(THREE, parent, p.bone, at, [at[0], at[1] - r * .7, at[2] - r * 2.1], r, [0, r * .3, 0], null, 4);
+    }
+  }
+
+  const BODIES = {
+    warden(THREE, p, rig) {
+      const { g, neck, head, jaw } = rig, T = tints(THREE), front = .208, eyeY = .105, drop = .255;
+      // A hulking brute: gut, barrel chest, a lumpy hump with the spine breaking through, an autopsy Y-incision
+      // stapled shut, a flayed right flank over bare ribs, and what is left of a straitjacket cinched with leather.
+      const spine = [[0, .98, 0], [0, 1.22, .04], [0, 1.5, .05], [-.01, 1.78, .03], [-.03, 2.04, 0], [-.04, 2.26, .01], [-.05, 2.38, .06]];
+      const girth = [[.25, .19], [.31, .24], [.35, .25], [.43, .27], [.49, .28], [.4, .24], [.18, .15]];
+      const hump = [[-.06, 1.72, -.12], [-.09, 2.08, -.2], [-.12, 2.45, -.17], [-.11, 2.66, -.07], [-.1, 2.75, .02]];
+      const humpR = [[.3, .17], [.42, .24], [.38, .24], [.24, .16], [0, 0]];
+      const tmp = new THREE.Group(), ref = [loft(THREE, tmp, p.skin, spine, girth, { sides: 16, seg: 2 }), loft(THREE, tmp, p.skin, hump, humpR, { sides: 12, seg: 2 })];
+      loft(THREE, g, p.skin, spine, girth, { sides: 16, seg: 2, focus: .3, lump: .08, seed: 1, sculpt: [
+        { at: [.36, 1.62, .1], r: .17, d: -.06, wound: 1 }, { at: [-.22, 1.3, .2], r: .09, d: -.02, color: T.bruise, weight: .7 },
+        { at: [0, 1.06, .2], to: [0, 1.06, -.15], r: .07, d: -.03 }, { at: [-.2, 1.95, -.2], r: .12, d: .03 },
+        { at: [-.2, 2.02, .26], r: .17, d: .035 }, { at: [.19, 1.99, .27], r: .16, d: .03 }, { at: [-.32, 1.87, .2], to: [.3, 1.85, .22], r: .045, d: -.025 },
+        { at: [0, 1.36, .3], r: .24, d: .045 }, { at: [.02, 1.33, .29], r: .025, d: -.02, dark: .8 }] });
+      loft(THREE, g, p.skin, hump, humpR, { sides: 10, seg: 3, lump: .16, seed: 2, sculpt: [{ at: [.12, 2.3, -.42], r: .12, d: -.03, wound: .7 },
+        { at: [-.32, 2.2, -.3], r: .13, d: .06 }, { at: [.15, 2.5, -.3], r: .1, d: .05 }, { at: [-.25, 1.9, -.33], r: .09, d: .04, color: T.bruise, weight: .8 },
+        { at: [-.1, 2.6, -.2], to: [-.1, 1.8, -.4], r: .055, d: -.02, wound: .55 }] });
+      ribcage(THREE, g, p, ref[0], { count: 5, top: 1.86, gap: .075, center: [-.02, .03], sides: [1], radius: .017, buried: .01, only: true,
+        exposed: (side, i) => i >= 1 && i <= 3 });
+      vertebrae(THREE, g, p, ref, { count: 8, from: 1.82, to: 2.62, radius: .048, x: -.1, z: -.1 });
+      // Trapezius and deltoids: one slab of muscle from shoulder to shoulder, the left heaved higher.
+      loft(THREE, g, p.skin, [[-.6, 2.31, .0], [-.36, 2.43, -.01], [-.08, 2.45, .02], [.22, 2.33, .05], [.54, 2.15, .06]],
+        [[.14, .13], [.19, .17], [.2, .16], [.17, .15], [.13, .12]], { sides: 10, seg: 3, up: [0, 1, 0], lump: .1, seed: 3 });
+      const chest = (x, y) => surf(THREE, ref[0], [x, y, 1.5], [0, 0, -1], -.002);
+      const sternum = chest(-.02, 1.86);
+      staples(THREE, g, p, chest(-.3, 2.07), sternum, 6, [0, 0, 1]); staples(THREE, g, p, chest(.27, 2.0), sternum, 6, [0, 0, 1]);
+      staples(THREE, g, p, sternum, chest(-.01, 1.5), 5, [0, 0, 1]); staples(THREE, g, p, chest(-.01, 1.5), chest(0, 1.2), 4, [0, 0, 1]);
+      // Straitjacket: open down the front, torn over the flayed flank, ragged at the hem.
+      loft(THREE, g, p.cloth, [[0, 1.04, .0], [0, 1.25, .04], [0, 1.5, .05], [-.01, 1.75, .03], [-.02, 1.96, .015]],
+        [[.29, .23], [.345, .275], [.385, .285], [.465, .305], [.515, .31]], { sides: 16, seg: 2, caps: [false, false], folds: [9, .035], seed: 4,
+          skip: (t, a, x, y, z) => Math.abs(a - .25) < .075 || Math.hypot(x - .38, y - 1.64, z - .12) < .2 || (t < .15 && noise3(a * 13, 1, 2) > .45) || noise3(t * 6, a * 11, 7) > .74 });
+      for (const [y, tilt, at] of [[1.8, .03, -.12], [1.38, -.04, .16]]) {
+        girdle(THREE, g, p.leather, ref[0], [0, y, .03], { n: 16, rot: [0, 0, tilt], thick: .012, height: .036, seed: y });
+        const b = surf(THREE, ref[0], [at, y + at * tilt, 1], [0, 0, -1], -.02);
+        box(THREE, g, p.iron, b[0], b[1], b[2], .07, .06, .012, 0, 0, tilt);
+      }
+      rag(THREE, g, p.cloth, .1, .98, .27, .38, .62, .06, 0, -.06, .06);
+      rag(THREE, g, p.cloth, -.08, 1.0, -.22, .44, .7, .06, .05, Math.PI, -.05);
+      rag(THREE, g, p.bandage, -.33, 1.12, .2, .09, .42, .03, 0, -.3, -.2);
+      limbs(THREE, p, rig, () => ({ width: .14, foot: 1.3, toes: .7, lump: .1, mass: .35 }),
+        () => ({ width: .12, lump: .1, mass: .45, hand: { size: 1.27, thick: 1.45, claw: 1.25, length: 1.05, curl: .75 } }));
+      // A canvas sleeve and a cuff with its strap torn loose; old dressings on the other forearm and a knee.
+      const f = rig.form, b0 = f.elbows[0];
+      loft(THREE, rig.armL, p.cloth, [[0, .06, 0], [b0[0] * .5, b0[1] * .5, b0[2] * .5], [b0[0] * .92, b0[1] * .92, b0[2] * .92]], [[.18, .17], [.15, .15], [.135, .13]],
+        { sides: 10, seg: 2, caps: [false, false], folds: [5, .05], seed: 6, skip: (t, a) => t > .7 && noise3(a * 9, t * 4, 3) > .5 });
+      band(THREE, rig.armL, p.leather, [b0[0] * .82, b0[1] * .82, b0[2] * .82], .14, .135, .06, [0, 0, 0], p.iron);
+      strand(THREE, rig.armL, p.leather, [[b0[0] * .82 + .1, b0[1] * .82, b0[2] * .82 + .08], [b0[0] * .82 + .14, b0[1] * .82 - .12, b0[2] * .82 + .1],
+        [b0[0] * .82 + .12, b0[1] * .82 - .3, b0[2] * .82 + .06]], .024, .02, { sides: 3, up: [1, 0, 0] });
+      wraps(THREE, rig.elbows[1], p.bandage, 0, -.2, .01, .09, 4);
+      wraps(THREE, rig.knees[0], p.bandage, 0, -.03, .01, .12, 3);
+      // Thick neck in a restraint collar.
+      const throat = loft(THREE, neck, p.skin, [[0, -.26, -.22], [0, -.14, -.12], [0, -.02, -.05], [0, .05, -.02]], [[.2, .18], [.17, .16], [.15, .15], [.14, .14]],
+        { sides: 12, seg: 2, lump: .1, seed: 8 });
+      girdle(THREE, neck, p.leather, throat, [0, -.12, -.1], { n: 14, rot: [.55, 0, 0], thick: .014, height: .04, seed: 2 });
+      const ring = surf(THREE, throat, [0, -.08, .5], [0, -.3, -1], -.025);
+      loft(THREE, neck, p.iron, [[ring[0] - .03, ring[1] + .02, ring[2]], [ring[0], ring[1] - .02, ring[2] + .012], [ring[0] + .03, ring[1] + .02, ring[2]]], [.007, .007, .007], { sides: 4, seg: 2 });
+      // Low sloping skull: an overhanging brow, sunken temples, a tumour swelling the left side of the vault. A riveted
+      // iron band is bolted across the eyes and over the crown; blood weeps from under it; the right socket peers out.
+      const skull = loft(THREE, head, p.skin, [[0, -.04, .01], [0, .0, .02], [0, .05, .028], [0, .1, .022], [0, .15, .0], [0, .2, -.04], [0, .25, -.09], [0, .29, -.14]],
+        [[.15, .13], [.185, .175], [.19, .185], [.192, .185], [.185, .18], [.17, .165], [.13, .12], [0, 0]], { sides: 20, seg: 2, focus: .55, lump: .09, seed: 13, sculpt: [
+          { at: [-.075, eyeY, .2], r: .07, d: -.04, dark: 1.4 }, { at: [.08, eyeY - .02, .19], r: .072, d: -.06, dark: 2.2 },
+          { at: [-.13, eyeY + .06, .17], to: [.13, eyeY + .06, .17], r: .05, d: .04 }, { at: [0, .045, .22], r: .045, d: -.035, dark: 1.6 },
+          { at: [-.14, .03, .13], r: .06, d: .025 }, { at: [.14, .03, .13], r: .06, d: .025 }, { at: [.05, .2, .1], r: .05, d: -.02, wound: .8 },
+          { at: [-.16, .1, .06], r: .06, d: -.025 }, { at: [.16, .1, .06], r: .06, d: -.025 }, { at: [-.17, .19, -.06], r: .1, d: .05, color: T.bruise, weight: .6 },
+          { at: [-.08, eyeY - .02, .2], to: [-.1, eyeY - .16, .17], r: .03, color: T.blood, weight: .9, wet: 1 },
+          { at: [.1, eyeY - .06, .19], to: [.12, eyeY - .2, .16], r: .025, color: T.blood, weight: .8, wet: 1 }] });
+      girdle(THREE, head, p.iron, skull, [0, eyeY + .03, .0], { n: 18, rot: [-.06, 0, .13], thick: .012, height: .028, seed: 3 });
+      girdle(THREE, head, p.iron, skull, [0, eyeY + .03, -.02], { n: 9, rot: [0, 0, Math.PI / 2], from: .02, to: .62, thick: .011, height: .022, seed: 4 });
+      for (const x of [-.13, -.04, .05, .14]) {
+        const r = surf(THREE, skull, [x, eyeY + .03 - x * .13, .6], [0, 0, -1], -.024);
+        box(THREE, head, p.iron, r[0], r[1], r[2], .016, .016, .01, 0, Math.atan2(x, .2), .13);
+      }
+      const eyeAt = surf(THREE, skull, [.085, eyeY - .025, .6], [0, 0, -1], -.002);
+      box(THREE, head, p.eye, eyeAt[0], eyeAt[1], eyeAt[2], .02, .005, .003, 0, 0, -.12);
+      dentition(THREE, head, p, { x: 0, y: .015, z: front + .015, width: .23, curve: .09, count: 15, length: .075, radius: .011, down: true, seed: 3, splay: .12 });
+      dentition(THREE, head, p, { x: 0, y: .01, z: front - .035, width: .17, curve: .06, count: 7, length: .05, radius: .008, down: true, seed: 5, rake: -.4 });
+      strand(THREE, head, p.tendon, [[.045, -.015, front + .01], [.05, -.1, front + .015], [.044, -.19, front]], .006, .002, { sides: 3, tint: () => [...T.drool, .6, 1] });
+      // Jaw: a heavy mandible with tusks, gums, cheek tendons stretched to the skull and a strip of torn bite-mask.
+      hollow(THREE, jaw, p.dark, -.014, -drop * .52, front + .01, .145, drop * .6, .16);
+      loft(THREE, jaw, p.skin, [[-.15, .0, -.04], [-.14, -drop * .6, front * .5], [-.09, -drop * .95, front * .9], [0, -drop * 1.02, front + .045],
+        [.09, -drop * .95, front * .9], [.14, -drop * .6, front * .5], [.15, .0, -.04]], [[.024, .04], [.026, .062], [.028, .07], [.03, .072], [.028, .07], [.026, .062], [.024, .04]],
+      { sides: 8, seg: 2, up: [0, 1, 0], lump: .08, seed: 14, tint: (t, a) => Math.abs(a - .25) < .06 ? [...T.gum, .7 - Math.abs(a - .25) * 11, .6] : null });
+      dentition(THREE, jaw, p, { x: 0, y: -drop + .045, z: front + .035, width: .2, curve: .08, count: 13, length: .065, radius: .01, seed: 7, splay: .15 });
+      const tooth = t => t < .2 ? [...T.gum, 1 - t * 5, 1] : t > .7 ? [...T.nail, (t - .7) * 2, .6] : null;
+      for (const side of [-1, 1]) {
+        fang(THREE, jaw, p.bone, [side * .1, -drop * .78, front * .82], [side * .13, -drop * .78 + .17, front * .9], .021, [side * .012, 0, .03], tooth, 4);
+        strand(THREE, jaw, p.tendon, [[side * .14, -drop * .55, front * .45], [side * .16, -drop * .25, front * .25], [side * .15, .0, .0]], .018, .013, { sides: 4 });
+      }
+      strand(THREE, jaw, p.leather, [[-.15, -.05, .02], [-.17, -drop * .7, front * .3], [-.15, -drop * 1.2, front * .5]], .022, .02, { sides: 3, up: [1, 0, 0] });
+      return { front, eyeY, drips: [[-.02, 2.15, .33, .05, .7], [.08, 2.1, .3, .035, .9], [-.12, 2.05, .3, .03, .5], [-.53, 1.25, -.2, .08, .65], [.56, 1.1, -.15, .07, .5]] };
+    },
+    stalker(THREE, p, rig) {
+      const { g, neck, head, jaw } = rig, T = tints(THREE), front = .142, eyeY = .105, drop = .33;
+      // Starved torso: pinched waist, ribs under taut skin, a flayed left flank with the ribs standing over the cavity.
+      const spine = [[0, 1.18, 0], [-.005, 1.36, -.02], [-.015, 1.55, -.04], [-.02, 1.75, -.03], [-.02, 1.93, -.02], [0, 2.07, 0], [.03, 2.16, .04]];
+      const girth = [[.13, .095], [.15, .1], [.1, .07], [.15, .1], [.172, .112], [.16, .1], [.07, .065]];
+      const ref = loft(THREE, new THREE.Group(), p.skin, spine, girth, { sides: 14, seg: 3 });
+      loft(THREE, g, p.skin, spine, girth, { sides: 14, seg: 3, lump: .05, seed: 3, sculpt: [
+        { at: [-.15, 1.74, .03], r: .14, d: -.05, wound: 1 }, { at: [.13, 1.62, -.07], r: .07, d: -.016, wound: .9 },
+        { at: [-.12, 1.99, -.11], r: .08, d: .022 }, { at: [.12, 1.97, -.1], r: .08, d: .02 },
+        { at: [-.115, 1.36, .07], r: .05, d: .018 }, { at: [.115, 1.36, .07], r: .05, d: .018 },
+        { at: [0, 1.5, .07], r: .09, d: -.02, color: T.bruise, weight: .5 }] });
+      loft(THREE, g, p.skin, [[-.3, 2.17, -.045], [-.15, 2.165, -.035], [.03, 2.13, -.005], [.15, 2.06, .015], [.28, 2.01, .04]],
+        [[.06, .045], [.07, .05], [.075, .055], [.068, .05], [.055, .045]], { sides: 8, seg: 2, up: [0, 1, 0], lump: .06, seed: 5 });
+      ribcage(THREE, g, p, ref, { count: 6, top: 1.93, gap: .062, center: [-.02, -.02], sides: [-1, 1], radius: .011, buried: .003,
+        exposed: (side, i) => side < 0 && i > 0 && i < 5 });
+      vertebrae(THREE, g, p, ref, { count: 11, from: 1.3, to: 2.1, radius: .016, z: -.02 });
+      const sternum = [surf(THREE, ref, [0, 1.95, 1], [0, 0, -1]), surf(THREE, ref, [0, 1.6, 1], [0, 0, -1])];
+      staples(THREE, g, p, sternum[0], sternum[1], 7, [0, 0, 1]);
+      rag(THREE, g, p.cloth, .085, 1.42, .135, .22, .5, .025, 0, -.1, .12);
+      rag(THREE, g, p.cloth, -.06, 1.66, -.15, .32, .8, .022, .07, Math.PI, -.08);
+      rag(THREE, g, p.cloth, .2, 1.98, .02, .13, .36, .02, .05, -.4, .2);
+      limbs(THREE, p, rig, () => ({ width: .072 }), i => ({ width: .054, hand: i ? { size: 1, length: 1.3 } : { size: 1.2, length: 1.6, claw: 1.4, curl: .4 } }));
+      // A torn wrist restraint on the dragging arm, old dressings on the other.
+      const [elbowL, elbowR] = rig.elbows, wl = rig.form.wrists[0];
+      band(THREE, elbowL, p.leather, [wl[0], wl[1] + .07, wl[2]], .036, .03, .045, [.05, 0, .1], p.iron);
+      strand(THREE, elbowL, p.leather, [[wl[0] + .03, wl[1] + .06, wl[2] + .02], [wl[0] + .05, wl[1] - .04, wl[2] + .05], [wl[0] + .04, wl[1] - .17, wl[2] + .02]],
+        .012, .009, { sides: 3, up: [1, 0, 0] });
+      wraps(THREE, elbowR, p.bandage, 0, -.12, .004, .04, 3);
+      // Neck: a long stalk with corded tendons and a windpipe ridge.
+      loft(THREE, neck, p.skin, [[-.07, -.26, -.19], [-.03, -.13, -.1], [0, -.03, -.045], [0, .05, -.02]], [.072, .052, .044, .05], { sides: 8, seg: 2, lump: .05, seed: 7 });
+      strand(THREE, neck, p.tendon, [[-.04, .02, .02], [-.03, -.1, -.04], [-.02, -.24, -.1]], .011, .014, { sides: 3 });
+      strand(THREE, neck, p.tendon, [[.04, .02, .0], [.035, -.1, -.05], [.02, -.22, -.12]], .01, .013, { sides: 3 });
+      strand(THREE, neck, p.bone, [[0, -.04, .01], [-.01, -.14, -.035], [-.04, -.24, -.1]], .012, .01, { sides: 4 });
+      // Elongated vault, sockets pressed in (the left one sewn shut), a lipless snout of needles and a hanging jaw.
+      const skull = loft(THREE, head, p.skin, [[0, -.075, .0], [0, .0, .015], [0, .05, .017], [0, .1, .015], [0, .15, .004], [0, .22, -.02], [0, .31, -.05], [0, .42, -.1], [0, .47, -.12]],
+        [[.07, .085], [.092, .11], [.098, .12], [.1, .125], [.104, .128], [.106, .13], [.1, .125], [.075, .1], [0, 0]], { sides: 20, seg: 2, focus: .6, lump: .035, seed: 9, sculpt: [
+          { at: [.05, eyeY, .13], r: .062, d: -.045, dark: 1.9 }, { at: [-.05, eyeY + .004, .13], r: .055, d: -.028, color: T.bruise, weight: 1.2, wet: .9 },
+          { at: [-.075, .158, .12], to: [.075, .158, .12], r: .03, d: .014 }, { at: [0, .045, .145], r: .036, d: -.026, dark: 1.6 },
+          { at: [-.085, .055, .085], r: .04, d: .014 }, { at: [.085, .055, .085], r: .04, d: .014 },
+          { at: [-.1, .16, .0], r: .05, d: -.012 }, { at: [.1, .16, .0], r: .05, d: -.012 },
+          { at: [-.105, .24, .03], to: [.105, .25, .04], r: .02, d: -.006, wound: .8 }] });
+      const scar = [surf(THREE, skull, [-.4, .23, .03], [1, 0, 0], -.002), surf(THREE, skull, [0, .25, .5], [0, 0, -1], -.002), surf(THREE, skull, [.4, .26, .04], [-1, 0, 0], -.002)];
+      staples(THREE, head, p, scar[0], scar[1], 4, [0, 0, 1]); staples(THREE, head, p, scar[1], scar[2], 4, [0, 0, 1]);
+      const eyeAt = surf(THREE, skull, [.048, eyeY, .5], [0, 0, -1], -.002);
+      box(THREE, head, p.eye, eyeAt[0], eyeAt[1], eyeAt[2], .019, .005, .003, 0, 0, -.12);
+      for (let i = 0; i < 4; i++) {
+        const y = eyeY + .02 - i * .014, a = surf(THREE, skull, [-.075, y, .5], [0, 0, -1], -.002), b = surf(THREE, skull, [-.022, y - .006, .5], [0, 0, -1], -.002);
+        strand(THREE, head, p.dark, [a, b], .0025, .0025, { sides: 3, caps: [false, false] });
+      }
+      dentition(THREE, head, p, { x: 0, y: .012, z: front + .012, width: .13, curve: .055, count: 13, length: .055, radius: .007, down: true, seed: 4, splay: .1 });
+      dentition(THREE, head, p, { x: 0, y: .006, z: front - .025, width: .1, curve: .04, count: 8, length: .035, radius: .005, down: true, seed: 8, rake: -.4 });
+      strand(THREE, head, p.tendon, [[.032, -.01, front + .01], [.035, -.08, front + .012], [.03, -.15, front + .002]], .0045, .0015,
+        { sides: 3, tint: () => [...T.drool, .6, 1] });
+      strand(THREE, head, p.tendon, [[-.05, -.015, front - .005], [-.052, -.11, front - .002]], .004, .002, { sides: 3, tint: () => [...T.drool, .6, 1] });
+      // Jaw: a bare mandible hung far open, lower needles, cheek tendons stretched up to the skull.
+      hollow(THREE, jaw, p.dark, -.014, -drop * .52, front + .01, .087, drop * .6, .17);
+      loft(THREE, jaw, p.skin, [[-.085, .01, -.03], [-.08, -drop * .6, front * .45], [-.05, -drop * .95, front * .9], [0, -drop * 1.02, front + .04],
+        [.05, -drop * .95, front * .9], [.08, -drop * .6, front * .45], [.085, .01, -.03]], [[.018, .02], [.022, .026], [.026, .03], [.028, .032], [.026, .03], [.022, .026], [.018, .02]],
+      { sides: 8, seg: 2, up: [0, 1, 0], lump: .08, seed: 12, tint: (t, a) => Math.abs(a - .25) < .2 ? [...T.gum, 1 - Math.abs(a - .25) * 4, 1]
+        : Math.abs(t - .5) < .12 ? [...T.tooth, .7, .4] : null });
+      dentition(THREE, jaw, p, { x: 0, y: -drop + .03, z: front + .03, width: .1, curve: .06, count: 11, length: .05, radius: .0065, seed: 6, splay: .15 });
+      for (const side of [-1, 1]) {
+        strand(THREE, jaw, p.tendon, [[side * .08, -drop * .55, front * .4], [side * .095, -drop * .25, front * .2], [side * .09, .0, .0]], .012, .009, { sides: 4 });
+        strand(THREE, jaw, p.flesh, [[side * .07, -drop * .8, front * .7], [side * .085, -drop * .45, front * .55], [side * .086, -.06, front * .45]], .008, .006, { sides: 3 });
+      }
+      strand(THREE, jaw, p.tendon, [[-.055, -drop * .85, front * .82], [-.058, -drop * 1.15, front * .8], [-.054, -drop * 1.4, front * .72]], .004, .0012,
+        { sides: 3, tint: () => [...T.drool, .6, 1] });
+      return { front, eyeY, drips: [[.04, 1.97, .3, .03, .55], [.12, 1.9, .26, .022, .75], [-.03, 1.88, .2, .018, .4]] };
+    },
+    crawler(THREE, p, rig) {
+      const { g, head } = rig, T = tints(THREE), front = .142, eyeY = .055, f = rig.form;
+      // An emaciated patient on all fours, belly to the floor, the arched spine splitting through its skin; the limbs
+      // fold up above the body like a spider's, and lank black hair hangs round a face wrenched sideways.
+      const spine = [[0, .5, -.66], [0, .55, -.48], [0, .62, -.24], [-.01, .66, .0], [-.02, .63, .2], [-.04, .58, .34]];
+      const girth = [[.09, .07], [.16, .1], [.12, .085], [.16, .11], [.19, .12], [.1, .085]];
+      const ref = loft(THREE, new THREE.Group(), p.skin, spine, girth, { sides: 14, seg: 3, up: [0, 1, 0] });
+      loft(THREE, g, p.skin, spine, girth, { sides: 14, seg: 3, up: [0, 1, 0], lump: .06, seed: 5, sculpt: [
+        { at: [0, .72, -.32], to: [-.01, .76, .08], r: .05, d: -.025, wound: 1 }, { at: [0, .47, -.2], r: .1, d: -.02 },
+        { at: [-.12, .73, .2], r: .07, d: .03 }, { at: [.12, .71, .18], r: .07, d: .03 }, { at: [.14, .6, -.3], r: .06, d: -.015, wound: .7 },
+        { at: [-.15, .55, .05], r: .08, d: -.01, color: T.bruise, weight: .8 }] });
+      for (let i = 0; i < 6; i++) {
+        const z = .26 - i * .065, cy = .64 - i * .006;
+        for (const side of [-1, 1]) {
+          const exposed = side > 0 && i > 0 && i < 4, pts = [];
+          for (const ang of [.42, .25, 0, -.25, -.4]) {
+            const a = ang * Math.PI, dx = side * Math.cos(a), dy = Math.sin(a);
+            pts.push(surf(THREE, ref, [-.015 + dx, cy + dy, z - Math.abs(ang) * .04], [-dx, -dy, 0], exposed ? -.016 : .005));
+          }
+          strand(THREE, g, p.bone, pts, exposed ? .012 : .01, .008, { sides: 4, caps: [false, true], tint: exposed ? (t => [...T.wound, .35 + .4 * Math.sin(t * 9) ** 2, 1]) : null });
+        }
+      }
+      for (let i = 0; i < 12; i++) {
+        const z = -.45 + i * .065, at = surf(THREE, ref, [Math.sin(i * 1.3) * .006, 1.5, z], [0, -1, 0], .006), r = .021 * (1 - .3 * Math.abs(i / 11 - .5));
+        fang(THREE, g, p.bone, at, [at[0], at[1] + r * 2.2, at[2] - r * .9], r, [0, 0, r * .3], null, 4);
+      }
+      // What is left of the gown, plastered over the back.
+      loft(THREE, g, p.cloth, [[0, .53, -.5], [0, .6, -.3], [0, .655, -.05], [-.01, .625, .16]], [[.185, .125], [.145, .11], [.18, .125], [.21, .135]],
+        { sides: 14, seg: 2, up: [0, 1, 0], caps: [false, false], folds: [6, .05], seed: 7, skip: (t, a, x, y) => y < .57 || Math.abs(x) < .05 || noise3(t * 6, a * 9, 4) > .68 });
+      rag(THREE, g, p.cloth, .16, .5, -.1, .12, .26, .02, .1, Math.PI / 2, .1);
+      rag(THREE, g, p.bandage, -.15, .5, -.35, .07, .22, .015, .05, -Math.PI / 2, -.1);
+      // Neck stalk (on the body: the crawler spends no draw on a neck group).
+      loft(THREE, g, p.skin, [[-.03, .6, .28], [-.05, .585, .38], [-.065, .56, .46], [-.07, .54, .52]], [[.065, .055], [.052, .048], [.048, .044], [.044, .04]],
+        { sides: 8, seg: 2, up: [0, 1, 0], lump: .06, seed: 6 });
+      for (const side of [-1, 1]) strand(THREE, g, p.tendon, [[side * .04 - .03, .64, .3], [side * .035 - .06, .6, .42], [side * .03 - .07, .58, .5]], .011, .008, { sides: 3 });
+      for (let i = 0; i < 2; i++) {
+        const side = i ? 1 : -1;
+        rig.knees.push(crawlLimb(THREE, p, i ? rig.legR : rig.legL, i ? 'kneeR' : 'kneeL', f.knees[i], f.ankles[i], { width: .072, side, rootY: f.hips[i][1], seed: 31 + i }));
+        rig.elbows.push(crawlLimb(THREE, p, i ? rig.armR : rig.armL, i ? 'elbowR' : 'elbowL', f.elbows[i], f.wrists[i], { width: .067, side, rootY: f.shoulders[i][1], seed: 41 + i }));
+      }
+      const [elbowL] = rig.elbows, wl = f.wrists[0];
+      band(THREE, elbowL, p.leather, [wl[0] * .9, wl[1] * .9, wl[2] * .9], .032, .028, .04, [.3, 0, .1], p.iron);
+      strand(THREE, elbowL, p.leather, [[wl[0] * .9 + .03, wl[1] * .9, wl[2] * .9], [wl[0] * .9 + .08, wl[1] * .9 - .03, wl[2] * .9 - .06], [wl[0] * .9 + .1, wl[1] * .9 - .04, wl[2] * .9 - .2]],
+        .011, .009, { sides: 3, up: [0, 1, 0] });
+      wraps(THREE, rig.knees[1], p.bandage, f.ankles[1][0] * .5, f.ankles[1][1] * .5, f.ankles[1][2] * .5, .05, 3);
+      // Head: a gaping lipless mouth that cannot close, one staring socket, the other sewn shut.
+      const skull = loft(THREE, head, p.skin, [[0, -.17, -.02], [0, -.12, .0], [0, -.06, .02], [0, .0, .025], [0, .06, .02], [0, .12, .0], [0, .17, -.04], [0, .2, -.07]],
+        [[.06, .07], [.085, .1], [.1, .115], [.112, .122], [.115, .122], [.11, .115], [.085, .09], [0, 0]], { sides: 18, seg: 2, focus: .5, lump: .05, seed: 15, sculpt: [
+          { at: [0, -.075, .15], r: .11, color: T.gum, weight: .8, wet: 1 }, { at: [0, -.06, .14], to: [0, -.1, .14], r: .065, d: -.07, dark: 2.4 },
+          { at: [.045, eyeY, .125], r: .042, d: -.035, dark: 2 }, { at: [-.045, eyeY + .004, .125], r: .04, d: -.018, color: T.bruise, weight: 1.1, wet: .9 },
+          { at: [-.075, eyeY + .035, .11], to: [.075, eyeY + .035, .11], r: .022, d: .012 }, { at: [-.085, -.01, .1], r: .04, d: .015 }, { at: [.085, -.01, .1], r: .04, d: .015 },
+          { at: [-.1, .09, .03], r: .04, d: -.012 }, { at: [.1, .09, .03], r: .04, d: -.012 }, { at: [.06, .15, .06], r: .03, d: -.01, wound: .8 },
+          { at: [0, .23, -.03], r: .2, d: .008, color: T.socket, weight: 1.6, wet: .85 }] });
+      hollow(THREE, head, p.dark, 0, -.08, front - .025, .052, .07, .1);
+      const eyeAt = surf(THREE, skull, [.045, eyeY, .5], [0, 0, -1], -.002);
+      box(THREE, head, p.eye, eyeAt[0], eyeAt[1], eyeAt[2], .018, .006, .003, 0, 0, .1);
+      for (let i = 0; i < 3; i++) {
+        const y = eyeY + .018 - i * .016, a = surf(THREE, skull, [-.068, y, .5], [0, 0, -1], -.002), b = surf(THREE, skull, [-.022, y - .005, .5], [0, 0, -1], -.002);
+        strand(THREE, head, p.dark, [a, b], .0025, .0025, { sides: 3, caps: [false, false] });
+      }
+      dentition(THREE, head, p, { x: 0, y: -.032, z: front - .012, width: .1, curve: .05, count: 11, length: .045, radius: .0065, down: true, seed: 9, splay: .15 });
+      dentition(THREE, head, p, { x: 0, y: -.128, z: front - .02, width: .09, curve: .045, count: 10, length: .04, radius: .006, seed: 10, splay: .2, rake: .1 });
+      strand(THREE, head, p.tendon, [[.03, -.13, front - .01], [.034, -.2, front], [.03, -.27, front - .02]], .004, .0012, { sides: 3, tint: () => [...T.drool, .6, 1] });
+      // Lank wet hair from the crown, parted round the face, hanging toward the floor.
+      const random = seeded(29);
+      for (let i = 0; i < 36; i++) {
+        const phi = (i / 36 - .5) * TAU + (random() - .5) * .1, sx = Math.sin(phi), sz = Math.cos(phi);
+        const root = surf(THREE, skull, [sx, .13 + random() * .05, sz - .02], [-sx, 0, -sz], .006), len = .24 + random() * .12, sway = (random() - .5) * .04;
+        let pts;
+        if (sz > .55) {
+          // Bangs: hanging over the eyes and down past the mouth, parted so the grin shows through.
+          const xs = (sx < 0 || (sx === 0 && i % 2) ? -1 : 1) * (.036 + Math.abs(root[0]) * .7 + random() * .02);
+          pts = [root, [root[0] * .9 + xs * .2, root[1] + .01, root[2] + .035], [xs, eyeY - .02, .172 + random() * .02], [xs * 1.08 + sway, -.12, .168], [xs * 1.12 - sway, -.2 - random() * .08, .15]];
+        } else {
+          const out = 1.06 + random() * .06;
+          pts = [root, [root[0] * 1.1 + sx * .015, root[1] - .03, root[2] * 1.1 + sz * .015], [root[0] * out + sway, root[1] - len * .4, root[2] * out + sz * .01],
+            [root[0] * out - sway, root[1] - len * .75, root[2] * out], [root[0] * (out - .03) + sway, root[1] - len, root[2] * (out - .03)]];
+        }
+        strand(THREE, head, p.dark, pts, .0045 + random() * .003, .0015, { sides: 3 });
+      }
+      return { front, eyeY, drips: [] };
+    },
+    shrieker(THREE, p, rig) {
+      const { g, neck, head, jaw } = rig, T = tints(THREE), front = .142, eyeY = .132, drop = .565, zf = front - .025;
+      // Gaunt and pale: a sunken belly, the sternum sawn open and the ribs prised apart, a smock off one shoulder.
+      const spine = [[0, .96, -.03], [0, 1.12, -.01], [.005, 1.32, -.03], [.01, 1.52, -.04], [.012, 1.68, -.02], [.015, 1.8, .03]];
+      const girth = [[.15, .1], [.13, .085], [.105, .07], [.145, .1], [.165, .105], [.08, .07]];
+      const ref = loft(THREE, new THREE.Group(), p.skin, spine, girth, { sides: 14, seg: 3 });
+      loft(THREE, g, p.skin, spine, girth, { sides: 14, seg: 3, focus: .25, lump: .05, seed: 4, sculpt: [
+        { at: [0, 1.66, .1], to: [0, 1.3, .07], r: .075, d: -.045, wound: 1.1 }, { at: [0, 1.15, .07], r: .09, d: -.03, color: T.bruise, weight: .6 },
+        { at: [-.12, 1.66, -.1], r: .07, d: .02 }, { at: [.12, 1.64, -.1], r: .07, d: .02 }, { at: [.1, 1.2, -.06], r: .06, d: -.015, wound: .6 }] });
+      ribcage(THREE, g, p, ref, { count: 6, top: 1.68, gap: .06, center: [0, -.02], sides: [-1, 1], radius: .011, buried: .003, exposed: (side, i) => i >= 1 && i <= 4 });
+      vertebrae(THREE, g, p, ref, { count: 10, from: 1.05, to: 1.75, radius: .016, z: -.03 });
+      loft(THREE, g, p.skin, [[-.31, 1.79, .0], [-.15, 1.81, -.005], [.02, 1.8, .01], [.15, 1.75, -.01], [.29, 1.71, -.03]],
+        [[.055, .045], [.065, .05], [.07, .055], [.062, .05], [.05, .045]], { sides: 8, seg: 2, up: [0, 1, 0], lump: .06, seed: 6 });
+      loft(THREE, g, p.cloth, [[0, 1.79, 0], [0, 1.6, -.01], [0, 1.38, -.02], [0, 1.15, -.02], [0, .92, -.03]], [[.2, .12], [.18, .125], [.16, .115], [.19, .135], [.23, .16]],
+        { sides: 14, seg: 2, caps: [false, false], folds: [7, .06, 1.2], seed: 9, skip: (t, a, x, y) => (Math.abs(a - .25) < .1 && y > 1.12) || (x < -.08 && y > 1.6)
+          || noise3(t * 7, a * 9, 3) > .72 || (t > .82 && noise3(a * 17, 2, 5) > .45) });
+      rag(THREE, g, p.cloth, .05, .78, .12, .14, .36, .02, 0, -.1, .08);
+      limbs(THREE, p, rig, () => ({ width: .068, lump: .06 }), () => ({ width: .052, lump: .06, hand: { size: .95, length: 1.4, claw: 1.35, curl: .95 } }));
+      wraps(THREE, rig.elbows[1], p.bandage, -.06, -.1, .1, .04, 3);
+      rag(THREE, rig.armL, p.bandage, -.06, -.2, .03, .05, .26, .013, 0, 0, -.15);
+      // An opened throat: the windpipe's rings bare inside a split neck.
+      const n0 = [-.015, -.15, -.2], n1 = [0, .04, 0];
+      loft(THREE, neck, p.skin, [n0, [-.01, -.08, -.1], [0, -.02, -.03], n1], [.06, .05, .045, .05], { sides: 8, seg: 2, lump: .05, seed: 7,
+        skip: (t, a) => Math.abs(a - .25) < .1 && t > .15 && t < .85, sculpt: [{ at: [0, -.05, -.02], r: .05, wound: .9 }] });
+      strand(THREE, neck, p.dark, [n0, n1], .032, .03, { sides: 6 });
+      for (let i = 0; i < 6; i++) {
+        const t = .2 + i * .12;
+        band(THREE, neck, p.bone, [n0[0] + (n1[0] - n0[0]) * t, n0[1] + (n1[1] - n0[1]) * t - .015, n0[2] + (n1[2] - n0[2]) * t + .022], .02, .02, .008, [.81, 0, 0]);
+      }
+      for (const side of [-1, 1]) strand(THREE, neck, p.tendon, [[side * .05, .04, -.04], [side * .055, -.06, -.08], [side * .04, -.17, -.17]], .011, .013, { sides: 3 });
+      // Head: a narrow eyeless vault, the cheeks torn back to the hinges, the upper teeth bare.
+      const skull = loft(THREE, head, p.skin, [[0, -.04, -.01], [0, .03, .008], [0, .09, .014], [0, .15, .008], [0, .21, -.02], [0, .27, -.06], [0, .31, -.09]],
+        [[.085, .09], [.1, .11], [.108, .118], [.11, .12], [.105, .115], [.082, .09], [0, 0]], { sides: 18, seg: 2, focus: .5, lump: .04, seed: 10, sculpt: [
+          { at: [-.045, eyeY, .115], r: .045, d: -.035, dark: 2 }, { at: [.048, eyeY - .006, .115], r: .043, d: -.032, dark: 1.8 },
+          { at: [-.07, eyeY + .04, .1], to: [.07, eyeY + .04, .1], r: .025, d: .012 }, { at: [0, .075, .125], r: .03, d: -.025, dark: 1.5 },
+          { at: [-.07, .02, .1], to: [-.105, .1, .0], r: .02, d: -.012, wound: 1 }, { at: [.07, .02, .1], to: [.105, .1, .0], r: .02, d: -.012, wound: 1 },
+          { at: [-.1, .17, .02], r: .045, d: -.012 }, { at: [.1, .17, .02], r: .045, d: -.012 },
+          { at: [-.02, .3, .0], to: [.03, .2, .1], r: .018, d: -.008, wound: .9 }, { at: [.06, .22, -.08], r: .05, color: T.bruise, weight: .7 }] });
+      staples(THREE, head, p, surf(THREE, skull, [-.02, .6, -.02], [0, -1, 0], -.002), surf(THREE, skull, [.03, .2, 1], [0, 0, -1], -.002), 5, [0, .7, .7]);
+      const eyeAt = surf(THREE, skull, [.048, eyeY - .006, .5], [0, 0, -1], -.002);
+      box(THREE, head, p.eye, eyeAt[0], eyeAt[1], eyeAt[2], .018, .005, .003, 0, 0, .1);
+      dentition(THREE, head, p, { x: 0, y: .02, z: front - .005, width: .11, curve: .05, count: 12, length: .05, radius: .006, down: true, seed: 11, splay: .1 });
+      strand(THREE, head, p.tendon, [[-.03, .0, front - .01], [-.034, -.08, front], [-.03, -.16, front - .01]], .004, .0015, { sides: 3, tint: () => [...T.drool, .6, 1] });
+      // Jaw: two mandibles split apart at the chin, hung to the sternum, their inner edges lined with teeth; a long
+      // tongue lolls between them over the dark of the throat.
+      hollow(THREE, jaw, p.dark, 0, -drop * .5, zf - .01, .075, drop * .62, .14);
+      const tooth = t => t < .2 ? [...T.gum, 1 - t * 5, 1] : t > .7 ? [...T.nail, (t - .7) * 2, .6] : null;
+      for (const side of [-1, 1]) {
+        const rail = [[side * .087, -.02, -.035], [side * .1, -.12, zf * .55], [side * .088, -.27, zf * .9], [side * .07, -.42, zf + .005], [side * .045, -drop, zf + .012], [side * .03, -drop - .07, zf - .01]];
+        loft(THREE, jaw, p.skin, rail, [[.022, .034], [.024, .04], [.022, .036], [.019, .03], [.015, .022], [0, 0]], { sides: 6, seg: 2, lump: .06, seed: 16 + side,
+          tint: (t, a) => { const inner = side > 0 ? Math.abs(a - .5) : Math.min(a, 1 - a); return inner < .09 ? [...T.gum, .8 - inner * 8, .7] : null; } });
+        for (let k = 0; k < 9; k++) {
+          const s = .6 + k * .48, i = Math.floor(s), u = s - i, a = rail[i], b = rail[i + 1], len = .04 + .028 * Math.sin(k * 2.1 + side) ** 2;
+          const base = [a[0] + (b[0] - a[0]) * u - side * .01, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u + .004];
+          fang(THREE, jaw, p.bone, base, [base[0] - side * len, base[1] + len * .45, base[2] + .008], .0085, [0, .006, .004], tooth, 3);
+        }
+        strand(THREE, jaw, p.tendon, [[side * .1, .0, .03], [side * .1, -.15, zf * .7], [side * .085, -.3, zf * .85]], .01, .007, { sides: 4 });
+        strand(THREE, jaw, p.flesh, [[side * .1, -.04, .0], [side * .095, -.2, zf * .65]], .011, .008, { sides: 3, tint: () => [...T.wound, .8, 1] });
+      }
+      loft(THREE, jaw, p.tendon, [[-.035, -.08, -.0], [-.042, -.3, zf * .6], [-.045, -.5, zf + .02], [-.035, -.66, zf + .05], [-.025, -.76, zf]],
+        [[.02, .01], [.022, .011], [.02, .01], [.015, .008], [0, 0]], { sides: 6, seg: 2, lump: .15, seed: 18, tint: () => [...T.bruise, .45, 1] });
+      for (const [y0, y1] of [[-.2, -.23], [-.53, -.57]]) {
+        strand(THREE, jaw, p.tendon, [[-.075, y0, zf * .8], [0, y1 - .05, zf * .85], [.07, y0 - .01, zf * .8]], .0035, .0035, { sides: 3, caps: [false, false], tint: () => [...T.drool, .7, 1] });
+      }
+      return { front, eyeY, drips: [[0, 1.66, .1, .045, .7], [-.05, 1.5, .06, .03, .45], [.06, 1.62, .08, .025, .55]] };
+    },
+    gravekeeper(THREE, p, rig) {
+      const { g, neck, head, jaw } = rig, T = tints(THREE), front = .175, eyeY = .1, drop = .23, jf = front - .06, f = rig.form;
+      // The boss: a towering, starved gravedigger. Ribs bare through a rotted chest, a grave-coat in tatters, a coffin lid
+      // strapped to its back with a crook rising from it to dangle a lantern before its face, and a spade grown into
+      // its right arm.
+      const spine = [[0, 1.56, -.02], [0, 1.85, -.05], [0, 2.15, -.09], [0, 2.45, -.09], [0, 2.7, -.03], [0, 2.9, .08], [0, 3.0, .2]];
+      const girth = [[.2, .13], [.16, .1], [.14, .095], [.19, .125], [.23, .145], [.17, .12], [.09, .08]];
+      const ref = loft(THREE, new THREE.Group(), p.skin, spine, girth, { sides: 14, seg: 3 });
+      loft(THREE, g, p.skin, spine, girth, { sides: 14, seg: 3, focus: .2, lump: .07, seed: 21, sculpt: [
+        { at: [-.12, 2.5, .1], r: .14, d: -.05, wound: .9 }, { at: [0, 2.02, .1], r: .13, d: -.045, color: T.rot, weight: 1 },
+        { at: [.1, 2.2, .08], r: .06, d: -.02, dark: 1.2 }, { at: [.15, 1.8, -.05], r: .07, d: -.02, wound: .6 }, { at: [0, 2.0, -.1], r: .1, color: T.moss, weight: .6 }] });
+      ribcage(THREE, g, p, ref, { count: 7, top: 2.72, gap: .07, center: [0, -.04], sides: [-1, 1], radius: .014, buried: .004, exposed: (side, i) => side < 0 && i >= 1 && i <= 5 });
+      vertebrae(THREE, g, p, ref, { count: 12, from: 1.7, to: 2.85, radius: .024, z: -.06 });
+      const yoke = loft(THREE, g, p.skin, [[-.52, 2.86, -.02], [-.28, 2.97, -.04], [0, 3.0, .02], [.26, 2.92, .05], [.54, 2.78, .07]],
+        [[.09, .08], [.11, .1], [.12, .1], [.11, .1], [.09, .08]], { sides: 8, seg: 2, up: [0, 1, 0], lump: .08, seed: 22 });
+      // Grave-coat: open down the front, split up the back, its hem shredded; a mantle over the shoulders.
+      const coat = loft(THREE, g, p.cloth, [[0, 2.93, -.02], [0, 2.7, -.05], [0, 2.4, -.1], [0, 2.05, -.08], [0, 1.7, -.04], [0, 1.25, -.03], [0, .85, -.03], [0, .55, -.05]],
+        [[.34, .2], [.29, .2], [.25, .18], [.24, .17], [.29, .21], [.37, .27], [.43, .32], [.47, .35]], { sides: 22, seg: 2, caps: [false, false], folds: [11, .1, 1.2], seed: 23,
+          skip: (t, a, x, y) => Math.abs(a - .25) < (y < 1.75 ? .15 : .055) || (y < 1.35 && Math.abs(a - .75) < .045) || (y < .9 && noise3(a * 23, 3, 1) > .5) || noise3(t * 9, a * 13, 5) > .78,
+          tint: (t, a, x, y) => y < 1 ? [...T.moss, (1 - y) * .9, .3] : null });
+      loft(THREE, g, p.cloth, [[0, 3.04, .1], [0, 2.92, .02], [0, 2.72, -.03], [0, 2.48, -.05]], [[.15, .13], [.38, .25], [.5, .31], [.54, .33]],
+        { sides: 22, seg: 2, caps: [false, false], folds: [9, .13, 1.5], seed: 24, skip: (t, a) => (t > .5 && noise3(a * 19, t * 3, 2) > .45 - (t - .5) * .4) || (Math.abs(a - .25) < .05 + t * .04 && t > .3) });
+      girdle(THREE, g, p.leather, coat, [0, 1.72, -.04], { n: 16, rot: [0, 0, -.06], thick: .012, height: .035, seed: 5 });
+      // A ring of iron keys at the hip.
+      const ringAt = surf(THREE, coat, [1, 1.62, .05], [-1, 0, 0], -.02);
+      const keyRing = Array.from({ length: 9 }, (_, i) => [ringAt[0] + .01 * Math.sin(i / 8 * TAU), ringAt[1] - .035 + .035 * Math.cos(i / 8 * TAU), ringAt[2] + .035 * Math.sin(i / 8 * TAU)]);
+      loft(THREE, g, p.iron, keyRing, keyRing.map(() => .004), { sides: 4, seg: 1, caps: [false, false] });
+      for (let i = 0; i < 4; i++) {
+        const top = [ringAt[0] + .01, ringAt[1] - .065, ringAt[2] + (i - 1.5) * .018], len = .07 + i % 2 * .03;
+        strand(THREE, g, p.iron, [top, [top[0] + .004, top[1] - len, top[2] + (i - 1.5) * .006]], .004, .003, { sides: 3 });
+        box(THREE, g, p.iron, top[0] + .004, top[1] - len + .01, top[2] + (i - 1.5) * .006 + .008, .006, .022, .016, 0, 0, 0);
+      }
+      // The coffin lid: three warped planks, a nailed iron cross, two straps over the shoulders.
+      const lid = [[-.17, 0], [.17, 0], [.29, 1.2], [.21, 1.72], [-.21, 1.72], [-.29, 1.2]];
+      const lidAt = [.06, 1.76, -.43], lidRot = [.04, .05, -.08], lidE = new THREE.Euler(...lidRot);
+      const onLid = (u, v, z) => new THREE.Vector3(u, v, z).applyEuler(lidE).add(new THREE.Vector3(...lidAt)).toArray();
+      for (const [u0, u1, k] of [[-.3, -.103, 0], [-.091, .091, 1], [.103, .3, 2]]) {
+        slab(THREE, g, p.wood, clipStrip(lid, u0, u1), .045, onLid(0, 0, (k - 1) * .004), [lidRot[0] + (k - 1) * .015, lidRot[1], lidRot[2] + (k - 1) * .006],
+          { tint: (u, v) => [...T.moss, .1 + .35 * noise3(u * 9 + k, v * 4, 3), .2] });
+      }
+      const cross = onLid(0, 1.18, -.03);
+      box(THREE, g, p.iron, cross[0], cross[1], cross[2], .045, .62, .014, lidRot[0], lidRot[1], lidRot[2]);
+      const arm = onLid(0, 1.32, -.03);
+      box(THREE, g, p.iron, arm[0], arm[1], arm[2], .3, .045, .014, lidRot[0], lidRot[1], lidRot[2]);
+      for (const side of [-1, 1]) {
+        const a = onLid(side * .16, 1.55, .0), b = surf(THREE, [yoke, ref], [side * .2, 3.4, -.05], [0, -1, 0], -.07);
+        const c = surf(THREE, ref, [side * .1, 2.62, 1], [0, 0, -1], -.012), d = surf(THREE, ref, [-side * .12, 1.95, 1], [0, 0, -1], -.012);
+        strand(THREE, g, p.leather, [a, [a[0] * .8, b[1] + .02, (a[2] + b[2]) * .5], b, c, d], .02, .02, { sides: 4, up: [0, 0, 1], tint: () => [...T.moss, .3, .2] });
+      }
+      // The crook and its cage-lantern, hung before the face.
+      const pole = [onLid(.2, 1.6, .04), [.21, 3.5, -.25], [.2, 3.585, .05], [.18, 3.55, .38], [.17, 3.47, .55]];
+      loft(THREE, g, p.wood, pole, [.02, .019, .018, .016, .013], { sides: 6, seg: 3, lump: .12, seed: 26 });
+      const L = [.17, 3.22, .56];
+      strand(THREE, g, p.iron, [[.17, 3.47, .56], [.172, 3.4, .562], [L[0], L[1] + .1, L[2]]], .005, .005, { sides: 3 });
+      loft(THREE, g, p.iron, [[L[0], L[1] + .115, L[2]], [L[0], L[1] + .095, L[2]], [L[0], L[1] + .085, L[2]]], [.012, .055, .062], { sides: 8, seg: 1 });
+      loft(THREE, g, p.iron, [[L[0], L[1] - .085, L[2]], [L[0], L[1] - .075, L[2]]], [.058, .058], { sides: 8, seg: 1 });
+      for (let i = 0; i < 6; i++) {
+        const a = i / 6 * TAU, x = L[0] + Math.cos(a) * .055, z = L[2] + Math.sin(a) * .055;
+        strand(THREE, g, p.iron, [[x, L[1] + .088, z], [x * 1.0 + Math.cos(a) * .006, L[1], z + Math.sin(a) * .006], [x, L[1] - .078, z]], .004, .004, { sides: 3 });
+      }
+      loft(THREE, g, p.bone, [[L[0], L[1] - .075, L[2]], [L[0], L[1] - .02, L[2]]], [.017, .015], { sides: 6, seg: 1, tint: () => [...T.wax, .8, .4] });
+      const lantern = new THREE.MeshStandardMaterial({ color: 0x2a1a08, emissive: 0xff9a3c, emissiveIntensity: 2.4, roughness: .6, metalness: 0, fog: true });
+      loft(THREE, g, lantern, [[L[0], L[1] - .022, L[2]], [L[0], L[1] + .005, L[2]], [L[0], L[1] + .04, L[2]]], [.012, .016, 0], { sides: 6, seg: 2 });
+      // Limbs: bare, starved and over-long; the left hand a rake of claws, the right forearm ending in the spade.
+      limbs(THREE, p, rig, () => ({ width: .1, foot: 1.4, lump: .09 }),
+        i => i ? { width: .078, lump: .09, hand: false } : { width: .075, lump: .09, hand: { size: 1.5, length: 1.8, claw: 1.7, curl: .55, thick: 1.1 } });
+      for (const [i, limb] of [rig.armL, rig.armR].entries()) {
+        const b = f.elbows[i];
+        loft(THREE, limb, p.cloth, [[0, .07, 0], [b[0] * .45, b[1] * .45, b[2] * .45], [b[0] * .8, b[1] * .8, b[2] * .8]], [[.13, .12], [.11, .1], [.1, .095]],
+          { sides: 10, seg: 2, caps: [false, false], folds: [5, .05], seed: 27 + i, skip: (t, a) => t > .55 && noise3(a * 9, t * 4, 3 + i) > .45 });
+      }
+      for (const knee of rig.knees) wraps(THREE, knee, p.bandage, 0, -.25, .01, .085, 4);
+      const e = f.wrists[1], el = Math.hypot(...e), dir = e.map(v => v / el), [, elbowR] = rig.elbows;
+      const at = k => [e[0] + dir[0] * k, e[1] + dir[1] * k, e[2] + dir[2] * k];
+      strand(THREE, elbowR, p.wood, [at(-el * .65), at(-el * .3), e, at(.15), at(.32)], .021, .019, { sides: 6, tint: (t) => t < .5 ? [...T.blood, .5, .6] : null });
+      loft(THREE, elbowR, p.flesh, [at(-.08), at(-.02), at(.04)], [[.045, .04], [.04, .036], [.026, .024]], { sides: 8, seg: 2, lump: .3, seed: 28, tint: () => [...T.wound, .7, 1] });
+      for (let k = 0; k < 7; k++) {
+        const a = k * 1.9, c = at(-.06 + k * .012);
+        strand(THREE, elbowR, p.iron, [[c[0] + Math.cos(a) * .035, c[1], c[2] + Math.sin(a) * .035], [c[0] + Math.cos(a + 1.6) * .035, c[1] - .01, c[2] + Math.sin(a + 1.6) * .035]], .003, .003, { sides: 3 });
+      }
+      const blade = [[-.13, 0], [-.15, -.29], [0, -.43], [.15, -.29], [.13, 0]];
+      slab(THREE, elbowR, p.iron, blade, .012, at(.3), [Math.atan2(-dir[2], -dir[1]), 0, 0], { cup: .9,
+        tint: (u, v) => v < -.2 ? [...T.blood, .85, .9] : [...T.rust, .55, .3] });
+      // Neck: long and corded, a hangman's noose still knotted round it.
+      const throat = loft(THREE, neck, p.skin, [[0, -.1, -.26], [0, -.06, -.16], [0, -.02, -.07], [0, .03, 0]], [.085, .075, .07, .07], { sides: 10, seg: 2, lump: .08, seed: 29 });
+      girdle(THREE, neck, p.bandage, throat, [0, -.04, -.1], { n: 12, rot: [.9, 0, .1], thick: .014, height: .014, lump: .2, seed: 6 });
+      const knot = surf(THREE, throat, [.6, -.02, -.1], [-1, 0, 0], -.012);
+      strand(THREE, neck, p.bandage, [knot, [knot[0] + .03, knot[1] - .1, knot[2] - .02], [knot[0] + .025, knot[1] - .26, knot[2] - .06]], .016, .012, { sides: 4, lump: .2 });
+      for (const side of [-1, 1]) strand(THREE, neck, p.tendon, [[side * .055, .02, -.01], [side * .06, -.06, -.1], [side * .05, -.1, -.22]], .012, .014, { sides: 3 });
+      // Head: a long gaunt skull in a hood, antlers grown up through the cloth, coins on the eyes (the right one has
+      // slipped), a second ring of teeth waiting in the throat.
+      const skull = loft(THREE, head, p.skin, [[0, -.06, .035], [0, -.03, .045], [0, .0, .055], [0, .08, .05], [0, .16, .025], [0, .24, -.02], [0, .3, -.08], [0, .34, -.13]],
+        [[.08, .095], [.095, .11], [.105, .12], [.112, .125], [.115, .125], [.11, .118], [.085, .09], [0, 0]], { sides: 20, seg: 2, focus: .55, lump: .07, seed: 30, sculpt: [
+          { at: [-.048, eyeY, .155], r: .045, d: -.035, dark: 1.6 }, { at: [.05, eyeY - .004, .155], r: .05, d: -.05, dark: 2.4 },
+          { at: [-.08, eyeY + .045, .14], to: [.08, eyeY + .045, .14], r: .025, d: .016 }, { at: [0, .045, .17], r: .03, d: -.03, dark: 1.5 },
+          { at: [-.1, -.03, .09], r: .055, d: -.03 }, { at: [.1, -.03, .09], r: .055, d: -.03 }, { at: [-.09, .06, .12], r: .035, d: .015 }, { at: [.09, .06, .12], r: .035, d: .015 },
+          { at: [.08, .2, .08], r: .06, color: T.rot, weight: .8 }, { at: [-.06, -.1, .1], r: .04, d: -.015, wound: .8 }] });
+      for (const [x, y, tilt] of [[-.048, eyeY, 0]]) {
+        const c = surf(THREE, skull, [x, y, .6], [0, 0, -1], -.004), n = [0, Math.sin(tilt) * .004, .004];
+        loft(THREE, head, p.iron, [[c[0], c[1] - n[1], c[2] - n[2]], [c[0], c[1] + n[1], c[2] + n[2]]], [.023, .023], { sides: 10, seg: 1,
+          tint: () => [...(x < 0 ? T.brass : T.verdigris), .9, .5] });
+      }
+      const eyeAt = surf(THREE, skull, [.05, eyeY + .012, .6], [0, 0, -1], -.002);
+      box(THREE, head, p.eye, eyeAt[0], eyeAt[1], eyeAt[2], .018, .005, .003, 0, 0, -.1);
+      loft(THREE, head, p.cloth, [[0, -.34, -.12], [0, -.18, -.08], [0, 0, -.05], [0, .16, -.05], [0, .3, -.1], [0, .38, -.16], [0, .41, -.22]],
+        [[.2, .17], [.19, .18], [.175, .2], [.17, .19], [.15, .16], [.1, .1], [0, 0]], { sides: 16, seg: 2, folds: [5, .04], seed: 25,
+          skip: (t, a) => Math.abs(a - .25) < .17 && t > .14 && t < .74 });
+      for (const side of [-1, 1]) {
+        const base = surf(THREE, skull, [side * .055, .6, -.03], [0, -1, 0], .01);
+        const beam = [base, [side * .1, .34, -.06], [side * .18, .385, -.07], [side * .26, .405, -.06], [side * .31, .43, -.02]];
+        loft(THREE, head, p.bone, beam, [.024, .02, .016, .011, 0], { sides: 5, seg: 2, lump: .15, seed: 31 + side, tint: t => [...T.moss, .4 * (1 - t), .2] });
+        fang(THREE, head, p.bone, beam[2], [beam[2][0] + side * .02, beam[2][1] + .07, beam[2][2] + .06], .012, [0, 0, .01], null, 4);
+        fang(THREE, head, p.bone, beam[3], [beam[3][0] + side * .03, beam[3][1] + .05, beam[3][2] - .02], .009, [0, 0, 0], null, 4);
+        fang(THREE, head, p.bone, beam[1], [beam[1][0] + side * .06, beam[1][1] + .03, beam[1][2] + .09], .01, [0, .02, 0], null, 4);
+      }
+      dentition(THREE, head, p, { x: 0, y: -.02, z: front - .008, width: .15, curve: .07, count: 14, length: .07, radius: .008, down: true, seed: 31, splay: .08 });
+      const inner = [0, -.075, .085];
+      loft(THREE, head, p.flesh, Array.from({ length: 11 }, (_, i) => [inner[0] + Math.cos(i / 10 * TAU) * .042, inner[1] + Math.sin(i / 10 * TAU) * .042, inner[2]]),
+        Array.from({ length: 11 }, () => .012), { sides: 5, seg: 2, caps: [false, false], lump: .2, seed: 33, tint: () => [...T.gum, .6, 1] });
+      for (let i = 0; i < 10; i++) {
+        const a = i / 10 * TAU + .3, cx = Math.cos(a), cy = Math.sin(a);
+        fang(THREE, head, p.bone, [inner[0] + cx * .042, inner[1] + cy * .042, inner[2] + .006], [inner[0] + cx * .01, inner[1] + cy * .01, inner[2] + .03], .006, [0, 0, .006], null, 3);
+      }
+      // Jaw: a long mandible with a double row of teeth, the chin's rotten skin hanging in a flap.
+      hollow(THREE, jaw, p.dark, 0, -drop * .5, jf - .01, .085, drop * .62, .12);
+      loft(THREE, jaw, p.skin, [[-.105, .0, -.06], [-.1, -drop * .6, jf * .45], [-.07, -drop * .95, jf * .88], [0, -drop * 1.02, jf + .03], [.07, -drop * .95, jf * .88],
+        [.1, -drop * .6, jf * .45], [.105, .0, -.06]], [[.016, .035], [.017, .055], [.018, .062], [.02, .064], [.018, .062], [.017, .055], [.016, .035]],
+      { sides: 8, seg: 2, up: [0, 1, 0], lump: .08, seed: 34, tint: (t, a) => Math.abs(a - .25) < .06 ? [...T.gum, .6 - Math.abs(a - .25) * 9, .6] : null });
+      dentition(THREE, jaw, p, { x: 0, y: -drop + .035, z: jf + .02, width: .15, curve: .07, count: 14, length: .065, radius: .008, seed: 32, splay: .12 });
+      dentition(THREE, jaw, p, { x: 0, y: -drop + .03, z: jf - .02, width: .11, curve: .05, count: 10, length: .045, radius: .006, seed: 35, rake: -.35 });
+      for (const side of [-1, 1]) strand(THREE, jaw, p.tendon, [[side * .1, -drop * .55, jf * .4], [side * .115, -drop * .25, jf * .2], [side * .11, .0, -.02]], .012, .009, { sides: 4 });
+      loft(THREE, jaw, p.skin, [[-.03, -drop * 1.02, jf + .02], [-.035, -drop * 1.3, jf], [-.02, -drop * 1.55, jf - .02]], [[.03, .006], [.025, .005], [0, 0]],
+        { sides: 4, seg: 2, lump: .3, seed: 36, tint: () => [...T.wound, .5, .9] });
+      return { front, eyeY, drips: [[0, 2.95, .32, .045, .9], [-.07, 2.9, .3, .03, .6], [.49, 1.25, .45, .1, .45]], materials: [lantern], userData: { lanternMat: lantern } };
+    }
+  };
+
+  // A crawler's limb: up and out to a joint folded above the body (a knob of bone splitting the skin over it), then
+  // down to a long hand standing on its fingertips.
+  function crawlLimb(THREE, p, limb, name, bend, end, o) {
+    const w = o.width, side = o.side, floorY = -(o.rootY + bend[1]), e = end, T = tints(THREE);
+    loft(THREE, limb, p.skin, [[0, -.01, 0], [bend[0] * .5, bend[1] * .5 + .03, bend[2] * .5], bend], [[w * 1.15, w * 1.1], [w * .9, w * .85], [w * .72, w * .74]],
+      { sides: 8, seg: 3, lump: .08, seed: o.seed, sculpt: [{ at: [bend[0] * .5, bend[1] * .5 + .03 + w * .8, bend[2] * .5], r: w * 1.4, d: w * .3 }] });
+    const distal = joint(THREE, limb, name, ...bend);
+    fang(THREE, distal, p.bone, [0, .0, 0], [-side * .012, .08, -.02], w * .45, [0, .01, 0], t => t < .3 ? [...T.wound, 1 - t * 3, 1] : null, 4);
+    loft(THREE, distal, p.skin, [[0, .025, 0], [e[0] * .45, e[1] * .45 + .02, e[2] * .45], [e[0] * .85, e[1] * .85, e[2] * .85], [e[0], e[1] + .02, e[2]]],
+      [[w * .78, w * .78], [w * .62, w * .6], [w * .48, w * .45], [w * .4, w * .36]], { sides: 8, seg: 2, lump: .08, seed: o.seed + 3 });
+    strand(THREE, distal, p.tendon, [[side * w * .5, .0, -w * .4], [e[0] * .5 + side * w * .45, e[1] * .5, e[2] * .5 - w * .35], [e[0] + side * w * .3, e[1] + .04, e[2] - w * .25]],
+      w * .16, w * .1, { sides: 3 });
+    claws(THREE, distal, p, [e[0], floorY + .095, e[2] + .01], { side, size: .9, crawling: true, length: 1.3, claw: 1.3, curl: .15 });
+    return distal;
   }
 
   function label(THREE, key, lines, color, background) {
@@ -1719,20 +2662,284 @@
       wood: gunMaterial(THREE, 'gun:wood', 0x7a5236, 0, 'gun-wood', null, world),
       brass: gunMaterial(THREE, 'gun:brass', 0xc29a55, 0.9, 'gun-metal', 0.6, world),
       rubber: gunMaterial(THREE, 'gun:rubber', 0x1c1f20, 0, 'gun-rubber', null, world),
-      glove: gunMaterial(THREE, 'gun:glove', 0x30352f, 0, 'gun-fabric', null, world)
+      glove: gunMaterial(THREE, 'gun:glove', 0x30352f, 0, 'gun-fabric', null, world),
+      od: gunMaterial(THREE, 'gun:od', 0x4f553c, 0, 'gun-polymer', null, world),
+      glass: gunMaterial(THREE, 'gun:glass', 0x2a4c5c, 0.6, 'gun-metal', 0.1, world)
     };
   }
 
+  // ---------- the guns found below B1 ----------
+  // Each builder adds its parts to g and its joints (k.magazine, k.bolt), and returns its muzzle, where the carrier's
+  // hands go (grips), the viewmodel hands, and pose(reload, kick, sinceShot): reload is the reload progress 0..1 or -1,
+  // kick the recoil impulse, sinceShot seconds since the last round. An optional view {hip, aim} nudges the viewmodel.
+  const GUN_MODELS = {
+    // KV-9: a compact 9 mm with a long straight magazine, a cocking tube over the barrel and a sliding stock.
+    smg(THREE, g, k) {
+      const { steel, edge, black, polymer, rubber, magazine, bolt } = k;
+      bevel(THREE, g, steel, 0, 0.012, -0.05, 0.056, 0.064, 0.33, 0.008);
+      bevel(THREE, g, black, 0, 0.046, -0.04, 0.03, 0.012, 0.25, 0.003);
+      for (let i = 0; i < 9; i++) box(THREE, g, black, 0, 0.053, 0.06 - i * 0.024, 0.032, 0.006, 0.009);
+      bevel(THREE, g, polymer, 0, -0.03, 0.045, 0.05, 0.042, 0.15, 0.008);
+      bevel(THREE, g, polymer, 0, -0.108, 0.08, 0.042, 0.13, 0.06, 0.01, -0.27);
+      ring(THREE, g, black, 0, -0.064, 0.025, 0.031, 0.005, 0, Math.PI / 2).scale.set(1, 0.72, 1.05);
+      box(THREE, g, steel, 0, -0.06, 0.03, 0.007, 0.032, 0.01, -0.3);
+      bevel(THREE, g, polymer, 0, -0.05, -0.06, 0.042, 0.045, 0.062, 0.006);
+      bevel(THREE, g, polymer, 0, -0.008, -0.175, 0.064, 0.07, 0.13, 0.012);
+      for (const side of [-1, 1]) for (let i = 0; i < 4; i++) box(THREE, g, black, side * 0.0322, -0.005, -0.13 - i * 0.026, 0.002, 0.032, 0.012);
+      cyl(THREE, g, steel, 0, 0.012, -0.28, 0.0105, 0.0105, 0.13, Math.PI / 2, 0, 0, 12);
+      cyl(THREE, g, steel, 0, 0.046, -0.2, 0.0095, 0.0095, 0.15, Math.PI / 2, 0, 0, 10);
+      cyl(THREE, g, black, 0, 0.012, -0.36, 0.0145, 0.0145, 0.052, Math.PI / 2, 0, 0, 12);
+      for (let i = 0; i < 3; i++) ring(THREE, g, black, 0, 0.012, -0.343 - i * 0.014, 0.0152, 0.0022);
+      // Rear drum sight and a hooded front post.
+      cyl(THREE, g, black, 0, 0.069, 0.075, 0.012, 0.012, 0.024, 0, 0, Math.PI / 2, 12);
+      box(THREE, g, k.sight, 0, 0.081, 0.075, 0.004, 0.004, 0.002);
+      bevel(THREE, g, black, 0, 0.06, -0.265, 0.014, 0.016, 0.022, 0.003);
+      ring(THREE, g, black, 0, 0.072, -0.265, 0.011, 0.0028);
+      box(THREE, g, k.sight, 0, 0.071, -0.256, 0.003, 0.003, 0.002);
+      // Retractable stock: twin rods and a rubber butt.
+      for (const side of [-1, 1]) cyl(THREE, g, edge, side * 0.021, 0.012, 0.2, 0.005, 0.005, 0.2, Math.PI / 2, 0, 0, 8);
+      bevel(THREE, g, black, 0, 0.0, 0.3, 0.054, 0.05, 0.022, 0.005);
+      bevel(THREE, g, rubber, 0, -0.012, 0.312, 0.05, 0.095, 0.016, 0.006);
+      magazine.position.set(0, -0.07, -0.06);
+      bevel(THREE, magazine, steel, 0, -0.05, -0.003, 0.03, 0.12, 0.05, 0.005, -0.06);
+      bevel(THREE, magazine, steel, 0, -0.155, -0.017, 0.03, 0.1, 0.05, 0.005, -0.18);
+      bevel(THREE, magazine, black, 0, -0.208, -0.027, 0.035, 0.014, 0.058, 0.003, -0.18);
+      for (const side of [-1, 1]) for (let i = 0; i < 2; i++) box(THREE, magazine, black, side * 0.0152, -0.07 - i * 0.07, -0.01 - i * 0.008, 0.002, 0.06, 0.008, -0.1);
+      bolt.position.set(0, 0.046, -0.235);
+      box(THREE, bolt, black, -0.022, 0, 0, 0.032, 0.008, 0.012);
+      oval(THREE, bolt, black, -0.04, 0, 0, 0.007, 0.007, 0.009);
+      return {
+        muzzle: new THREE.Vector3(0, 0.012, -0.387),
+        grips: { right: [0, -0.1, 0.078], left: [0, -0.045, -0.18] },
+        hands(hands) {
+          gripHand(THREE, g, hands, [0, -0.108, 0.08], -0.27, 0.021, 0.03, 0.05, [0.36, -0.5, 0.79]);
+          supportHand(THREE, g, hands, [0, -0.008, -0.185], 0.032, 0.035, [-0.42, -0.46, 0.78]);
+        }
+      };
+    },
+    // .44: a six-shot double-action revolver. The cylinder turns a chamber per shot and swings out on its crane.
+    magnum(THREE, g, k) {
+      const { steel, edge, black, wood, brass, magazine, bolt } = k;
+      // Frame: top strap, the window round the cylinder, recoil shield and grip frame.
+      bevel(THREE, g, steel, 0, 0.044, -0.004, 0.026, 0.012, 0.082, 0.004);
+      bevel(THREE, g, steel, 0, -0.019, -0.004, 0.03, 0.018, 0.074, 0.005);
+      bevel(THREE, g, steel, 0, 0.012, 0.036, 0.033, 0.075, 0.016, 0.005);
+      bevel(THREE, g, steel, 0, 0.014, -0.045, 0.028, 0.05, 0.012, 0.004);
+      bevel(THREE, g, steel, 0, -0.01, 0.06, 0.03, 0.05, 0.05, 0.007, -0.2);
+      // Six-inch barrel with a ventilated top rib and a full underlug round the ejector rod.
+      cyl(THREE, g, steel, 0, 0.031, -0.152, 0.0108, 0.0108, 0.21, Math.PI / 2, 0, 0, 14);
+      bevel(THREE, g, steel, 0, 0.044, -0.152, 0.012, 0.009, 0.21, 0.003);
+      for (let i = 0; i < 6; i++) box(THREE, g, black, 0, 0.0445, -0.07 - i * 0.033, 0.0125, 0.004, 0.012);
+      bevel(THREE, g, steel, 0, 0.013, -0.149, 0.019, 0.028, 0.204, 0.006);
+      bevel(THREE, g, black, 0, 0.054, -0.244, 0.005, 0.014, 0.022, 0.002);
+      box(THREE, g, k.sight, 0, 0.06, -0.237, 0.0055, 0.004, 0.002);
+      bevel(THREE, g, black, 0, 0.053, 0.03, 0.018, 0.009, 0.014, 0.002);
+      for (const side of [-1, 1]) box(THREE, g, k.sight, side * 0.0055, 0.055, 0.038, 0.004, 0.004, 0.002);
+      // Walnut grip and a slim backstrap; trigger guard and trigger.
+      bevel(THREE, g, wood, 0, -0.082, 0.07, 0.038, 0.12, 0.058, 0.014, -0.33);
+      oval(THREE, g, wood, 0, -0.136, 0.091, 0.019, 0.017, 0.03, -0.33);
+      bevel(THREE, g, edge, 0, -0.06, 0.103, 0.014, 0.09, 0.006, 0.002, -0.33);
+      ring(THREE, g, black, 0, -0.035, 0.0, 0.021, 0.0035, 0, Math.PI / 2).scale.set(1, 0.85, 1);
+      box(THREE, g, edge, 0, -0.03, 0.006, 0.006, 0.026, 0.008, -0.25);
+      for (const z of [-0.022, 0.016]) cyl(THREE, g, edge, -0.0155, -0.014, z, 0.004, 0.004, 0.002, 0, 0, Math.PI / 2, 8);
+      // The crane: the cylinder, its six rounds and the ejector rod swing out to the left about a pivot under it.
+      magazine.position.set(-0.011, -0.008, -0.004);
+      const cylinder = joint(THREE, magazine, 'cylinder', 0.011, 0.02, 0);
+      cyl(THREE, cylinder, steel, 0, 0, 0, 0.0225, 0.0225, 0.066, Math.PI / 2, 0, 0, 18);
+      for (let i = 0; i < 6; i++) {
+        const a = (i + 0.5) * TAU / 6;
+        box(THREE, cylinder, black, Math.cos(a) * 0.0213, Math.sin(a) * 0.0213, -0.006, 0.006, 0.004, 0.044, 0, 0, a + Math.PI / 2);
+      }
+      const rounds = joint(THREE, cylinder, 'rounds', 0, 0, 0);
+      for (let i = 0; i < 6; i++) {
+        const a = i * TAU / 6;
+        cyl(THREE, rounds, brass, Math.cos(a) * 0.0135, Math.sin(a) * 0.0135, 0.0345, 0.0066, 0.0066, 0.004, Math.PI / 2, 0, 0, 10);
+      }
+      cyl(THREE, magazine, steel, 0.011, 0.02, -0.06, 0.0042, 0.0042, 0.05, Math.PI / 2, 0, 0, 8);
+      box(THREE, magazine, steel, 0.004, 0.008, -0.036, 0.012, 0.016, 0.008);
+      // The hammer (bolt): it falls with each shot and is cocked again by the trigger.
+      bolt.position.set(0, 0.03, 0.045);
+      box(THREE, bolt, steel, 0, 0.004, 0.006, 0.008, 0.03, 0.012, -0.5);
+      bevel(THREE, bolt, steel, 0, 0.018, 0.018, 0.012, 0.007, 0.018, 0.002, -0.2);
+      let previous = -1, chamber = 0;
+      return {
+        muzzle: new THREE.Vector3(0, 0.031, -0.262), bore: 0.0115, cylinder, rounds,
+        // Held higher and further out than the pistol, so the cylinder and hammer show at the hip.
+        view: { hip: [0, 0.03, -0.02], aim: [0, 0, 0] },
+        grips: { right: [0, -0.085, 0.07], left: [-0.035, -0.105, 0.05] },
+        hands(hands) { gripHand(THREE, g, hands, [0, -0.082, 0.07], -0.33, 0.019, 0.029, 0.05, [0.34, -0.52, 0.78]); },
+        pose(reload, kick, since) {
+          if (since < previous) chamber++;
+          previous = since;
+          const swing = reload < 0 ? 0 : smoothstep(0.05, 0.18, reload) * (1 - smoothstep(0.8, 0.92, reload));
+          magazine.rotation.z = swing * 1.3;
+          // The ejector throws the empties out, then a speedloader drops in six fresh rounds.
+          rounds.position.z = reload < 0 ? 0 : smoothstep(0.22, 0.3, reload) * (1 - smoothstep(0.5, 0.56, reload)) * 0.035;
+          rounds.visible = reload < 0 || reload < 0.31 || reload > 0.5;
+          cylinder.rotation.z = (chamber + smoothstep(0, 0.12, since) - 1) * TAU / 6;
+          magazine.visible = true;
+          bolt.position.z = bolt.userData.restZ || 0;
+          bolt.rotation.x = since < 0.25 ? -0.65 * (1 - smoothstep(0, 0.05, since)) + 0.15 * kick : 0;
+        }
+      };
+    },
+    // M24: a bolt-action marksman rifle with a heavy barrel, a long scope and an olive synthetic stock.
+    marksman(THREE, g, k) {
+      const { steel, edge, black, rubber, brass, od, glass, magazine, bolt } = k;
+      // Stock: butt, comb, wrist and grip, the action bed and the forend.
+      bevel(THREE, g, od, 0, -0.038, 0.305, 0.05, 0.124, 0.15, 0.014);
+      bevel(THREE, g, od, 0, 0.002, 0.225, 0.044, 0.05, 0.19, 0.012, 0.06);
+      bevel(THREE, g, od, 0, -0.045, 0.14, 0.042, 0.07, 0.1, 0.012, -0.42);
+      bevel(THREE, g, od, 0, -0.088, 0.112, 0.04, 0.085, 0.052, 0.012, -0.45);
+      bevel(THREE, g, od, 0, -0.012, -0.035, 0.054, 0.05, 0.27, 0.012);
+      bevel(THREE, g, od, 0, -0.014, -0.34, 0.056, 0.046, 0.36, 0.014);
+      bevel(THREE, g, od, 0, -0.03, -0.18, 0.05, 0.03, 0.06, 0.008);
+      bevel(THREE, g, rubber, 0, -0.038, 0.385, 0.052, 0.13, 0.018, 0.006);
+      ring(THREE, g, black, 0, -0.045, 0.06, 0.022, 0.0035, 0, Math.PI / 2).scale.set(1, 0.8, 1.1);
+      box(THREE, g, steel, 0, -0.04, 0.064, 0.006, 0.026, 0.008, -0.2);
+      for (const z of [0.29, -0.43]) ring(THREE, g, edge, 0, -0.072 + (z < 0 ? 0.036 : 0) - (z > 0 ? 0.03 : 0), z, 0.008, 0.002, 0, Math.PI / 2);
+      // Receiver: the front ring and the rear bridge either side of the bolt's travel, open on the right.
+      cyl(THREE, g, steel, 0, 0.028, -0.1, 0.0175, 0.0175, 0.09, Math.PI / 2, 0, 0, 14);
+      cyl(THREE, g, steel, 0, 0.028, 0.065, 0.0175, 0.0175, 0.04, Math.PI / 2, 0, 0, 14);
+      bevel(THREE, g, steel, -0.008, 0.02, -0.018, 0.02, 0.026, 0.13, 0.004);
+      bevel(THREE, g, black, 0, 0.012, -0.018, 0.034, 0.012, 0.13, 0.003);
+      // Heavy free-floated barrel.
+      cyl(THREE, g, steel, 0, 0.028, -0.505, 0.0135, 0.0102, 0.72, Math.PI / 2, 0, 0, 14);
+      // Scope: rings, tube, turrets, objective and ocular bells, and its glass.
+      for (const z of [0.045, -0.105]) {
+        bevel(THREE, g, black, 0, 0.056, z, 0.022, 0.026, 0.018, 0.003);
+        ring(THREE, g, black, 0, 0.09, z, 0.0185, 0.0042);
+      }
+      cyl(THREE, g, black, 0, 0.09, -0.035, 0.0155, 0.0155, 0.3, Math.PI / 2, 0, 0, 16);
+      cyl(THREE, g, black, 0, 0.09, -0.21, 0.0155, 0.026, 0.05, Math.PI / 2, 0, 0, 16);
+      cyl(THREE, g, black, 0, 0.09, -0.262, 0.0265, 0.0265, 0.055, Math.PI / 2, 0, 0, 18);
+      ring(THREE, g, edge, 0, 0.09, -0.29, 0.0255, 0.0018);
+      cyl(THREE, g, black, 0, 0.09, 0.13, 0.021, 0.0155, 0.04, Math.PI / 2, 0, 0, 16);
+      cyl(THREE, g, black, 0, 0.09, 0.172, 0.0215, 0.0215, 0.045, Math.PI / 2, 0, 0, 16);
+      cyl(THREE, g, black, 0, 0.114, -0.035, 0.012, 0.012, 0.03, 0, 0, 0, 14);
+      cyl(THREE, g, edge, 0, 0.13, -0.035, 0.0105, 0.0105, 0.004, 0, 0, 0, 14);
+      cyl(THREE, g, black, 0.024, 0.09, -0.035, 0.011, 0.011, 0.026, 0, 0, Math.PI / 2, 14);
+      const lens = geometry(THREE, 'gun:lens', () => new THREE.CircleGeometry(1, 20));
+      add(THREE, g, lens, glass, 0, 0.09, -0.2896, 0.023, 0.023, 1, 0, Math.PI).castShadow = false;
+      add(THREE, g, lens, glass, 0, 0.09, 0.1946, 0.019, 0.019, 1).castShadow = false;
+      // Internal magazine: a hinged floorplate, with the rounds showing through the open action.
+      magazine.position.set(0, 0, -0.02);
+      bevel(THREE, magazine, black, 0, -0.04, 0.0, 0.036, 0.008, 0.09, 0.002);
+      const rounds = joint(THREE, magazine, 'rounds', 0, 0, 0);
+      for (const [x, y] of [[0.004, 0.02], [-0.006, 0.012]]) {
+        cyl(THREE, rounds, brass, x, y, 0.002, 0.0055, 0.0055, 0.056, Math.PI / 2, 0, 0, 10);
+        cyl(THREE, rounds, brass, x, y, -0.033, 0.0055, 0.003, 0.016, Math.PI / 2, 0, 0, 10);
+      }
+      // Bolt: body, shroud, and the handle that lifts and runs back to chamber each round.
+      bolt.position.set(0, 0.028, 0);
+      cyl(THREE, bolt, edge, 0, 0, -0.012, 0.0158, 0.0158, 0.112, Math.PI / 2, 0, 0, 14);
+      cyl(THREE, bolt, steel, 0, 0, 0.1, 0.0145, 0.012, 0.03, Math.PI / 2, 0, 0, 12);
+      link(THREE, bolt, edge, [0.014, 0, 0.038], [0.046, -0.022, 0.05], 0.0042);
+      oval(THREE, bolt, black, 0.049, -0.026, 0.052, 0.0105, 0.0105, 0.0105);
+      return {
+        muzzle: new THREE.Vector3(0, 0.028, -0.868), bore: 0.0095, rounds,
+        // Aimed with the eye over the scope's ocular, not pressed into it.
+        view: { hip: [0, 0, 0], aim: [0, -0.035, -0.06] },
+        grips: { right: [0, -0.082, 0.112], left: [0, -0.05, -0.33] },
+        hands(hands) {
+          gripHand(THREE, g, hands, [0, -0.085, 0.112], -0.45, 0.02, 0.026, 0.045, [0.37, -0.42, 0.82]);
+          supportHand(THREE, g, hands, [0, -0.014, -0.34], 0.028, 0.023, [-0.42, -0.46, 0.78]);
+        },
+        pose(reload, kick, since) {
+          let lift = 0, back = 0;
+          // The bolt is worked about .4 s after the shot, in time with its foley.
+          if (reload >= 0) { lift = smoothstep(0.02, 0.07, reload) * (1 - smoothstep(0.9, 0.96, reload)); back = smoothstep(0.07, 0.13, reload) * (1 - smoothstep(0.82, 0.88, reload)); }
+          else if (since < 1) { lift = smoothstep(0.36, 0.44, since) * (1 - smoothstep(0.7, 0.78, since)); back = smoothstep(0.44, 0.52, since) * (1 - smoothstep(0.6, 0.68, since)); }
+          bolt.rotation.z = lift * 1.2;
+          bolt.position.z = back * 0.085 + kick * 0.004;
+          magazine.visible = true;
+          rounds.visible = !(reload >= 0 && reload > 0.1 && reload < 0.22);
+        }
+      };
+    },
+    // M249: belt fed from a 100-round box, with a feed cover that lifts to lay a new belt, a carry handle and a bipod.
+    lmg(THREE, g, k) {
+      const { steel, edge, black, polymer, rubber, brass, od, magazine, bolt } = k;
+      bevel(THREE, g, black, 0, 0.0, 0.0, 0.07, 0.092, 0.36, 0.008);
+      for (const side of [-1, 1]) {
+        bevel(THREE, g, steel, side * 0.036, -0.004, -0.02, 0.004, 0.05, 0.28, 0.002);
+        for (let i = 0; i < 3; i++) cyl(THREE, g, edge, side * 0.0365, 0.025, 0.12 - i * 0.12, 0.004, 0.004, 0.003, 0, 0, Math.PI / 2, 6);
+      }
+      bevel(THREE, g, black, 0, 0.05, -0.165, 0.06, 0.02, 0.04, 0.004);
+      // Pistol grip, trigger guard, buffer and stock.
+      bevel(THREE, g, polymer, 0, -0.1, 0.092, 0.045, 0.14, 0.064, 0.01, -0.27);
+      ring(THREE, g, black, 0, -0.062, 0.04, 0.036, 0.006, 0, Math.PI / 2).scale.set(1, 0.75, 1.05);
+      box(THREE, g, steel, 0, -0.057, 0.047, 0.008, 0.034, 0.012, -0.3);
+      bevel(THREE, g, polymer, 0, -0.02, 0.29, 0.054, 0.098, 0.22, 0.014, -0.04);
+      bevel(THREE, g, polymer, 0, 0.004, 0.205, 0.044, 0.05, 0.06, 0.01);
+      bevel(THREE, g, rubber, 0, -0.026, 0.405, 0.058, 0.112, 0.018, 0.006);
+      // Barrel, heat shield, gas tube and block, handguard, front sight, carry handle and flash hider.
+      cyl(THREE, g, steel, 0, 0.012, -0.47, 0.0142, 0.0142, 0.56, Math.PI / 2, 0, 0, 14);
+      bevel(THREE, g, black, 0, 0.032, -0.3, 0.032, 0.008, 0.2, 0.003);
+      for (let i = 0; i < 6; i++) box(THREE, g, steel, 0, 0.0365, -0.215 - i * 0.034, 0.024, 0.002, 0.014);
+      cyl(THREE, g, steel, 0, -0.022, -0.39, 0.0075, 0.0075, 0.36, Math.PI / 2, 0, 0, 8);
+      bevel(THREE, g, black, 0, -0.008, -0.575, 0.03, 0.052, 0.04, 0.005);
+      bevel(THREE, g, black, 0, 0.042, -0.585, 0.008, 0.05, 0.016, 0.002);
+      bevel(THREE, g, polymer, 0, -0.024, -0.275, 0.074, 0.058, 0.17, 0.012);
+      for (const side of [-1, 1]) for (let i = 0; i < 5; i++) box(THREE, g, black, side * 0.0372, -0.024, -0.21 - i * 0.03, 0.002, 0.03, 0.012);
+      for (const z of [-0.23, -0.33]) link(THREE, g, black, [0, 0.035, z], [0, 0.086, z + 0.01], 0.006);
+      bevel(THREE, g, black, 0, 0.09, -0.275, 0.02, 0.014, 0.13, 0.005);
+      cyl(THREE, g, black, 0, 0.012, -0.76, 0.0165, 0.0165, 0.062, Math.PI / 2, 0, 0, 12);
+      for (let i = 0; i < 4; i++) box(THREE, g, black, Math.cos(i * TAU / 4) * 0.0168, 0.012 + Math.sin(i * TAU / 4) * 0.0168, -0.765, 0.004, 0.004, 0.04, 0, 0, i * TAU / 4);
+      // Bipod, folded back under the barrel.
+      for (const side of [-1, 1]) {
+        link(THREE, g, steel, [side * 0.012, -0.03, -0.6], [side * 0.016, -0.04, -0.385], 0.0055);
+        oval(THREE, g, rubber, side * 0.016, -0.041, -0.378, 0.008, 0.008, 0.012);
+      }
+      bevel(THREE, g, steel, 0, -0.03, -0.605, 0.036, 0.014, 0.02, 0.003);
+      // Feed cover over the tray, hinged at the front.
+      const cover = joint(THREE, g, 'cover', 0, 0.046, -0.13);
+      bevel(THREE, cover, black, 0, 0.009, 0.095, 0.066, 0.018, 0.19, 0.005);
+      bevel(THREE, cover, black, 0, 0.026, 0.16, 0.02, 0.018, 0.026, 0.004);
+      box(THREE, cover, k.sight, 0, 0.037, 0.162, 0.006, 0.003, 0.002);
+      // The ammunition box hangs under the left side; its belt climbs into the feed tray, each round pointing forward
+      // in its link.
+      magazine.position.set(-0.03, -0.046, -0.04);
+      bevel(THREE, magazine, od, -0.004, -0.068, 0, 0.068, 0.124, 0.13, 0.012);
+      bevel(THREE, magazine, black, -0.004, -0.004, 0, 0.072, 0.012, 0.134, 0.004);
+      for (let i = 0; i < 5; i++) {
+        const t = i / 4, x = -0.024 + t * 0.012, y = 0.009 + t * 0.068 - Math.sin(t * Math.PI) * 0.01;
+        cyl(THREE, magazine, brass, x, y, -0.006, 0.0052, 0.0052, 0.05, Math.PI / 2, 0, 0, 8);
+        box(THREE, magazine, black, x, y, 0.004, 0.0125, 0.0125, 0.022, 0, 0, 0.3 * (1 - t));
+      }
+      bolt.position.set(0.04, 0.0, -0.1);
+      bevel(THREE, bolt, black, 0.006, 0, 0, 0.016, 0.014, 0.03, 0.003);
+      oval(THREE, bolt, black, 0.017, 0, 0.004, 0.008, 0.009, 0.01);
+      return {
+        muzzle: new THREE.Vector3(0, 0.012, -0.792), bore: 0.0145, cover,
+        grips: { right: [0, -0.1, 0.095], left: [0, -0.06, -0.28] },
+        hands(hands) {
+          gripHand(THREE, g, hands, [0, -0.1, 0.092], -0.27, 0.0225, 0.032, 0.05, [0.36, -0.5, 0.79]);
+          supportHand(THREE, g, hands, [0, -0.024, -0.285], 0.037, 0.029, [-0.42, -0.46, 0.78]);
+        },
+        pose(reload, kick) {
+          const open = reload < 0 ? 0 : smoothstep(0.04, 0.13, reload) * (1 - smoothstep(0.7, 0.78, reload));
+          cover.rotation.x = -open * 1.1;
+          magazine.visible = reload < 0 || reload < 0.28 || reload > 0.52;
+          bolt.position.z = -0.1 + kick * 0.03;
+        }
+      };
+    }
+  };
+  // RULES.WEAPONS order: a carrier's weapon index picks from this list.
+  const WEAPON_KINDS = ['rifle', 'pistol', 'shotgun', ...Object.keys(GUN_MODELS)];
+
   // options.world: a third-person copy (scene-lit finishes, no first-person hands) for the co-op partner.
   function makeWeapon(THREE, requestedKind, options) {
-    const kind = ['rifle', 'pistol', 'shotgun'].includes(requestedKind) ? requestedKind : 'rifle';
+    const kind = WEAPON_KINDS.includes(requestedKind) ? requestedKind : 'rifle';
     const world = !!(options && options.world);
     const g = new THREE.Group(); g.name = kind;
-    const { steel, edge, black, polymer, wood, brass, rubber, glove } = gunPalette(THREE, world);
+    const palette = gunPalette(THREE, world), { steel, edge, black, polymer, wood, brass, rubber, glove } = palette;
     const sight = basic(THREE, 'gun:sight', 0x97d3b1);
     const magazine = joint(THREE, g, 'magazine', 0, 0, 0);
     const bolt = joint(THREE, g, 'bolt', 0, 0, 0);
-    let muzzle;
+    const extra = GUN_MODELS[kind] ? GUN_MODELS[kind](THREE, g, Object.assign({ sight, magazine, bolt }, palette)) : null;
+    let muzzle = extra && extra.muzzle;
 
     if (kind === 'rifle') {
       bevel(THREE, g, steel, 0, 0, -0.007, 0.065, 0.084, 0.30, 0.009);
@@ -1792,7 +2999,7 @@
       bevel(THREE, magazine, black, 0, 0.027, 0, 0.042, 0.065, 0.060, 0.005, -0.29);
       bevel(THREE, magazine, steel, 0, -0.005, 0, 0.056, 0.014, 0.077, 0.004, -0.29);
       muzzle = new THREE.Vector3(0, 0.028, -0.272);
-    } else {
+    } else if (kind === 'shotgun') {
       bevel(THREE, g, steel, 0, 0.004, -0.047, 0.075, 0.094, 0.265, 0.009);
       bevel(THREE, g, wood, 0, -0.048, 0.217, 0.068, 0.111, 0.255, 0.015, -0.22);
       bevel(THREE, g, rubber, 0, -0.071, 0.336, 0.076, 0.123, 0.025, 0.007, -0.22);
@@ -1816,13 +3023,15 @@
       muzzle = new THREE.Vector3(0, 0.023, -0.855);
     }
     // A real dark bore and milled crown catch the light at the business end.
-    ring(THREE, g, edge, muzzle.x, muzzle.y, muzzle.z + 0.012, kind === 'shotgun' ? 0.019 : 0.013, 0.0035);
+    const crown = extra && extra.bore ? [extra.bore * 0.9, 0.0025, extra.bore * 0.7] : null;
+    ring(THREE, g, edge, muzzle.x, muzzle.y, muzzle.z + 0.012, crown ? crown[0] : kind === 'shotgun' ? 0.019 : 0.013, crown ? crown[1] : 0.0035);
+    const boreSize = crown ? crown[2] : kind === 'shotgun' ? 0.016 : 0.011;
     const bore = add(THREE, g, geometry(THREE, 'bore', () => new THREE.CircleGeometry(1, 16)), rubber,
-      muzzle.x, muzzle.y, muzzle.z + 0.011, kind === 'shotgun' ? 0.016 : 0.011, kind === 'shotgun' ? 0.016 : 0.011, 1, 0, Math.PI);
+      muzzle.x, muzzle.y, muzzle.z + 0.011, boreSize, boreSize, 1, 0, Math.PI);
     bore.castShadow = false;
     const hands = { glove, rubber, sleeve: gunMaterial(THREE, 'flashlight:sleeve', 0x22292d, 0, 'gun-fabric', null, world) };
     // Where a carrier's hands hold the weapon (weapon space): firing grip, and the support hand (null: one-handed).
-    const grips = {
+    const grips = extra ? extra.grips : {
       rifle: { right: [0, -0.1, 0.07], left: [0, -0.045, -0.25] },
       pistol: { right: [0, -0.095, 0.045], left: [-0.035, -0.115, 0.03] },
       shotgun: { right: [0, -0.07, 0.125], left: [0, -0.07, -0.31] }
@@ -1834,11 +3043,13 @@
       supportHand(THREE, g, hands, [0, 0.003, -0.31], 0.037, 0.0425, [-0.42, -0.46, 0.78]);
     } else if (kind === 'pistol') {
       gripHand(THREE, g, hands, [0, -0.102, 0.042], -0.29, 0.026, 0.0435, 0.062, [0.34, -0.52, 0.78]);
+    } else if (extra) {
+      extra.hands(hands);
     } else {
       gripHand(THREE, g, hands, [0, -0.074, 0.13], -0.95, 0.034, 0.03, 0.03, [0.38, -0.36, 0.85]);
       supportHand(THREE, g, hands, [0, -0.026, -0.385], 0.0425, 0.045, [-0.42, -0.46, 0.78]);
     }
-    for (const z of [-0.1, 0.062]) {
+    if (!extra) for (const z of [-0.1, 0.062]) {
       cyl(THREE, g, edge, -0.036, 0.006, z, 0.0045, 0.0045, 0.003, 0, 0, Math.PI / 2, 6);
     }
     batch(THREE, g, { boxUV: 10 });
@@ -1847,6 +3058,10 @@
     bolt.userData.restZ = bolt.position.z;
     g.userData = { kind, world, magazine, muzzleFlash, muzzlePosition: muzzle, bolt, run: 0,
       grips: { right: new THREE.Vector3(...grips.right), left: grips.left && new THREE.Vector3(...grips.left) } };
+    // The new guns animate their own parts (cylinder, bolt handle, feed cover); a world copy only needs its joints.
+    if (extra) for (const key of ['cylinder', 'rounds', 'cover']) if (extra[key]) g.userData[key] = extra[key];
+    if (extra && extra.pose && !world) g.userData.pose = extra.pose;
+    if (extra && extra.view && !world) g.userData.view = extra.view;
     return g;
   }
 
@@ -1984,7 +3199,7 @@
     const torch = joint(THREE, aim, 'torch', -0.15, 0.06, -0.12);
     cyl(THREE, torch, mat.hardware, 0, 0, 0, 0.022, 0.022, 0.1, Math.PI / 2, 0, 0, 10);
     const mount = joint(THREE, aim, 'mount', 0, 0, 0);
-    const weapons = ['rifle', 'pistol', 'shotgun'].map(kind => {
+    const weapons = WEAPON_KINDS.map(kind => {
       const w = makeWeapon(THREE, kind, { world: true }); w.visible = kind === 'rifle'; mount.add(w);
       const flash = w.userData.muzzleFlash, cross = flash.clone(); cross.rotation.set(0, Math.PI / 2, 0); flash.add(cross);
       return w;
@@ -2019,7 +3234,9 @@
     const poles = { knee: [new THREE.Vector3(-0.15, 0, -1), new THREE.Vector3(0.15, 0, -1)],
       elbow: [new THREE.Vector3(-0.8, -1, 0.15), new THREE.Vector3(0.6, -1, 0.45)] };
     // Weapon placement in aim space, at rest and aimed down the sights: [x, y, z, adsX, adsY, adsZ, torso blade (rad)].
-    const MOUNT = { rifle: [0.1, -0.04, -0.31, 0.06, 0, -0.3, 0.35], pistol: [0.03, -0.07, -0.47, 0.01, -0.025, -0.5, 0.08], shotgun: [0.1, -0.045, -0.3, 0.06, -0.005, -0.29, 0.35] };
+    const MOUNT = { rifle: [0.1, -0.04, -0.31, 0.06, 0, -0.3, 0.35], pistol: [0.03, -0.07, -0.47, 0.01, -0.025, -0.5, 0.08], shotgun: [0.1, -0.045, -0.3, 0.06, -0.005, -0.29, 0.35],
+      smg: [0.09, -0.04, -0.36, 0.05, 0, -0.36, 0.3], magnum: [0.03, -0.07, -0.47, 0.01, -0.03, -0.5, 0.08],
+      marksman: [0.1, -0.05, -0.26, 0.06, -0.035, -0.25, 0.35], lmg: [0.1, -0.07, -0.3, 0.06, -0.035, -0.3, 0.38] };
     const st = { phase: 0, walk: 0, run: 0, crouch: 0, aim: 0, reload: 0, kick: 0, flash: 0, flinch: 0, flinchX: 0, t: 0, weapon: 0 };
 
     // Two-bone IK from a toward t (lengths l1, l2), bending toward pole; writes the joint and the (reachable) end.
@@ -2678,6 +3895,558 @@
     return g;
   }
 
+  // ---------- above ground: rooms, grounds and the horizon of S1 (garden) and S2 (graveyard) ----------
+  function outdoorPalette(THREE) {
+    const cache = store(THREE).materials;
+    if (!cache.has('out:glass')) {
+      const glass = new THREE.MeshStandardMaterial({ color: 0x223236, roughness: 0.08, metalness: 0.2, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide });
+      glass.userData.hollowShared = true; cache.set('out:glass', glass);
+    }
+    const live = standard(THREE, 'out:lamp', 0xffd9a8, 0.35, 0);
+    live.emissive.setHex(0xffa851); live.emissiveIntensity = 1.6;
+    return {
+      wood: standard(THREE, 'out:wood', 0x5a4531, 0.86, 0, 'wood'), dark: standard(THREE, 'out:darkwood', 0x2b2118, 0.9, 0, 'wood'),
+      plank: standard(THREE, 'out:plank', 0x5f5240, 0.92, 0, 'wood'), stone: standard(THREE, 'out:stone', 0x6f6c62, 0.93, 0, 'concrete'),
+      pale: standard(THREE, 'out:pale', 0x96938a, 0.9, 0, 'concrete'), mossy: standard(THREE, 'out:mossy', 0x4d5240, 0.96, 0, 'concrete'),
+      slate: standard(THREE, 'out:slate', 0x2a2d31, 0.72, 0.05, 'concrete'), brick: standard(THREE, 'out:brick', 0x5e3427, 0.92, 0, 'wall'),
+      iron: standard(THREE, 'out:iron', 0x232627, 0.55, 0.75, 'metal'), rust: standard(THREE, 'out:rust', 0x5a3824, 0.85, 0.4, 'metal'),
+      leaf: standard(THREE, 'out:leaf', 0x1f3417, 0.78, 0, 'fabric'), leaf2: standard(THREE, 'out:leaf2', 0x2c4119, 0.8, 0, 'fabric'),
+      dry: standard(THREE, 'out:dry', 0x574b2f, 0.92, 0, 'fabric'), soil: standard(THREE, 'out:soil', 0x271e16, 1, 0, 'concrete'),
+      clay: standard(THREE, 'out:clay', 0x7d4229, 0.88, 0, 'concrete'), cloth: standard(THREE, 'out:cloth', 0x837e6b, 0.97, 0, 'fabric'),
+      bone: standard(THREE, 'out:bone', 0xaea48b, 0.8, 0, 'concrete'), rose: standard(THREE, 'out:rose', 0x5c0a12, 0.55, 0),
+      white: standard(THREE, 'out:white', 0xc9c4b5, 0.7, 0), bark: standard(THREE, 'out:bark', 0x2e261f, 0.95, 0, 'wood'),
+      pit: basic(THREE, 'out:pit', 0x050403), glass: cache.get('out:glass'), live
+    };
+  }
+
+  // A triangular prism (unit base and height, unit depth along z) for gables and grave mounds.
+  function prism(THREE, parent, mat, x, y, z, w, h, d, ry) {
+    const geom = geometry(THREE, 'out:prism', () => {
+      const s = new THREE.Shape(); s.moveTo(-0.5, 0); s.lineTo(0.5, 0); s.lineTo(0, 1); s.closePath();
+      const g = new THREE.ExtrudeGeometry(s, { depth: 1, bevelEnabled: false }); g.translate(0, 0, -0.5); return g;
+    });
+    return add(THREE, parent, geom, mat, x, y, z, w, h, d, 0, ry || 0, 0);
+  }
+
+  // oval() and link() for the floors above ground, which carry thousands of leaves, stems and bones: a coarse sphere
+  // (lo: coarser still, for the horizon and small clutter) and an open stem of a few sides. Both are unit shapes,
+  // scaled, so random sizes share one cached geometry.
+  function blob(THREE, parent, mat, x, y, z, w, h, d, rx, ry, rz, lo) {
+    const geom = geometry(THREE, lo ? 'out:blob-lo' : 'out:blob', () => new THREE.SphereGeometry(1, lo ? 6 : 8, lo ? 4 : 6));
+    return add(THREE, parent, geom, mat, x, y, z, w, h, d, rx, ry, rz);
+  }
+  function twig(THREE, parent, mat, from, to, r1, r2, sides) {
+    const n = sides || 5, taper = Math.round((r2 == null ? 1 : r2 / r1) * 20) / 20;
+    const geom = geometry(THREE, 'out:twig:' + n + ':' + taper, () => new THREE.CylinderGeometry(taper, 1, 1, n, 1, true));
+    const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2], len = Math.hypot(dx, dy, dz) || 0.001;
+    const m = add(THREE, parent, geom, mat, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2, r1, len, r1);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx / len, dy / len, dz / len));
+    return m;
+  }
+
+  // Shared small furniture of the outdoor rooms and grounds. Each builder adds meshes to `g` (local metres) and returns
+  // its collider box {x, z, w, d, h} (or null for low clutter that never blocks).
+  function outdoorKit(THREE, g, p, random) {
+    const k = {};
+    const C = (x, z, w, d, h) => ({ x, z, w, d, h });
+    k.lantern = (x, y, z, hanging) => {
+      if (hanging) twig(THREE, g, p.iron, [x, y + 0.2, z], [x, y + 0.75, z], 0.012);
+      box(THREE, g, p.iron, x, y + 0.18, z, 0.2, 0.03, 0.2); box(THREE, g, p.iron, x, y - 0.17, z, 0.18, 0.03, 0.18);
+      box(THREE, g, p.live, x, y, z, 0.13, 0.3, 0.13).castShadow = false;
+      for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) box(THREE, g, p.iron, x + dx * 0.08, y, z + dz * 0.08, 0.018, 0.34, 0.018);
+      prism(THREE, g, p.iron, x, y + 0.195, z, 0.22, 0.12, 0.22);
+    };
+    k.post = (x, z) => {
+      cyl(THREE, g, p.iron, x, 1.3, z, 0.045, 0.06, 2.6, 0, 0, 0, 8);
+      cyl(THREE, g, p.iron, x, 0.12, z, 0.12, 0.14, 0.24, 0, 0, 0, 8);
+      k.lantern(x, 2.78, z);
+      return C(x, z, 0.3, 0.3, 2.6);
+    };
+    k.bench = (x, z, ry, mat) => {
+      const r = joint(THREE, g, 'bench', x, 0, z); r.rotation.y = ry || 0; const m = mat || p.wood;
+      box(THREE, r, m, 0, 0.45, 0, 1.6, 0.06, 0.42); box(THREE, r, m, 0, 0.82, -0.2, 1.6, 0.3, 0.05, -0.15);
+      for (const sx of [-0.68, 0.68]) { box(THREE, r, p.iron, sx, 0.22, 0, 0.06, 0.45, 0.4); box(THREE, r, p.iron, sx, 0.62, -0.19, 0.05, 0.42, 0.05); }
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 0.6 : 1.7, turned ? 1.7 : 0.6, 0.9);
+    };
+    k.table = (x, z, w, d, mat) => {
+      bevel(THREE, g, mat || p.wood, x, 0.78, z, w, 0.06, d, 0.01);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(THREE, g, mat || p.wood, x + sx * (w / 2 - 0.08), 0.38, z + sz * (d / 2 - 0.08), 0.07, 0.76, 0.07);
+      return C(x, z, w, d, 0.82);
+    };
+    k.pot = (x, y, z, r, dead) => {
+      cyl(THREE, g, p.clay, x, y + r * 0.6, z, r, r * 0.72, r * 1.2, 0, 0, 0, 9);
+      cyl(THREE, g, p.soil, x, y + r * 1.18, z, r * 0.9, r * 0.9, 0.02, 0, 0, 0, 9);
+      const plant = dead ? p.dry : p.leaf2;
+      for (let i = 0; i < 3; i++) blob(THREE, g, plant, x + (random() - 0.5) * r, y + r * 1.4 + random() * r * 0.8, z + (random() - 0.5) * r, r * 0.55, r * 0.7, r * 0.55);
+    };
+    k.shelf = (x, z, ry, len, fill) => {
+      const r = joint(THREE, g, 'shelf', x, 0, z); r.rotation.y = ry || 0;
+      for (const sx of [-len / 2 + 0.04, len / 2 - 0.04]) box(THREE, r, p.dark, sx, 0.95, 0, 0.05, 1.9, 0.4);
+      for (let row = 0; row < 4; row++) {
+        box(THREE, r, p.plank, 0, 0.3 + row * 0.48, 0, len, 0.035, 0.42);
+        for (let j = 0; j < Math.floor(len / 0.35); j++) if (random() < 0.7) fill(r, -len / 2 + 0.22 + j * 0.35, 0.32 + row * 0.48);
+      }
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 0.5 : len, turned ? len : 0.5, 1.95);
+    };
+    k.crate = (x, z, s, ry) => { bevel(THREE, g, p.plank, x, s / 2, z, s, s, s, 0.02, 0, ry || 0); box(THREE, g, p.dark, x, s / 2, z, s * 1.01, 0.05, s * 1.01, 0, ry || 0); return C(x, z, s * 1.2, s * 1.2, s); };
+    k.barrel = (x, z) => { cyl(THREE, g, p.wood, x, 0.45, z, 0.3, 0.3, 0.9, 0, 0, 0, 12); for (const y of [0.15, 0.75]) cyl(THREE, g, p.iron, x, y, z, 0.31, 0.31, 0.04, 0, 0, 0, 12); return C(x, z, 0.65, 0.65, 0.9); };
+    k.sack = (x, z) => { blob(THREE, g, p.cloth, x, 0.25, z, 0.3, 0.3, 0.24, 0, random() * TAU); return null; };
+    k.tools = (x, z, ry) => {
+      const r = joint(THREE, g, 'tools', x, 0, z); r.rotation.y = ry || 0;
+      for (let i = 0; i < 3; i++) {
+        const sx = -0.4 + i * 0.4, lean = 0.18 + random() * 0.08;
+        twig(THREE, r, p.wood, [sx, 0.05, 0.2], [sx + lean * 0.3, 1.5, -0.1], 0.02);
+        if (i === 1) box(THREE, r, p.rust, sx, 0.2, 0.22, 0.24, 0.3, 0.03); else box(THREE, r, p.rust, sx + 0.05, 1.5, -0.12, 0.34, 0.04, 0.06);
+      }
+      return null;
+    };
+    k.bed = (x, z, ry) => {
+      const r = joint(THREE, g, 'cot', x, 0, z); r.rotation.y = ry || 0;
+      box(THREE, r, p.dark, 0, 0.32, 0, 0.9, 0.12, 1.95); bevel(THREE, r, p.cloth, 0, 0.44, 0, 0.82, 0.14, 1.85, 0.03);
+      drape(THREE, r, p.dry, -0.2, 0.45, 0.25, 0.9, 0.5, 0.02, Math.PI / 2, -0.1);
+      for (const sx of [-0.4, 0.4]) for (const sz of [-0.9, 0.9]) box(THREE, r, p.dark, sx, 0.15, sz, 0.06, 0.3, 0.06);
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 2 : 0.95, turned ? 0.95 : 2, 0.55);
+    };
+    k.stove = (x, z) => { bevel(THREE, g, p.iron, x, 0.45, z, 0.7, 0.9, 0.6, 0.02); cyl(THREE, g, p.iron, x, 2.0, z, 0.07, 0.07, 2.2, 0, 0, 0, 8); return C(x, z, 0.75, 0.65, 0.95); };
+    k.tub = (x, z, dead) => {
+      cyl(THREE, g, p.wood, x, 0.35, z, 0.42, 0.34, 0.7, 0, 0, 0, 10); cyl(THREE, g, p.soil, x, 0.69, z, 0.38, 0.38, 0.02, 0, 0, 0, 10);
+      twig(THREE, g, p.bark, [x, 0.7, z], [x + 0.05, 1.7, z], 0.05);
+      for (let i = 0; i < 5; i++) blob(THREE, g, dead ? p.dry : p.leaf, x + (random() - 0.5) * 0.6, 1.7 + random() * 0.6, z + (random() - 0.5) * 0.6, 0.35, 0.3, 0.35);
+      return C(x, z, 0.9, 0.9, 2.2);
+    };
+    k.raised = (x, z, w, d) => {
+      for (const [sx, sz, bw, bd] of [[0, -d / 2, w, 0.14], [0, d / 2, w, 0.14], [-w / 2, 0, 0.14, d], [w / 2, 0, 0.14, d]]) box(THREE, g, p.brick, x + sx, 0.2, z + sz, bw, 0.4, bd);
+      box(THREE, g, p.soil, x, 0.36, z, w - 0.1, 0.04, d - 0.1);
+      for (let i = 0; i < Math.round(w * d * 4); i++) blob(THREE, g, random() < 0.3 ? p.dry : p.leaf2, x + (random() - 0.5) * (w - 0.3), 0.45 + random() * 0.15, z + (random() - 0.5) * (d - 0.3), 0.12 + random() * 0.1, 0.12, 0.12 + random() * 0.1, 0, 0, 0, true);
+      return C(x, z, w, d, 0.45);
+    };
+    k.roses = (x, z, w) => {
+      for (let i = 0; i < Math.round(w * 2.5); i++) {
+        const px = x + (random() - 0.5) * w, pz = z + (random() - 0.5) * 0.5, h = 0.5 + random() * 0.6;
+        blob(THREE, g, p.leaf, px, h, pz, 0.32, 0.38, 0.3);
+        for (let j = 0; j < 3; j++) blob(THREE, g, p.rose, px + (random() - 0.5) * 0.4, h + 0.15 + random() * 0.25, pz + (random() - 0.5) * 0.3, 0.06, 0.05, 0.06, 0, 0, 0, true);
+      }
+    };
+    k.tuft = (x, z, s, mat) => {
+      for (let i = 0; i < 5; i++) { const a = i / 5 * TAU + random(); twig(THREE, g, mat || p.leaf2, [x, 0, z], [x + Math.cos(a) * 0.18 * s, (0.4 + random() * 0.35) * s, z + Math.sin(a) * 0.18 * s], 0.012 * s, 0.002, 3); }
+    };
+    k.statue = (x, z, ry, winged) => {
+      const r = joint(THREE, g, 'statue', x, 0, z); r.rotation.y = ry || 0;
+      bevel(THREE, r, p.mossy, 0, 0.45, 0, 0.8, 0.9, 0.8, 0.03); box(THREE, r, p.pale, 0, 0.93, 0, 0.9, 0.06, 0.9);
+      cyl(THREE, r, p.pale, 0, 1.6, 0, 0.17, 0.32, 1.3, 0, 0, 0, 10);
+      blob(THREE, r, p.pale, 0, 2.38, 0.02, 0.13, 0.16, 0.14);
+      blob(THREE, r, p.pale, 0, 2.15, 0.02, 0.24, 0.12, 0.17);
+      twig(THREE, r, p.pale, [-0.2, 2.1, 0.05], [-0.08, 1.75, 0.22], 0.05); twig(THREE, r, p.pale, [0.2, 2.1, 0.05], [0.06, 1.78, 0.22], 0.05);
+      if (winged) for (const s of [-1, 1]) blob(THREE, r, p.pale, s * 0.32, 2.1, -0.16, 0.08, 0.5, 0.3, 0.2, s * 0.4, s * 0.35);
+      return C(x, z, 0.95, 0.95, 2.5);
+    };
+    k.column = (x, z, h, r0) => { cyl(THREE, g, p.pale, x, h / 2 + 0.2, z, r0 || 0.28, (r0 || 0.28) * 1.1, h, 0, 0, 0, 12); bevel(THREE, g, p.stone, x, 0.1, z, 0.8, 0.2, 0.8, 0.02); if (h > 2.4) box(THREE, g, p.pale, x, h + 0.28, z, 0.75, 0.16, 0.75); return C(x, z, 0.8, 0.8, h + 0.2); };
+    k.headstone = (x, z, ry, style, h) => {
+      const r = joint(THREE, g, 'headstone', x, 0, z); r.rotation.y = ry || 0; const mat = random() < 0.3 ? p.mossy : random() < 0.5 ? p.pale : p.stone;
+      const hh = h || 0.8 + random() * 0.5, tilt = (random() - 0.5) * 0.14;
+      if (style === 0) { bevel(THREE, r, mat, 0, hh / 2, 0, 0.6, hh, 0.14, 0.02, tilt); cyl(THREE, r, mat, 0, hh, 0, 0.3, 0.3, 0.14, Math.PI / 2, 0, 0, 12); }
+      else if (style === 1) { box(THREE, r, mat, 0, hh * 0.6, 0, 0.13, hh * 1.2, 0.13, tilt); box(THREE, r, mat, 0, hh * 0.92, 0, 0.55, 0.12, 0.13, tilt); box(THREE, r, mat, 0, 0.08, 0, 0.5, 0.16, 0.4); }
+      else if (style === 2) { bevel(THREE, r, mat, 0, 0.15, 0, 0.6, 0.3, 0.6, 0.02); cyl(THREE, r, mat, 0, 0.3 + hh * 0.7, 0, 0.07, 0.17, hh * 1.4, 0, 0, 0, 4); }
+      else bevel(THREE, r, mat, 0, hh * 0.45, 0, 0.55, hh * 0.9, 0.16, 0.03, tilt, 0, (random() - 0.5) * 0.1);
+      const wide = style === 2 ? 0.65 : 0.62, deep = style === 2 ? 0.65 : style === 1 ? 0.42 : 0.24;
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? deep : wide, turned ? wide : deep, style === 2 ? 0.3 + hh * 1.4 : hh + 0.2);
+    };
+    k.mound = (x, z, ry, open) => {
+      prism(THREE, g, p.soil, x, 0, z, 0.9, 0.26, 1.9, ry);
+      if (open) { const ox = Math.cos(ry || 0) * 1.0, oz = -Math.sin(ry || 0) * 1.0; box(THREE, g, p.pit, x + ox, 0.006, z + oz, 0.85, 0.01, 1.9, 0, ry || 0); }
+    };
+    k.tomb = (x, z, ry) => {
+      const r = joint(THREE, g, 'tomb', x, 0, z); r.rotation.y = ry || 0;
+      bevel(THREE, r, p.stone, 0, 0.42, 0, 1.0, 0.84, 2.0, 0.03); bevel(THREE, r, p.pale, 0, 0.88, 0, 1.12, 0.1, 2.12, 0.02);
+      shroud(THREE, r, p.pale, 0, 0.92, 0).scale.set(0.6, 0.25, 1.5);
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 2.15 : 1.15, turned ? 1.15 : 2.15, 1.0);
+    };
+    k.bones = (x, z, s) => {
+      for (let i = 0; i < 9 * s; i++) blob(THREE, g, p.bone, x + (random() - 0.5) * 0.8 * s, 0.05 + random() * 0.25 * s, z + (random() - 0.5) * 0.6 * s, 0.03, 0.03, 0.2, random(), random() * TAU, 0, true);
+      for (let i = 0; i < 2 * s; i++) blob(THREE, g, p.bone, x + (random() - 0.5) * 0.6 * s, 0.12 + random() * 0.2 * s, z + (random() - 0.5) * 0.4 * s, 0.1, 0.11, 0.12);
+    };
+    k.coffin = (x, z, ry) => {
+      const r = joint(THREE, g, 'coffin', x, 0, z); r.rotation.y = ry || 0;
+      bevel(THREE, r, p.dark, 0, 0.2, 0, 0.65, 0.4, 2.0, 0.02); box(THREE, r, p.plank, 0.25, 0.43, 0.1, 0.62, 0.05, 1.9, 0, 0.25, 0.08);
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 2.05 : 0.8, turned ? 0.8 : 2.05, 0.48);
+    };
+    // lo: a silhouette for the horizon, seen only from far off.
+    k.tree = (x, z, h, dead, lo) => {
+      const lean = (random() - 0.5) * 0.4, f = h / 6.5;
+      twig(THREE, g, p.bark, [x, 0, z], [x + lean, h * 0.6, z + lean * 0.5], 0.24 * Math.max(1, f * 0.8), 0.16, lo ? 5 : 7);
+      for (let i = 0; i < 5; i++) {
+        const a = i / 5 * TAU + random(), y0 = h * (0.4 + random() * 0.25), len = h * (0.25 + random() * 0.2);
+        const end = [x + lean + Math.cos(a) * len, y0 + len * (0.4 + random() * 0.5), z + Math.sin(a) * len];
+        twig(THREE, g, p.bark, [x + lean * 0.8, y0, z + lean * 0.4], end, 0.09, 0.03, lo ? 3 : 5);
+        if (dead) twig(THREE, g, p.bark, end, [end[0] + Math.cos(a + 0.8) * len * 0.4, end[1] + len * 0.3, end[2] + Math.sin(a + 0.8) * len * 0.4], 0.03, 0.01, 3);
+        else blob(THREE, g, random() < 0.5 ? p.leaf : p.leaf2, end[0], end[1], end[2], (1.1 + random() * 0.6) * f, (0.8 + random() * 0.4) * f, (1.1 + random() * 0.6) * f, 0, random() * TAU, 0, lo);
+      }
+      if (!dead) blob(THREE, g, p.leaf, x + lean, h * 0.85, z + lean * 0.5, 1.6 * f, 1.2 * f, 1.6 * f, 0, 0, 0, lo);
+      return C(x, z, 0.55, 0.55, h * 0.6);
+    };
+    k.yew = (x, z, h, lo) => { cyl(THREE, g, p.bark, x, 0.6, z, 0.12, 0.18, 1.2, 0, 0, 0, 6); twig(THREE, g, p.leaf, [x, 0.8, z], [x, 0.8 + h, z], 0.9, 0.05, lo ? 6 : 9); return C(x, z, 1.1, 1.1, h); };
+    return k;
+  }
+
+  // Outdoor room dressing. The room's walls are hedge or churchyard-wall cells: buildings are clad inside (planks, brick,
+  // stone or glass) and roofed above the wall tops; gardens stay open to the sky. Furniture keeps to the walls, clear
+  // of the centre (pickups), the doorway (south wall; a 3-wide room's door is its west cell) and the shelter kit spot.
+  // options: {width, depth, height, look, seed}. Returns a Group; userData.colliders lists furniture boxes.
+  const OUTDOOR_LOOKS = Object.freeze({
+    shed: { clad: 'plank', roof: 'pitched', roofMat: 'slate' }, bothy: { clad: 'stone', roof: 'pitched', roofMat: 'slate' },
+    cottage: { clad: 'pale', roof: 'pitched', roofMat: 'slate' }, icehouse: { clad: 'brick', roof: 'flat', roofMat: 'mossy' },
+    summerhouse: { clad: 'plank', roof: 'pitched', roofMat: 'dark', glass: true }, glasshouse: { clad: 'brick', roof: 'glass', glass: true },
+    orangery: { clad: 'pale', roof: 'glass', glass: true }, herb: {}, aviary: {}, rose: {}, wild: {}, folly: {},
+    lodge: { clad: 'plank', roof: 'pitched', roofMat: 'slate' }, chapel: { clad: 'stone', roof: 'pitched', roofMat: 'slate', tall: true },
+    crypt: { clad: 'stone', roof: 'flat', roofMat: 'mossy' }, hut: { clad: 'plank', roof: 'pitched', roofMat: 'dark' },
+    columbarium: { clad: 'pale', roof: 'flat', roofMat: 'stone' }, ossuary: { clad: 'stone', roof: 'flat', roofMat: 'mossy' },
+    mausoleum: { clad: 'pale', roof: 'pitched', roofMat: 'stone', tall: true }, charnel: { clad: 'stone', roof: 'pitched', roofMat: 'slate' },
+    vestry: { clad: 'wood', roof: 'pitched', roofMat: 'slate' }, paupers: { clad: 'plank', roof: 'pitched', roofMat: 'dark' },
+    embalm: { clad: 'pale', roof: 'pitched', roofMat: 'slate' }
+  });
+  function decorateOutdoorRoom(THREE, options) {
+    const opts = options || {}, width = roomDimension(opts.width, 9, 3, 40), depth = roomDimension(opts.depth, 9, 3, 40);
+    const H = roomDimension(opts.height, 3.2, 2.6, 6), look = OUTDOOR_LOOKS[opts.look] ? opts.look : 'shed', spec = OUTDOOR_LOOKS[look];
+    const g = new THREE.Group(), p = outdoorPalette(THREE), colliders = [];
+    g.name = 'Above ground / ' + look;
+    let state = (Number(opts.seed) | 0) * 31 + width * 7 + depth * 13;
+    for (let i = 0; i < look.length; i++) state = Math.imul(state ^ look.charCodeAt(i), 2654435761);
+    const random = seeded(state >>> 0), kit = outdoorKit(THREE, g, p, random);
+    const W2 = width / 2, D2 = depth / 2, cells = Math.max(1, Math.round(width / 3));
+    const doorX = (Math.floor(cells / 2) - (cells === 3 ? 1 : 0) + 0.5) * width / cells - W2, half = width / cells / 2;
+    // Clear: the centre (pickups and the shelter kit), the doorway and the walk from it.
+    const blocked = (x, z, w, d) => Math.abs(x) < w / 2 + 2.1 && Math.abs(z) < d / 2 + 2.1 ||
+      Math.abs(x - doorX) < w / 2 + half + 0.2 && z + d / 2 > D2 - 2.6;
+    const put = c => { if (c) colliders.push(c); return c; };
+    const try_ = (x, z, w, d, make) => { if (blocked(x, z, w, d)) return false; put(make(x, z)); return true; };
+    const clad = spec.clad && p[spec.clad];
+    if (clad) {
+      // A boarded or flagged floor over the lawn.
+      box(THREE, g, spec.clad === 'plank' || spec.clad === 'wood' ? p.plank : p.stone, 0, 0.01, 0, width - 0.04, 0.02, depth - 0.04);
+      const t = 0.08, wainscot = spec.glass ? 0.7 : H;
+      box(THREE, g, clad, 0, wainscot / 2, -D2 + t / 2, width, wainscot, t);
+      for (const s of [-1, 1]) box(THREE, g, clad, s * (W2 - t / 2), wainscot / 2, 0, t, wainscot, depth);
+      const l0 = -W2, l1 = doorX - half, r0 = doorX + half, r1 = W2;
+      if (l1 - l0 > 0.05) box(THREE, g, clad, (l0 + l1) / 2, wainscot / 2, D2 - t / 2, l1 - l0, wainscot, t);
+      if (r1 - r0 > 0.05) box(THREE, g, clad, (r0 + r1) / 2, wainscot / 2, D2 - t / 2, r1 - r0, wainscot, t);
+      box(THREE, g, spec.glass ? p.iron : clad, doorX, H - 0.3, D2 - t / 2, half * 2, 0.6, t + 0.04);
+      for (const s of [-1, 1]) box(THREE, g, p.dark, doorX + s * half, 1.3, D2 - 0.06, 0.14, 2.6, 0.14);
+      if (spec.glass) {
+        // Iron glazing bars over a low wall; the panes are one transparent material.
+        box(THREE, g, p.glass, 0, (H + wainscot) / 2, -D2 + 0.05, width, H - wainscot, 0.02);
+        for (const s of [-1, 1]) box(THREE, g, p.glass, s * (W2 - 0.05), (H + wainscot) / 2, 0, 0.02, H - wainscot, depth);
+        for (let x = -W2; x <= W2 + 0.01; x += 1.5) box(THREE, g, p.iron, x, (H + wainscot) / 2, -D2 + 0.07, 0.05, H - wainscot, 0.05);
+        for (let z = -D2; z <= D2 + 0.01; z += 1.5) for (const s of [-1, 1]) box(THREE, g, p.iron, s * (W2 - 0.07), (H + wainscot) / 2, z, 0.05, H - wainscot, 0.05);
+        box(THREE, g, p.iron, 0, H - 0.04, -D2 + 0.07, width, 0.06, 0.06);
+      }
+    }
+    if (spec.roof === 'pitched' || spec.roof === 'glass') {
+      const rise = spec.tall ? 2.6 : 1.6, eave = D2 + 0.45, len = Math.hypot(eave, rise), a = Math.atan2(rise, eave), m = spec.roof === 'glass' ? p.glass : p[spec.roofMat] || p.slate;
+      for (const s of [-1, 1]) box(THREE, g, m, 0, H + rise / 2, s * eave / 2, width + 0.7, spec.roof === 'glass' ? 0.03 : 0.12, len, s * a);
+      box(THREE, g, p.dark, 0, H + rise + 0.02, 0, width + 0.75, 0.14, 0.18);
+      for (const s of [-1, 1]) prism(THREE, g, spec.roof === 'glass' ? p.iron : clad || p.stone, s * (W2 + 0.02), H, 0, depth + 0.6, rise, spec.roof === 'glass' ? 0.06 : 0.16, Math.PI / 2);
+      if (spec.roof === 'glass') for (let x = -W2; x <= W2 + 0.01; x += 1.5) for (const s of [-1, 1]) box(THREE, g, p.iron, x, H + rise / 2 + 0.03, s * eave / 2, 0.05, 0.05, len, s * a);
+      for (let x = -W2 + 1.5; x < W2; x += 3) box(THREE, g, p.dark, x, H - 0.08, 0, 0.14, 0.16, depth);
+      kit.lantern(0, H - 0.75, 0, true);
+    } else if (spec.roof === 'flat') {
+      box(THREE, g, p[spec.roofMat] || p.stone, 0, H + 0.2, 0, width + 0.8, 0.4, depth + 0.8);
+      box(THREE, g, p.stone, 0, H + 0.45, 0, width + 0.5, 0.1, depth + 0.5);
+      kit.lantern(0, H - 0.75, 0, true);
+    } else kit.lantern(W2 - 0.6, 2.5, -D2 + 0.6);
+    const north = -D2 + 0.45, west = -W2 + 0.45, east = W2 - 0.45;
+    const alongNorth = (step, w, d, make) => { for (let x = -W2 + w / 2 + 0.3; x <= W2 - w / 2 - 0.3; x += step) try_(x, north + d / 2 - 0.3, w, d, make); };
+    const alongSides = (step, w, d, make, sides) => {
+      for (const s of sides || [-1, 1]) for (let z = -D2 + d / 2 + 0.3; z <= D2 - d / 2 - 0.3; z += step) try_(s < 0 ? west + w / 2 - 0.3 : east - w / 2 + 0.3, z, w, d, (x, zz) => make(x, zz, s));
+    };
+    switch (look) {
+      case 'shed':
+        alongNorth(2.6, 2.2, 0.7, (x, z) => { const c = kit.table(x, z, 2.2, 0.7, p.plank); for (let i = 0; i < 4; i++) kit.pot(x - 0.8 + i * 0.5, 0.81, z, 0.13, true); return c; });
+        alongSides(2.4, 0.5, 1.8, (x, z, s) => kit.shelf(x, z, Math.PI / 2, 1.8, (r, sx, y) => cyl(THREE, r, p.clay, sx, y + 0.1, 0, 0.1, 0.07, 0.2, 0, 0, 0, 8)), [1]);
+        kit.tools(west + 0.1, -0.5, Math.PI / 2); kit.sack(west + 0.2, 1.6); kit.sack(east - 0.3, D2 - 0.6);
+        break;
+      case 'bothy': case 'lodge':
+        alongSides(9, 0.95, 2, (x, z) => kit.bed(x, z, 0), [-1]);
+        try_(east - 0.4, north + 0.3, 0.75, 0.65, (x, z) => kit.stove(x, z));
+        try_(1.2, north + 0.4, 1.4, 0.8, (x, z) => kit.table(x, z, 1.3, 0.75, p.dark));
+        alongSides(2.6, 0.5, 1.6, (x, z) => kit.shelf(x, z, Math.PI / 2, 1.6, (r, sx, y) => box(THREE, r, random() < 0.5 ? p.cloth : p.dry, sx, y + 0.1, 0, 0.22, 0.2, 0.3)), [1]);
+        break;
+      case 'cottage': case 'embalm': case 'vestry':
+        alongNorth(3, look === 'embalm' ? 2.1 : 1.8, 0.5, (x, z) => kit.shelf(x, z, 0, look === 'embalm' ? 2.1 : 1.8, (r, sx, y) => cyl(THREE, r, look === 'embalm' ? p.glass : p.white, sx, y + 0.12, 0, 0.08, 0.08, 0.24, 0, 0, 0, 8)));
+        alongSides(3.2, look === 'embalm' ? 1.0 : 0.95, 2.1, (x, z, s) => look === 'embalm' ? (shroud(THREE, g, p.cloth, x, 0.85, z), kit.table(x, z, 0.9, 2.0, p.iron)) : s < 0 ? kit.bed(x, z, 0) : kit.table(x, z, 0.9, 1.6, p.wood));
+        if (look === 'cottage') { try_(east - 1.6, D2 - 0.8, 0.75, 0.65, (x, z) => kit.stove(x, z)); kit.sack(west + 0.4, D2 - 0.5); }
+        break;
+      case 'icehouse':
+        alongSides(1.4, 0.9, 0.9, (x, z) => { bevel(THREE, g, p.white, x, 0.4, z, 0.8, 0.8, 0.8, 0.04); return { x, z, w: 0.85, d: 0.85, h: 0.8 }; });
+        for (let i = 0; i < 6; i++) blob(THREE, g, p.dry, -W2 + 1 + random() * (width - 2), 0.05, north + 0.5 + random() * 1.2, 0.5, 0.06, 0.4, 0, 0, 0, true);
+        for (let x = -W2 + 1; x < W2; x += 1.2) twig(THREE, g, p.iron, [x, H - 0.05, north], [x, H - 0.5, north], 0.012);
+        break;
+      case 'summerhouse':
+        try_(0, north + 0.3, 1.7, 0.6, (x, z) => kit.bench(x, z, 0, p.wood));
+        alongSides(9, 0.8, 0.8, (x, z) => kit.table(x, z, 0.75, 0.75, p.dark));
+        break;
+      case 'glasshouse': case 'orangery':
+        if (look === 'glasshouse') {
+          alongNorth(3.2, 2.8, 0.8, (x, z) => { const c = kit.table(x, z, 2.8, 0.8, p.plank); for (let i = 0; i < 5; i++) kit.pot(x - 1.1 + i * 0.55, 0.81, z, 0.14, random() < 0.7); return c; });
+          alongSides(3, 0.8, 2.6, (x, z) => { const c = kit.table(x, z, 0.8, 2.6, p.plank); for (let i = 0; i < 4; i++) kit.pot(x, 0.81, z - 0.9 + i * 0.6, 0.15, random() < 0.7); return c; });
+        } else {
+          alongNorth(2.2, 1.0, 1.0, (x, z) => kit.tub(x, z, random() < 0.6));
+          alongSides(2.4, 1.0, 1.0, (x, z) => kit.tub(x, z, random() < 0.6));
+        }
+        break;
+      case 'herb':
+        alongNorth(9, width - 1.2, 1.0, (x, z) => kit.raised(x, z, width - 1.4, 1.0));
+        alongSides(9, 1.0, 3.2, (x, z) => kit.raised(x, z, 1.0, 3.0), [1]);
+        try_(west + 0.4, -0.4, 0.6, 1.7, (x, z) => kit.bench(x, z, Math.PI / 2, p.wood));
+        break;
+      case 'aviary': {
+        for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI; ring(THREE, g, p.iron, 0, 0.1, 0, Math.min(W2, D2) - 0.2, 0.02, 0, a, 0, Math.PI); }
+        for (const s of [-1, 1]) ring(THREE, g, p.iron, 0, 0.1, 0, Math.min(W2, D2) - 0.2, 0.025, Math.PI / 2 * s, 0, 0, Math.PI);
+        alongSides(2.8, 0.3, 0.3, (x, z) => { twig(THREE, g, p.dark, [x, 0, z], [x, 1.9, z], 0.035); twig(THREE, g, p.dark, [x - 0.5, 1.6, z], [x + 0.5, 1.6, z], 0.02); blob(THREE, g, p.dark, x + 0.2, 1.67, z, 0.08, 0.06, 0.12); return { x, z, w: 0.3, d: 0.3, h: 1.9 }; });
+        for (let i = 0; i < 9; i++) blob(THREE, g, p.dark, (random() - 0.5) * (width - 2), 0.05, north + random() * 1.5, 0.09, 0.05, 0.13, 0, random() * TAU, 0, true);
+        break;
+      }
+      case 'rose':
+        kit.roses(0, north + 0.3, width - 1.4);
+        for (const s of [-1, 1]) { const x = s < 0 ? west : east; for (let z = -D2 + 1; z < D2 - 2.8; z += 1.1) kit.roses(x, z, 1); colliders.push({ x, z: -0.9, w: 0.7, d: depth - 3.4, h: 1 }); }
+        colliders.push({ x: 0, z: north + 0.3, w: width - 1.2, d: 0.7, h: 1 });
+        ring(THREE, g, p.iron, 0, 2.0, north + 1.0, 1.1, 0.03, 0, 0, 0, Math.PI);
+        for (const s of [-1, 1]) twig(THREE, g, p.iron, [s * 1.1, 0, north + 1.0], [s * 1.1, 2.0, north + 1.0], 0.03);
+        break;
+      case 'wild':
+        for (let i = 0; i < 26; i++) { const x = (random() - 0.5) * (width - 1.2), z = (random() - 0.5) * (depth - 1.2); if (!blocked(x, z, 0.3, 0.3)) kit.tuft(x, z, 1.6 + random(), random() < 0.5 ? p.dry : p.leaf2); }
+        try_(east - 0.6, north + 0.6, 0.95, 0.95, (x, z) => kit.statue(x, z, -0.6, true));
+        blob(THREE, g, p.pale, west + 0.8, 0.3, 0.4, 0.35, 0.3, 0.55, Math.PI / 2, 0.4, 0);
+        for (let i = 0; i < 5; i++) blob(THREE, g, p.leaf, west + 0.4 + random(), 0.3, north + 0.4 + random() * 1.5, 0.5, 0.35, 0.5);
+        break;
+      case 'folly':
+        for (const [x, z, h] of [[-W2 + 1.5, north + 0.5, 3.4], [-W2 + 4.5, north + 0.5, 1.4], [W2 - 4.5, north + 0.5, 3.4], [W2 - 1.5, north + 0.5, 2.1]]) try_(x, z, 0.85, 0.85, (xx, zz) => kit.column(xx, zz, h));
+        box(THREE, g, p.pale, -W2 + 1.5, 3.75, north + 0.5, 0.8, 0.2, 0.8);
+        for (let i = 0; i < 3; i++) { const x = W2 - 1.6 - i * 0.9, z = D2 - 1.2; if (!blocked(x, z, 0.9, 0.7)) { cyl(THREE, g, p.pale, x, 0.3, z, 0.3, 0.3, 0.7, Math.PI / 2, random(), 0, 12); colliders.push({ x, z, w: 0.8, d: 0.8, h: 0.6 }); } }
+        alongSides(9, 0.95, 0.95, (x, z) => kit.statue(x, z, 0, false), [-1]);
+        break;
+      case 'chapel': case 'paupers': {
+        const aisle = 1.6, rows = Math.floor((depth - 3.2) / 1.2);
+        try_(0, north + 0.4, 1.8, 0.8, (x, z) => { bevel(THREE, g, p.pale, x, 0.5, z, 1.8, 1.0, 0.8, 0.03); box(THREE, g, p.white, x, 1.02, z, 1.6, 0.03, 0.7); for (const s of [-0.6, 0.6]) { cyl(THREE, g, p.white, x + s, 1.2, z, 0.03, 0.03, 0.3, 0, 0, 0, 6); box(THREE, g, p.live, x + s, 1.38, z, 0.02, 0.05, 0.02).castShadow = false; } return { x, z, w: 1.9, d: 0.9, h: 1.05 }; });
+        if (look === 'chapel') { box(THREE, g, p.dark, 0, 2.3, -D2 + 0.1, 0.12, 1.4, 0.06); box(THREE, g, p.dark, 0, 2.55, -D2 + 0.1, 0.8, 0.12, 0.06); }
+        else { box(THREE, g, p.wood, 0, 2.0, -D2 + 0.1, 0.1, 1.2, 0.05); box(THREE, g, p.wood, 0, 2.3, -D2 + 0.1, 0.6, 0.1, 0.05); }
+        for (let i = 0; i < rows; i++) for (const s of [-1, 1]) {
+          const z = north + 1.8 + i * 1.2, w = W2 - aisle / 2 - 0.5, x = s * (aisle / 2 + w / 2);
+          try_(x, z, w, 0.5, (xx, zz) => { box(THREE, g, p.dark, xx, 0.45, zz, w, 0.05, 0.4); box(THREE, g, p.dark, xx, 0.75, zz + 0.2, w, 0.55, 0.05); for (const e of [-1, 1]) box(THREE, g, p.dark, xx + e * (w / 2 - 0.04), 0.4, zz, 0.05, 0.8, 0.45); return { x: xx, z: zz, w, d: 0.5, h: 0.9 }; });
+        }
+        break;
+      }
+      case 'crypt': case 'mausoleum':
+        alongNorth(look === 'crypt' ? 9 : 4, 2.15, 1.15, (x, z) => kit.tomb(x, z, Math.PI / 2));
+        if (look === 'mausoleum') { alongSides(3.6, 1.15, 2.15, (x, z) => kit.tomb(x, z, 0)); for (const s of [-1, 1]) for (const z of [-D2 + 0.5, D2 - 0.5]) kit.column(s * (W2 - 0.5), z, H - 0.2, 0.22); }
+        else alongSides(9, 0.8, 2.05, (x, z) => kit.coffin(x, z, 0), [1]);
+        for (let x = -W2 + 1; x < W2 - 0.5; x += 1.5) box(THREE, g, p.pale, x, H - 0.2, north - 0.2, 0.2, 0.4, 0.2);
+        break;
+      case 'columbarium': {
+        for (const [x, z, ry, len] of [[0, -D2 + 0.12, 0, width - 0.6], [-W2 + 0.12, 0, Math.PI / 2, depth - 3.2], [W2 - 0.12, 0, -Math.PI / 2, depth - 3.2]]) {
+          const r = joint(THREE, g, 'niches', x, 0, z); r.rotation.y = ry;
+          for (let row = 0; row < 4; row++) for (let i = 0; i < Math.floor(len / 0.6); i++) {
+            const nx = -len / 2 + 0.3 + i * 0.6, y = 0.5 + row * 0.6;
+            box(THREE, r, p.pit, nx, y, 0.01, 0.42, 0.42, 0.02).castShadow = false;
+            if (random() < 0.7) { cyl(THREE, r, random() < 0.5 ? p.clay : p.pale, nx, y - 0.08, 0.08, 0.09, 0.07, 0.24, 0, 0, 0, 8); }
+          }
+        }
+        colliders.push({ x: 0, z: -D2 + 0.15, w: width, d: 0.3, h: 2.6 });
+        try_(1.2, 1.2, 1.7, 0.6, (x, z) => kit.bench(x, z, Math.PI, p.stone));
+        break;
+      }
+      case 'ossuary': case 'charnel':
+        alongNorth(2.2, 1.6, 0.9, (x, z) => { kit.bones(x, z, 1.4); return { x, z, w: 1.6, d: 0.9, h: 0.5 }; });
+        alongSides(2.8, 0.5, 2.0, (x, z) => kit.shelf(x, z, Math.PI / 2, 2.0, (r, sx, y) => blob(THREE, r, p.bone, sx, y + 0.11, 0, 0.1, 0.11, 0.12, 0, 0, 0, true)), look === 'ossuary' ? [-1, 1] : [1]);
+        if (look === 'charnel') alongSides(9, 1.0, 2.1, (x, z) => { shroud(THREE, g, p.cloth, x, 0.85, z); return kit.table(x, z, 0.95, 2.05, p.stone); }, [-1]);
+        break;
+      case 'hut':
+        alongNorth(3, 2.0, 0.8, (x, z) => kit.coffin(x, z, Math.PI / 2));
+        kit.tools(west + 0.15, -1.2, Math.PI / 2); kit.tools(east - 0.2, 1.0, -Math.PI / 2);
+        alongSides(2.2, 0.65, 0.65, (x, z) => kit.barrel(x, z), [1]);
+        kit.mound(east - 1.3, D2 - 1.1, 0, false); kit.sack(west + 0.3, 1.8);
+        break;
+    }
+    flattenStatic(THREE, g);
+    batch(THREE, g, { boxUV: 1 });
+    g.traverse(o => { if (o.isMesh && o.material === p.glass) o.castShadow = false; });
+    g.userData = { look, width, depth, height: H, colliders, direction: 'Above ground' };
+    return g;
+  }
+
+  // The dressing of an outdoor floor's paths and lawns (it replaces decorateWard there): S1's fountain, trees, statues,
+  // benches, urns and lamp posts; S2's rows of graves, chest tombs, dead trees and yews, the boss's grave, the graves
+  // its summons climb out of and the bell by the gate. Everything with a footprint stays one stride off the cells in
+  // `avoid` ({x, z, r} world metres) and out of door approaches, and is listed in userData.colliders.
+  // options: {grid, cellSize, height, rooms, seed, kind: 'garden'|'graveyard', centre: [cx, cz], avoid, boss, landmarks}
+  function decorateGrounds(THREE, options) {
+    const opts = options || {}, grid = opts.grid || [], s = opts.cellSize || 3, kind = opts.kind === 'graveyard' ? 'graveyard' : 'garden';
+    const g = new THREE.Group(); g.name = 'Above ground / ' + kind;
+    const p = outdoorPalette(THREE), random = seeded(((opts.seed | 0) ^ 0x2c1b3c6d) >>> 0), kit = outdoorKit(THREE, g, p, random);
+    const colliders = [], practicals = [], avoid = (opts.avoid || []).slice(), rooms = opts.rooms || [];
+    g.userData = { decoration: true, practicals, colliders, liveMaterial: p.live, bell: null };
+    const W = grid.length; if (!W) return g;
+    const key = (x, z) => x + ',' + z, special = new Set();
+    for (const r of rooms) {
+      for (let z = r.z - 1; z <= r.z + r.d; z++) for (let x = r.x - 1; x <= r.x + r.w; x++) special.add(key(x, z));
+      if (r.door) for (let z = r.door.z; z <= r.door.z + 2; z++) special.add(key(r.door.x, z));
+    }
+    const open = (x, z) => grid[z]?.[x] === 0, wall = (x, z) => grid[z]?.[x] === 1;
+    const cells = [];
+    for (let z = 1; z < W - 1; z++) for (let x = 1; x < W - 1; x++) {
+      if (!open(x, z) || special.has(key(x, z)) || (x <= 6 && z <= 4)) continue;
+      const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => wall(x + dx, z + dz));
+      let around = 0; for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (open(x + dx, z + dz)) around++;
+      cells.push({ x, z, wx: (x + 0.5) * s, wz: (z + 0.5) * s, sides, around, rank: random() });
+    }
+    cells.sort((a, b) => a.rank - b.rank);
+    const taken = [];
+    // A clear 1.25 m between any two footprints keeps every creature's way through (the Warden needs 1.16 m).
+    const fits = (x, z, w, d) => avoid.every(a => Math.hypot(Math.max(0, Math.abs(a.x - x) - w / 2), Math.max(0, Math.abs(a.z - z) - d / 2)) > a.r) &&
+      taken.every(t => Math.abs(t.x - x) > (t.w + w) / 2 + 1.25 || Math.abs(t.z - z) > (t.d + d) / 2 + 1.25);
+    const place = c => { if (c) { colliders.push(c); taken.push(c); } return c; };
+    // Against a wall of cell c: centre `inset` metres off the wall face, `along` metres along it.
+    const against = (c, side, inset, along) => { const [dx, dz] = side; return [c.wx + dx * (s / 2 - inset) - dz * along, c.wz + dz * (s / 2 - inset) + dx * along, Math.atan2(-dx, -dz)]; };
+    const landmarks = opts.landmarks || {};
+    if (landmarks.ped) {
+      const { x, z } = landmarks.ped;
+      if (kind === 'garden') { cyl(THREE, g, p.pale, x, 1.03, z, 0.3, 0.3, 0.04, 0, 0, 0, 16); prism(THREE, g, p.rust, x, 1.05, z, 0.04, 0.22, 0.32, Math.PI / 2); }
+      else { bevel(THREE, g, p.dark, x, 1.08, z, 0.42, 0.1, 0.32, 0.02, -0.3); kit.lantern(x + 0.12, 1.27, z - 0.08); }
+    }
+    if (landmarks.chan) {
+      const { x, z } = landmarks.chan;
+      if (kind === 'garden') { cyl(THREE, g, p.pale, x, 0.42, z, 0.42, 0.25, 0.85, 0, 0, Math.PI / 2 - 0.15, 12); cyl(THREE, g, p.soil, x - 0.5, 0.05, z + 0.1, 0.5, 0.6, 0.1, 0, 0, 0, 9); }
+      else { kit.statue(0, 0, 0, true); const last = g.children.slice(-1)[0]; last.position.set(x, 0.5, z); last.rotation.set(Math.PI / 2 - 0.2, 0.6, 0); }
+    }
+    const used = new Set();
+    const pick = (test, count, make) => {
+      let n = 0;
+      for (const c of cells) {
+        if (n >= count) break;
+        if (used.has(key(c.x, c.z)) || !test(c)) continue;
+        if (make(c)) { used.add(key(c.x, c.z)); n++; }
+      }
+    };
+    const lamp = (c, side) => {
+      const [x, z] = side ? against(c, side, 0.35, 0) : [c.wx, c.wz];
+      if (!fits(x, z, 0.4, 0.4)) return false;
+      place(kit.post(x, z)); practicals.push({ x, z, color: kind === 'garden' ? 0xd9a466 : 0xc9a06a, phase: random() * TAU });
+      return true;
+    };
+    const boss = opts.boss || null, arena = boss && boss.arena;
+    const inArena = c => arena && c.x >= arena[0] && c.x <= arena[2] && c.z >= arena[1] && c.z <= arena[3];
+    if (kind === 'garden') {
+      if (opts.centre) {
+        const [x, z] = opts.centre;
+        cyl(THREE, g, p.pale, x, 0.32, z, 1.75, 1.85, 0.64, 0, 0, 0, 28); cyl(THREE, g, p.slate, x, 0.6, z, 1.55, 1.55, 0.04, 0, 0, 0, 28);
+        ring(THREE, g, p.pale, x, 0.64, z, 1.66, 0.11, Math.PI / 2, 0, 0);
+        cyl(THREE, g, p.pale, x, 1.1, z, 0.16, 0.28, 1.0, 0, 0, 0, 12); cyl(THREE, g, p.pale, x, 1.65, z, 0.8, 0.2, 0.22, 0, 0, 0, 18);
+        cyl(THREE, g, p.slate, x, 1.77, z, 0.68, 0.68, 0.03, 0, 0, 0, 18); kit.statue(x, z, 0.4, false);
+        const figure = g.children[g.children.length - 1]; figure.position.y = 0.95; figure.scale.setScalar(0.8);
+        colliders.push({ x, z, w: 3.3, d: 3.3, h: 0.7 }); taken.push({ x, z, w: 3.6, d: 3.6 });
+        for (let i = 0; i < 4; i++) { const a = i / 4 * TAU + Math.PI / 4; place(kit.post(x + Math.cos(a) * 4.6, z + Math.sin(a) * 4.6)); }
+        practicals.push({ x: x + 3.25, z: z + 3.25, color: 0xd9a466, phase: random() * TAU });
+      }
+      pick(c => c.around >= 8, 9, c => { const x = c.wx + (random() - 0.5) * 1.2, z = c.wz + (random() - 0.5) * 1.2; if (!fits(x, z, 0.6, 0.6)) return false; place(kit.tree(x, z, 5 + random() * 3, false)); return true; });
+      pick(c => c.sides.length === 1, 7, c => { const [x, z, ry] = against(c, c.sides[0], 0.65, 0); if (!fits(x, z, 1, 1)) return false; place(kit.statue(x, z, ry, random() < 0.4)); return true; });
+      pick(c => c.sides.length >= 1, 8, c => { const side = c.sides[0], [x, z, ry] = against(c, side, 0.4, (random() - 0.5) * 0.8); const turned = side[0] !== 0; if (!fits(x, z, turned ? 0.6 : 1.7, turned ? 1.7 : 0.6)) return false; place(kit.bench(x, z, ry)); return true; });
+      pick(c => c.sides.length >= 2, 10, c => { const [x, z] = against(c, c.sides[0], 0.55, (s / 2 - 0.55) * (random() < 0.5 ? -1 : 1)); if (!fits(x, z, 0.8, 0.8)) return false; bevel(THREE, g, p.mossy, x, 0.35, z, 0.7, 0.7, 0.7, 0.03); cyl(THREE, g, p.pale, x, 0.95, z, 0.36, 0.2, 0.5, 0, 0, 0, 12); kit.pot(x, 1.12, z, 0.1, random() < 0.5); place({ x, z, w: 0.75, d: 0.75, h: 1.3 }); return true; });
+      pick(c => c.sides.length >= 1, 9, c => lamp(c, c.sides[0]));
+      // Shrubs, flowers and long grass at the hedge feet: no footprint, walked through.
+      for (const c of cells) for (const side of c.sides) {
+        if (random() > 0.45) continue;
+        for (let i = 0; i < 3; i++) {
+          const [x, z] = against(c, side, 0.22 + random() * 0.2, (random() - 0.5) * (s - 0.6));
+          if (random() < 0.5) kit.tuft(x, z, 1 + random() * 0.8, random() < 0.3 ? p.dry : p.leaf2);
+          else { blob(THREE, g, random() < 0.5 ? p.leaf : p.leaf2, x, 0.18, z, 0.3, 0.25, 0.3, 0, 0, 0, true); if (random() < 0.4) blob(THREE, g, random() < 0.5 ? p.white : p.rose, x, 0.4, z, 0.05, 0.04, 0.05, 0, 0, 0, true); }
+        }
+      }
+    } else {
+      if (boss && boss.grave) {
+        const [gx, gz] = boss.grave, x = (gx + 0.5) * s, z = (gz + 0.5) * s;
+        kit.mound(x + 1.15, z, 0, false); box(THREE, g, p.pit, x, 0.006, z, 1.3, 0.01, 2.3);
+        const stone = kit.headstone(x, z - 1.75, 0, 0, 1.9); colliders.push(stone); taken.push({ x, z, w: 3.4, d: 3.4 });
+        for (let i = 0; i < 6; i++) blob(THREE, g, p.soil, x + (random() - 0.5) * 2, 0.06, z + (random() - 0.5) * 2.4, 0.3, 0.1, 0.25, 0, 0, 0, true);
+        practicals.push({ x: x - 1.8, z: z - 1.6, color: 0x7fa68a, phase: random() * TAU });
+        box(THREE, g, p.live, x - 0.25, 0.1, z - 1.55, 0.05, 0.12, 0.05).castShadow = false; box(THREE, g, p.live, x + 0.25, 0.1, z - 1.6, 0.05, 0.1, 0.05).castShadow = false;
+      }
+      for (const [sx, sz] of (boss && boss.summons) || []) {
+        const x = (sx + 0.5) * s, z = (sz + 0.5) * s;
+        kit.mound(x, z + 0.15, 0, false); colliders.push(kit.headstone(x, z - 1.5, 0, [0, 1, 3][random() * 3 | 0])); taken.push({ x, z, w: 2.4, d: 2.4 });
+      }
+      if (opts.gate) {
+        // The bell on its gallows frame beside the gate: it swings when the Gravekeeper is called.
+        const [ex, ez] = opts.gate, x = ex * s - 1.0, z = (ez - 2) * s + 0.5, frame = joint(THREE, g, 'bell frame', x, 0, z);
+        for (const d of [-0.75, 0.75]) box(THREE, frame, p.dark, 0, 1.6, d, 0.16, 3.2, 0.16);
+        box(THREE, frame, p.dark, 0, 3.2, 0, 0.2, 0.2, 1.8); prism(THREE, frame, p.slate, 0, 3.3, 0, 0.9, 0.5, 2.0, Math.PI / 2);
+        const bell = new THREE.Group(); bell.position.set(x, 3.08, z); g.add(bell);
+        const cup = cyl(THREE, bell, p.rust, 0, -0.4, 0, 0.16, 0.36, 0.62, 0, 0, 0, 14); cup.userData.dynamic = true;
+        const lip = ring(THREE, bell, p.rust, 0, -0.71, 0, 0.36, 0.035, Math.PI / 2, 0, 0); lip.userData.dynamic = true;
+        const clapper = blob(THREE, bell, p.iron, 0, -0.66, 0, 0.07, 0.07, 0.07); clapper.userData.dynamic = true;
+        g.userData.bell = bell; colliders.push({ x, z, w: 0.5, d: 1.9, h: 3.2 });
+      }
+      pick(c => c.around >= 6 && !inArena(c), 8, c => { const x = c.wx + (random() - 0.5), z = c.wz + (random() - 0.5); if (!fits(x, z, 1.2, 1.2)) return false; place(random() < 0.6 ? kit.tree(x, z, 5 + random() * 3, true) : kit.yew(x, z, 3.5 + random() * 2)); return true; });
+      pick(c => c.around >= 7, 7, c => { const turned = random() < 0.5, x = c.wx + (random() - 0.5) * 0.6, z = c.wz + (random() - 0.5) * 0.6; if (!fits(x, z, turned ? 2.2 : 1.2, turned ? 1.2 : 2.2)) return false; place(kit.tomb(x, z, turned ? Math.PI / 2 : 0)); if (random() < 0.5) for (let i = 0; i < 10; i++) { const a = i / 10 * TAU; twig(THREE, g, p.iron, [x + Math.cos(a) * 1.5, 0, z + Math.sin(a) * 1.5], [x + Math.cos(a) * 1.5, 0.9, z + Math.sin(a) * 1.5], 0.015); } return true; });
+      // Rows of graves: a headstone at the head, a sunken or mounded plot below it.
+      let stones = 0;
+      for (const c of cells) {
+        if (stones >= 70) break;
+        const wide = c.around >= 7, edge = c.sides.length >= 1;
+        if (!wide && !(edge && random() < 0.4)) continue;
+        const spots = wide ? [[-0.85, -0.7], [0.85, -0.7]] : [[0, 0]];
+        for (const [ox, oz] of spots) {
+          if (random() < (wide ? 0.35 : 0)) continue;
+          let x = c.wx + ox, z = c.wz + oz, ry = 0;
+          if (!wide) { const side = c.sides[0]; [x, z, ry] = against(c, side, 0.3, (random() - 0.5) * 1.4); }
+          const st = kit.headstone(0, 0, 0, random() * 4 | 0), last = g.children[g.children.length - 1];
+          if (!fits(x, z, Math.max(st.w, st.d), Math.max(st.w, st.d))) { g.remove(last); continue; }
+          last.position.set(x, 0, z); last.rotation.y = ry + (random() - 0.5) * 0.15;
+          const turned = Math.abs(Math.sin(ry)) > 0.5;
+          place({ x, z, w: turned ? st.d : st.w, d: turned ? st.w : st.d, h: st.h }); stones++;
+          if (wide && random() < 0.7) kit.mound(x, z + 1.15, 0, random() < 0.08);
+          if (random() < 0.12) box(THREE, g, p.live, x + 0.2, 0.06, z + 0.3, 0.04, 0.1, 0.04).castShadow = false;
+        }
+      }
+      // Flat ledger stones and leaning markers between them: no footprint.
+      for (const c of cells) if (c.around >= 7 && random() < 0.25) box(THREE, g, random() < 0.5 ? p.stone : p.mossy, c.wx + (random() - 0.5) * 1.5, 0.04, c.wz + 0.6, 0.8, 0.08, 1.6, 0, (random() - 0.5) * 0.2);
+      pick(c => c.sides.length >= 1, 8, c => lamp(c, c.sides[0]));
+      for (const c of cells) for (const side of c.sides) if (random() < 0.4) for (let i = 0; i < 2; i++) { const [x, z] = against(c, side, 0.2 + random() * 0.2, (random() - 0.5) * (s - 0.6)); kit.tuft(x, z, 1 + random() * 0.7, random() < 0.7 ? p.dry : p.leaf2); }
+    }
+    const bell = g.userData.bell;
+    if (bell) g.remove(bell);
+    flattenStatic(THREE, g);
+    batch(THREE, g, { boxUV: 1 });
+    // Low clutter receives light without casting; trees, statues and stones cast the torch's shadows.
+    if (bell) g.add(bell);
+    g.userData.colliders = colliders;
+    return g;
+  }
+
+  // Beyond the walls: a ring of tall tree silhouettes against the night sky (S1 full canopies, S2 bare trees and yews).
+  function decorateHorizon(THREE, options) {
+    const opts = options || {}, size = opts.size || 105, kind = opts.kind === 'graveyard' ? 'graveyard' : 'garden';
+    const g = new THREE.Group(); g.name = 'Above ground / horizon';
+    const p = outdoorPalette(THREE), random = seeded(((opts.seed | 0) ^ 0x51ed270b) >>> 0), kit = outdoorKit(THREE, g, p, random);
+    for (let i = 0; i < 70; i++) {
+      const side = i % 4, t = random() * (size + 40) - 20, out = 4 + random() * 34;
+      const x = side === 0 ? -out : side === 1 ? size + out : t, z = side === 2 ? -out : side === 3 ? size + out : t;
+      const h = 9 + random() * 9;
+      if (kind === 'garden' && random() < 0.3) twig(THREE, g, p.leaf, [x, h * 0.05, z], [x, h * 1.05, z], 2 + random(), 0.2, 7);
+      else if (kind === 'graveyard' && random() < 0.35) kit.yew(x, z, h * 0.7, true);
+      else kit.tree(x, z, h, kind === 'graveyard' || random() < 0.15, true);
+    }
+    flattenStatic(THREE, g);
+    batch(THREE, g);
+    g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+    g.userData.decoration = true;
+    return g;
+  }
+
   function createEnvironment(THREE, renderer) {
     const res = store(THREE);
     if (res.environments.has(renderer)) return res.environments.get(renderer).texture;
@@ -2739,5 +4508,6 @@
     if (group.parent) group.parent.remove(group);
   }
 
-  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, makeSurvivor, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, adoptSurface, settleSurfaces, whenPainted, surfacePlan, deriveMaps });
+  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, makeSurvivor, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, adoptSurface, settleSurfaces, whenPainted, surfacePlan, deriveMaps,
+    decorateOutdoorRoom, decorateGrounds, decorateHorizon, OUTDOOR_LOOKS, LATE_SURFACES });
 })(window);

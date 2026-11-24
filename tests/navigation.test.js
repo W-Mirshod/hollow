@@ -169,6 +169,8 @@ test('furnished production labyrinths remain connected for all four monster type
     const props = collidersForRooms(layout.rooms), circles = [{ x: 16.5, z: 7.5, r: .42 }, { x: 10.5, z: 7.5, r: .75 }];
     const nav = navigation.create({ grid: layout.grid, props, circles, doors: () => doors });
     for (const [kind, monster] of Object.entries(rules.MONSTERS)) {
+      // The Gravekeeper only walks the Graveyard (floors.test.js covers its arena).
+      if (monster.boss) continue;
       const destinations = layout.rooms.map(room => ({ id: room.id, x: (room.x + room.w / 2) * 3, z: (room.z + room.d / 2) * 3 }));
       destinations.push({ id: 'exit', x: 100.5, z: 100.5 });
       for (const target of destinations) {

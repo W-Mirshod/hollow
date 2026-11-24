@@ -98,7 +98,10 @@ const ENV={
   hell:{sky:lin(0x889796),gnd:lin(0x24221f),hi:0.23,fog:untone(0x0b100f),fd:0.024},
   // B2 runs cold and blue, B3 bleeds red; both sit a little darker in thicker fog.
   morgue:{sky:lin(0x7c95ad),gnd:lin(0x1a2129),hi:0.2,fog:untone(0x081019),fd:0.028},
-  hollow:{sky:lin(0xa07a70),gnd:lin(0x2b1915),hi:0.19,fog:untone(0x150706),fd:0.03}
+  hollow:{sky:lin(0xa07a70),gnd:lin(0x2b1915),hi:0.19,fog:untone(0x150706),fd:0.03},
+  // Above ground: S1 under a low moon in a thin blue mist, S2 in a colder, heavier churchyard fog. moon: moonlight level.
+  garden:{sky:lin(0x7f97c4),gnd:lin(0x1b2618),hi:0.38,fog:untone(0x0b1320),fd:0.021,moon:.5},
+  graveyard:{sky:lin(0x86a0ae),gnd:lin(0x1a1d1b),hi:0.27,fog:untone(0x0c1314),fd:0.025,moon:.42}
 };
 function applyEnv(e){
   hemi.color.copy(e.sky);hemi.groundColor.copy(e.gnd);setLight(hemi,e.hi);
@@ -219,13 +222,15 @@ const aoSync=uniform(0).onFrameUpdate(()=>{
   aoTex.needsUpdate=true;
 });
 const aoFall=d=>d.div(.7).clamp(0,1).oneMinus().pow(2);
-function gridAO(kind){
+// open: no ceiling (the floors above ground), so walls do not darken toward the top.
+function gridAO(kind,open){
   const p=positionWorld,solid=c=>texture(aoTex,c.add(.5).div(W)).level(0).r;
   if(kind==='wall'){
     // The open cell in front of the face, the face tangent, and the inner corners at either end of it.
     const n=normalWorldGeometry.xz,o=p.xz.add(n.mul(S*.5)).div(S).floor(),t=vec2(n.y.negate(),n.x);
     const u=dot(p.xz.div(S).sub(o).sub(.5),t);
     const side=solid(o.add(t)).mul(aoFall(u.oneMinus().sub(.5).mul(S))).max(solid(o.sub(t)).mul(aoFall(u.add(.5).mul(S))));
+    if(open)return side.max(aoFall(p.y)).mul(.45).add(aoSync).oneMinus();
     return side.max(aoFall(p.y)).max(aoFall(float(H).sub(p.y)).mul(.7)).mul(.45).add(aoSync).oneMinus();
   }
   const c=p.xz.div(S),cell=c.floor(),f=c.sub(cell),dE=f.x.oneMinus().mul(S),dW=f.x.mul(S),dN=f.y.mul(S),dS=f.y.oneMinus().mul(S);
@@ -236,9 +241,10 @@ function gridAO(kind){
   return occ.mul(kind==='floor'?.5:.4).add(aoSync).oneMinus();
 }
 // set: {albedo,normal,roughness} canvases; opts.cells/macro ('wall'|'floor'|'ceiling') add per-cell variation and wear.
+// opts.ao: the grid contact shadows alone (without the per-cell maps); opts.open: no ceiling above them.
 // Every material carries real roughness maps, and on medium/high normal maps.
 function wardMat(set,rep,params,opts){
-  const o=opts||{},b=tex(set.albedo,rep),hn=tex(set.normal,rep,false),hr=tex(set.roughness,rep,false);
+  const o=opts||{},b=tex(set.albedo,rep),hn=tex(set.normal,rep,false),hr=tex(set.roughness,rep,false),ao=o.ao||o.cells;
   HollowVisuals.whenPainted(set,()=>{b.needsUpdate=true;hn.needsUpdate=true;hr.needsUpdate=true;});
   const m=new THREE.MeshStandardNodeMaterial(Object.assign({map:b,normalMap:wardLow?null:hn,roughnessMap:hr,roughness:1,metalness:0},params||{}));
   m.userData.hollowSurface='ward';
@@ -255,9 +261,9 @@ function wardMat(set,rep,params,opts){
   };
   m.colorNode=Fn(()=>{
     const color=vec4(0).toVar(),h=surface();color.assign(h.c);surfN.assign(h.n);surfR.assign(h.r);
-    if((macroTex&&o.macro)||(aoTex&&o.cells))If(wardDetail.greaterThan(.5),()=>{
+    if((macroTex&&o.macro)||(aoTex&&ao))If(wardDetail.greaterThan(.5),()=>{
       if(macroTex&&o.macro)wardMacro(o.macro,color);
-      if(aoTex&&o.cells)color.assign(vec4(color.rgb.mul(gridAO(o.cells)),color.a));
+      if(aoTex&&ao)color.assign(vec4(color.rgb.mul(gridAO(ao,o.open)),color.a));
     });
     return color;
   })();
@@ -312,15 +318,32 @@ const FLOOR_TEXT=[
     go:'GET OUT · surface floodgate',ready:'3 / 3 KEYS · open the surface floodgate',
     areas:['B3 / PUMP GALLERY','B3 / THE WELL','B3 / CISTERNS'],wing:'BW / CISTERN LEVEL',
     guide:'B3 / BULKHEADS LOCK FROM INSIDE',
-    intro:'B3 · THE HOLLOW · Three floodgate keys. The surface floodgate is the only way out.'}
+    intro:'B3 · THE HOLLOW · Three floodgate keys. The surface floodgate is the only way out.'},
+  {tag:'KEY',tags:'KEYS',one:'gate key',many:'gate keys',need:n=>`The garden gate needs ${n} more ${n===1?'key':'keys'}`,label:'GATE KEY',sign:'GARDEN GATE / 3 KEYS',take:'Take gate key',start:'Wind the garden gate open',locked:'The garden gate is chained shut.',
+    all:'All gate keys found. Open the garden gate.',allKick:'All keys · reach the garden gate',kick:'Gate key',
+    power:'THE GATE IS WINDING',powerKick:'The chain is rattling loose',powered:'The keys turn. The garden gate winds open on a rattling chain, and the whole garden heard it.',
+    open:'GARDEN GATE OPEN · RUN',opened:'THE GARDEN GATE IS OPEN. Run.',releasing:'GATE WINDING OPEN',released:'GATE OPEN · RUN',
+    go:'RUN · the garden gate',ready:'3 / 3 KEYS · open the garden gate',
+    areas:['S1 / THE TERRACE','S1 / THE WALLED GARDEN','S1 / THE WILD BORDERS'],wing:'BW / THE OLD GARDEN',
+    guide:'S1 / GARDEN SHEDS BOLT FROM INSIDE',
+    intro:'S1 · THE OVERGROWN GARDEN · Out of the Hollow, under the moon. Three gate keys. Things are sleeping in the borders.'},
+  {tag:'KEY',tags:'KEYS',one:'crypt key',many:'crypt keys',need:n=>`The cemetery gate needs ${n} more ${n===1?'crypt key':'crypt keys'}`,label:'CRYPT KEY',sign:'CEMETERY GATE / 3 KEYS',take:'Take crypt key',start:'Unchain the cemetery gate',locked:'The cemetery gate is chained to the old bell.',
+    all:'All crypt keys found. Unchain the cemetery gate.',allKick:'All keys · reach the cemetery gate',kick:'Crypt key',
+    power:'THE BELL TOLLS',powerKick:'Something answers it',powered:'The chain runs up to the bell, and the bell begins to toll. The ground in front of the gate is moving.',
+    open:'CEMETERY GATE OPEN · RUN',opened:'THE CEMETERY GATE IS OPEN. Run.',releasing:'GATE UNCHAINING',released:'GATE OPEN · RUN',
+    go:'RUN · the cemetery gate',ready:'3 / 3 KEYS · unchain the cemetery gate',
+    areas:['S2 / THE NORTH WALKS','S2 / THE OLD GRAVES','S2 / THE GATE PLOT'],wing:'BW / BLACKWATER CEMETERY',
+    guide:'S2 / CRYPTS BOLT FROM INSIDE',
+    intro:'S2 · BLACKWATER GRAVEYARD · Three crypt keys unchain the cemetery gate. The gate is chained to the old bell.'}
 ];
 const TEXT=()=>FLOOR_TEXT[floor]||FLOOR_TEXT[0];
 const more=n=>`${n} more ${n===1?TEXT().one:TEXT().many}`;
 const dynamicWorld=new THREE.Group();scene.add(dynamicWorld);
 dynamicWorld.matrixAutoUpdate=false;
 const roomLights=[];
-// Lamp colour per floor: B1 keeps its fixtures, B2's run cold blue, B3's burn red. Shelter lamps keep their green.
-const FLOOR_LAMPS=[null,{tint:lin(0x8fb8e8),mix:.6},{tint:lin(0xd2503a),mix:.6}],lampMix=new THREE.Color();
+// Lamp colour per floor: B1 keeps its fixtures, B2's run cold blue, B3's burn red, S1's lanterns warm amber, S2's
+// a pale grave-light. Shelter lamps keep their green.
+const FLOOR_LAMPS=[null,{tint:lin(0x8fb8e8),mix:.6},{tint:lin(0xd2503a),mix:.6},{tint:lin(0xe0a060),mix:.45},{tint:lin(0xa9c2b0),mix:.5}],lampMix=new THREE.Color();
 function floorLamp(hex,shelter){const f=FLOOR_LAMPS[floor];if(!f||shelter)return hex;
   return lampMix.setHex(hex,THREE.LinearSRGBColorSpace).lerp(f.tint,f.mix).getHex(THREE.LinearSRGBColorSpace);}
 function genMaze(){
@@ -366,8 +389,11 @@ function movePlayer(dx,dz){
   if(!blocked())return;
   P.pos.x=from.x;P.pos.z=from.z;
 }
+// Above ground there is sky over the hedges and walls (they stand a little over H): a shot or a glance can pass over.
+let outdoorNow=false;
 function blocksRay(x,y,z){
-  if(y<0||y>H||wallAt(x,z))return true;
+  if(outdoorNow){if(y<0||y<H+.4&&wallAt(x,z))return true;}
+  else if(y<0||y>H||wallAt(x,z))return true;
     if(!exitOpen&&Math.abs(x-((W-1)*S-.02))<.12&&Math.abs(z-((W-2)*S+S/2))<S/2)return true;
   for(const d of roomDoors)if(!d.open&&Math.abs(x-d.box.x)<d.box.w/2&&Math.abs(z-d.box.z)<d.box.d/2)return true;
   for(const p of roomProps)if(y<p.h&&Math.abs(x-p.x)<p.w/2&&Math.abs(z-p.z)<p.d/2)return true;
@@ -387,13 +413,25 @@ function distField(sx,sz){
 const skyU={top:uniform(untone(0x050203)),hor:uniform(untone(0x1a0505)),bot:uniform(new THREE.Color(0))};
 const skyMat=new THREE.MeshBasicNodeMaterial({side:THREE.BackSide,depthWrite:false,fog:false});
 {const h=positionLocal.normalize().y;skyMat.colorNode=select(h.greaterThan(0),mix(skyU.hor,skyU.top,h.max(0).pow(.55)),mix(skyU.hor,skyU.bot,h.negate().mul(5).clamp(0,1)));}
+// Above ground the sky is skyNightMat (setOutdoor): the same gradient with a moon, its halo and a field of stars.
+// MOON_DIR is where the moonlight comes from.
+const MOON_DIR=new THREE.Vector3(.6,.45,.65).normalize(),skyNightMat=new THREE.MeshBasicNodeMaterial({side:THREE.BackSide,depthWrite:false,fog:false});
+{const d=positionLocal.normalize(),h=d.y,base=select(h.greaterThan(0),mix(skyU.hor,skyU.top,h.max(0).pow(.55)),mix(skyU.hor,skyU.bot,h.negate().mul(5).clamp(0,1)));
+  const md=dot(d,vec3(MOON_DIR.x,MOON_DIR.y,MOON_DIR.z)),disc=smoothstep(.99955,.9997,md),halo=smoothstep(.96,1,md).pow(10).mul(.22).add(smoothstep(.6,1,md).pow(4).mul(.04));
+  const cell=d.mul(480).floor(),star=step(.9992,hash12(cell.xy.add(cell.z.mul(37.17)))).mul(hash12(cell.xz.add(11.3)).mul(.8).add(.2)).mul(smoothstep(.04,.3,h));
+  skyNightMat.colorNode=base.add(vec3(.93,.95,1).mul(disc.mul(2.2).add(halo))).add(vec3(.75,.8,.9).mul(star));}
 const sky=new THREE.Mesh(new THREE.SphereGeometry(500,32,16),skyMat);
 sky.renderOrder=-10;scene.add(sky);
+// Moonlight on the floors above ground (left out of the lighting below, where it would only light the ceiling). No
+// shadows: the torch keeps them.
+const moon=physical(new THREE.DirectionalLight(0xb4c4f0,0),Math.PI);moon.position.copy(MOON_DIR).multiplyScalar(60);moon.visible=false;scene.add(moon);scene.add(moon.target);
 function glowTex(inner,outer){const [c,x]=cv(128,128);const g=x.createRadialGradient(64,64,0,64,64,64);g.addColorStop(0,inner);g.addColorStop(.18,inner);g.addColorStop(.35,outer);g.addColorStop(1,'rgba(0,0,0,0)');x.fillStyle=g;x.fillRect(0,0,128,128);return new THREE.CanvasTexture(c);}
 
 const maze=new THREE.Group();scene.add(maze);
 const hall=new THREE.Group();scene.add(hall);
 let doorL,doorR,chandelier,button,plaque,bulbMat;
+// The ward's ceiling, carpet, fittings and red exit lamp: hidden above ground (setOutdoor), where the floor is lawn or soil.
+const hallIndoor=[];let hallRed=null;
 function buildStatic(){
   const L=W*S;
   const floor=new THREE.Mesh(new THREE.PlaneGeometry(L,L),floorMat);floor.rotation.x=-Math.PI/2;floor.position.set(L/2,0,L/2);floor.receiveShadow=true;hall.add(floor);
@@ -432,6 +470,7 @@ function buildStatic(){
     const frame=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.12,0.06),gold);frame.position.set(px,1.9,3.03);hall.add(frame);
     const pt=new THREE.CanvasTexture(paintingC());pt.colorSpace=THREE.SRGBColorSpace;
     const pm=new THREE.Mesh(new THREE.PlaneGeometry(1.32,0.96),new THREE.MeshStandardMaterial({map:pt,roughness:0.8}));pm.position.set(px,1.9,3.065);hall.add(pm);
+    hallIndoor.push(frame,pm);
   }
   // exit sign + lights
   const ex=(W-1)*S,ez=(W-2)*S+S/2;
@@ -439,6 +478,7 @@ function buildStatic(){
   const stex=new THREE.CanvasTexture(scv);stex.colorSpace=THREE.SRGBColorSpace;
   const sign=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.34),new THREE.MeshBasicMaterial({map:stex}));sign.rotation.y=-Math.PI/2;sign.position.set(ex+0.02,H-0.35,ez);hall.add(sign);
   const red=physical(new THREE.PointLight(0xff2010,1.3,9),4,1);red.position.set(ex-0.5,H-0.5,ez);hall.add(red);
+  hallIndoor.push(floor,ceil,run,top,button,plaque,chandelier,sign);hallRed=red;
 }
 const boxGeo=new THREE.BoxGeometry(0.56,0.3,0.32),lidGeo=new THREE.PlaneGeometry(0.4,0.14);
 const boxMat=new THREE.MeshStandardMaterial({color:lin(0x4b5230),roughness:0.75,metalness:0.2});
@@ -447,23 +487,94 @@ const MESSAGES=['IT HEARS YOU RUN','LOCK THE DOOR','LIGHTS OFF','THE WARDEN DOES
 // B1 keeps its writing (the seeded draws depend on it). The first entry of a lower floor is painted in the hall.
 const FLOOR_MESSAGES=[MESSAGES,
   ['DON\'T WAKE THEM','LIGHTS WAKE THEM','THEY ARE NOT DEAD','COUNT THE BODIES','ONE OF THEM MOVED','THREE CARDS CALL THE LIFT','DO NOT RUN PAST THEM','THE LIFT IS LOUD'],
-  ['DON\'T WAKE THEM','IT CAME UP THE WELL','LIGHTS WAKE THEM','THREE KEYS. ONE GATE.','THE WATER HEARS YOU','NO ONE LEFT','THE GATE WAKES EVERYTHING','KEEP YOUR LIGHT LOW']];
+  ['DON\'T WAKE THEM','IT CAME UP THE WELL','LIGHTS WAKE THEM','THREE KEYS. ONE GATE.','THE WATER HEARS YOU','NO ONE LEFT','THE GATE WAKES EVERYTHING','KEEP YOUR LIGHT LOW'],
+  ['THEY SLEEP IN THE BORDERS','STAY ON THE PATHS','LIGHTS WAKE THEM','THREE KEYS. ONE GATE.','NOT FOXES','THE GATE IS LOUD','KEEP LOW','DON\'T WAKE THEM'],
+  ['DO NOT RING THE BELL','HE KEEPS THE GATE','THEY ARE NOT DEAD','THREE KEYS. ONE BELL.','STAY OFF THE GRAVES','IT DIGS ITSELF OUT','KEEP YOUR LIGHT LOW','RUN WHEN IT FALLS']];
+/* ---------- above ground: S1's garden and S2's graveyard ---------- */
+// Made the first time a floor above ground is built: their surfaces are painted last (visuals.js LATE_SURFACES), so
+// nothing here holds up the ward. The walls are one instanced mesh of clipped hedge or churchyard wall, the ground one plane.
+const ABOVE={},SKY_WARD={top:skyU.top.value.clone(),hor:skyU.hor.value.clone()};
+const SKY_NIGHT={garden:{top:untone(0x03060d),hor:untone(0x1a2536)},graveyard:{top:untone(0x030606),hor:untone(0x182221)}};
+let aboveGroundPlane=null;
+function aboveGround(kind){
+  if(ABOVE[kind])return ABOVE[kind];
+  const garden=kind==='garden',walls=HollowVisuals.surface(garden?'garden-hedge':'grave-wall',{pending:true}),ground=HollowVisuals.surface(garden?'garden-lawn':'grave-soil',{pending:true});
+  return ABOVE[kind]={wall:wardMat(walls,null,{},{ao:'wall',open:true,macro:'wall'}),ground:wardMat(ground,null,{},{ao:'floor',macro:'ground'})};
+}
+// The garden's hedges, one merged mesh of clipped box hedge (S x H cells on y 0) with only the faces open to a path or
+// a room: each a 4 x 4 grid pushed in (never out into the walk) by leafy lumps that fade out toward every edge, so
+// neighbouring cells meet flush, under a gently domed top. They rise and fall a little from cell to cell (a smooth
+// function of the cell: no random draws); where a hedge stands over a lower neighbour, a strip closes the step.
+function hedgeWalls(solid){
+  const pos=[],uv=[],index=[],N=4,T=2,height=(x,z)=>H*(1+.06*(1+Math.sin(x*.9+z*.4)*Math.cos(z*.7-x*.3)));
+  const lump=(a,b,f)=>.5+.28*Math.sin(a*7.1+f)+.22*Math.sin(b*5.3+f*1.7)*Math.cos(a*3.7-f);
+  const quads=(base,n)=>{for(let j=0;j<n;j++)for(let i=0;i<n;i++){const a=base+j*(n+1)+i,c=a+n+1;index.push(a,c,a+1,a+1,c,c+1);}};
+  for(let z=0;z<W;z++)for(let x=0;x<W;x++){
+    if(grid[z][x]!==1)continue;
+    const cx=x*S+S/2,cz=z*S+S/2,h=height(x,z);let open=false;
+    [[1,0],[-1,0],[0,1],[0,-1]].forEach(([nx,nz],face)=>{
+      const ox=x+nx,oz=z+nz,base=pos.length/3,tx=-nz,tz=nx,edge=(u,y,dent)=>pos.push(cx+nx*(S/2-dent)+tx*(u-.5)*S,y,cz+nz*(S/2-dent)+tz*(u-.5)*S);
+      if(solid(ox,oz)){
+        const below=ox>=0&&oz>=0&&ox<W&&oz<W?height(ox,oz):h;if(below>=h-.01)return;
+        edge(0,below,0);edge(1,below,0);edge(0,h,0);edge(1,h,0);uv.push(0,below/h,1,below/h,0,1,1,1);quads(base,1);return;
+      }
+      open=true;
+      for(let j=0;j<=N;j++)for(let i=0;i<=N;i++){const u=i/N,v=j/N;edge(u,v*h,.22*Math.sin(Math.PI*u)*Math.min(1,v*3,(1-v)*3)*lump(u*3,v*3,face*1.9+x*.7+z*1.3));uv.push(u,v);}
+      quads(base,N);
+    });
+    if(!open&&solid(x+1,z)&&solid(x-1,z)&&solid(x,z+1)&&solid(x,z-1)&&[[1,0],[-1,0],[0,1],[0,-1]].every(([nx,nz])=>{const ox=x+nx,oz=z+nz;return ox<0||oz<0||ox>=W||oz>=W||height(ox,oz)>=h-.01;}))continue;
+    const top=pos.length/3;
+    for(let j=0;j<=T;j++)for(let i=0;i<=T;i++){const u=i/T,w=j/T;pos.push(cx+(u-.5)*S,h+.16*Math.sin(Math.PI*u)*Math.sin(Math.PI*w),cz+(w-.5)*S);uv.push(u,w);}
+    quads(top,T);
+  }
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
+  g.setIndex(index);g.computeVertexNormals();g.computeBoundingSphere();return g;
+}
+// The walls of an outdoor floor: S1's hedges, or S2's churchyard walls (one instanced mesh; a cell walled in on all
+// four sides is never seen and is left out).
+function outdoorWalls(){
+  const garden=!FLOOR().boss,solid=(x,z)=>x<0||z<0||x>=W||z>=W||grid[z][x]===1,mat=aboveGround(garden?'garden':'graveyard').wall;
+  if(garden){const hedges=new THREE.Mesh(hedgeWalls(solid),mat);hedges.castShadow=hedges.receiveShadow=true;return hedges;}
+  const cells=[];
+  for(let z=0;z<W;z++)for(let x=0;x<W;x++)if(grid[z][x]===1&&!(solid(x+1,z)&&solid(x-1,z)&&solid(x,z+1)&&solid(x,z-1)))cells.push([x,z]);
+  const walls=new THREE.InstancedMesh(new THREE.BoxGeometry(S,H,S).translate(0,H/2,0),mat,cells.length),m=new THREE.Matrix4();
+  cells.forEach(([x,z],i)=>{m.makeScale(1,1+.02*(1+Math.sin(x*1.3-z*.8)),1).setPosition(x*S+S/2,0,z*S+S/2);walls.setMatrixAt(i,m);});
+  walls.instanceMatrix.needsUpdate=true;walls.castShadow=walls.receiveShadow=true;return walls;
+}
+// Above ground: the night sky, the moon, the lawn or soil underfoot and none of the ward's hall fittings.
+function setOutdoor(on){
+  const kind=FLOOR().boss?'graveyard':'garden';
+  for(const o of hallIndoor)o.visible=!on;
+  if(hallRed)setLight(hallRed,on?0:1.3);
+  if(on){
+    if(!aboveGroundPlane){const L=W*S,size=L+240,g=new THREE.PlaneGeometry(size,size),uv=g.attributes.uv;
+      for(let i=0;i<uv.count;i++)uv.setXY(i,uv.getX(i)*size/S,uv.getY(i)*size/S);
+      aboveGroundPlane=new THREE.Mesh(g,aboveGround(kind).ground);aboveGroundPlane.rotation.x=-Math.PI/2;aboveGroundPlane.position.set(L/2,0,L/2);aboveGroundPlane.receiveShadow=true;scene.add(aboveGroundPlane);}
+    aboveGroundPlane.material=aboveGround(kind).ground;
+  }
+  if(aboveGroundPlane)aboveGroundPlane.visible=on;
+  const tone=on?SKY_NIGHT[kind]:SKY_WARD;skyU.top.value.copy(tone.top);skyU.hor.value.copy(tone.hor);sky.material=on?skyNightMat:skyMat;
+  setLight(moon,on?ENV[kind].moon:0);moon.visible=on;
+}
 function buildMaze(){
   maze.traverse(o=>{if(o.isInstancedMesh&&o.dispose)o.dispose();if(o.geometry&&o.geometry!==boxGeo&&o.geometry!==lidGeo)o.geometry.dispose();if(o.material&&o.userData.own){if(o.material.map)o.material.map.dispose();o.material.dispose();}});
   scene.remove(maze);maze.clear();scene.add(maze);
-  grid=genMaze();
+  grid=genMaze();outdoorNow=!!FLOOR().outdoor;
+  if(outdoorNow)maze.add(outdoorWalls());else{
   let count=0;for(let z=0;z<W;z++)for(let x=0;x<W;x++)if(grid[z][x]===1)count++;
   const walls=new THREE.InstancedMesh(new THREE.BoxGeometry(S,H,S),wallMat,count);
   const m=new THREE.Matrix4();let i=0;
   for(let z=0;z<W;z++)for(let x=0;x<W;x++)if(grid[z][x]===1){m.makeTranslation(x*S+S/2,H/2,z*S+S/2);walls.setMatrixAt(i++,m);}
   walls.instanceMatrix.needsUpdate=true;walls.castShadow=walls.receiveShadow=true;maze.add(walls);
+  }
   // The removed manor sconces drew from the seeded random stream here; the same draws keep seeded wards unchanged.
   for(let z=0;z<W;z++)for(let x=0;x<W;x++){if(!openCell(x,z)||Math.random()<.45)continue;
     const sides=(cellWall(x+1,z)?1:0)+(cellWall(x-1,z)?1:0)+(cellWall(x,z+1)?1:0)+(cellWall(x,z-1)?1:0);
     if(sides)Math.random();}
   // writings on the walls
   const used=new Set();let placed=0,tries=0;
-  while(placed<9&&tries<600){tries++;
+  // S1's hedges take no writing.
+  while(placed<(outdoorNow&&!FLOOR().boss?0:9)&&tries<600){tries++;
     const cx=1+Math.floor(Math.random()*(W-2)),cz=1+Math.floor(Math.random()*(W-2));
     if(!openCell(cx,cz)||used.has(cz*W+cx))continue;
     const inHall=cx<=5&&cz<=3;if(inHall&&placed>0)continue;
@@ -532,22 +643,23 @@ function buildRooms(){
   dynamicWorld.traverse(o=>{if(o.userData.own){if(o.geometry)o.geometry.dispose();if(o.material){if(o.material.map)o.material.map.dispose();o.material.dispose();}}});
   dynamicWorld.clear();roomDoors=[];roomProps=[];roomLoot=[];roomLights.length=0;fuses=0;exitPowered=false;exitRelease=0;exitOpen=false;alarmT=0;decoys=3;decoyEvents=[];hideTime=0;
     horror=HollowHorror.create(worldSeed);caseNotes=[];readNotes=new Set();captionText='';captionT=0;simulationTime=0;wakeBannerT=wakeStingT=-99;
-    const ward=HollowVisuals.decorateWard(THREE,{grid,cellSize:S,height:H,rooms:specialRooms,seed:worldSeed});
+    const ward=outdoorNow?HollowVisuals.decorateGrounds(THREE,groundsOptions()):HollowVisuals.decorateWard(THREE,{grid,cellSize:S,height:H,rooms:specialRooms,seed:worldSeed});
     dynamicWorld.add(ward);roomLights.push(...ward.userData.practicals.map(p=>({...p,color:floorLamp(p.color)})));
     chaosWorldBuilt(ward);
+    if(outdoorNow)buildGrounds(ward);
   const own=o=>{o.userData.own=true;return o;};
   for(const r of specialRooms){
     const cx=(r.x+r.w/2)*S,cz=(r.z+r.d/2)*S;
     const group=new THREE.Group();group.position.set(cx,0,cz);dynamicWorld.add(group);r.group=group;
     if(window.HollowVisuals){
-      const decoration=HollowVisuals.decorateRoom(THREE,{width:r.w*S,depth:r.d*S,type:r.type});decoration.userData.decoration=true;group.add(decoration);
+      const decoration=r.look?HollowVisuals.decorateOutdoorRoom(THREE,{width:r.w*S,depth:r.d*S,look:r.look}):HollowVisuals.decorateRoom(THREE,{width:r.w*S,depth:r.d*S,type:r.type});decoration.userData.decoration=true;group.add(decoration);
       for(const p of decoration.userData.colliders||[])roomProps.push({...p,x:p.x+cx,z:p.z+cz,room:r.id});
       decoration.traverse(o=>{o.updateMatrix();o.matrixAutoUpdate=false;});
     }
     const sign=worldLabel(r.name.toUpperCase(),r.shelter?'#8cdcc8':r.fuse?'#e7b878':'#a5bdca',2.9);
-    sign.position.set(cx,2.7,r.z*S+.025);dynamicWorld.add(sign);
+    sign.position.set(cx,2.7,r.z*S+(outdoorNow?.1:.025));dynamicWorld.add(sign);
     const strip=own(new THREE.Mesh(new THREE.BoxGeometry(2.4,.035,.12),new THREE.MeshBasicMaterial({color:lin(r.shelter?0x83d4c2:r.fuse?0xffc282:0xa6c4dd)})));
-    strip.position.set(cx,H-.07,cz);group.add(strip);strip.position.x=0;strip.position.z=0;
+    strip.position.set(cx,H-.07,cz);group.add(strip);strip.position.x=0;strip.position.z=0;strip.visible=!outdoorNow;
     // Only the three nearest practical lights are active. Emissive fixtures stay visible.
     roomLights.push({x:cx,z:cz,color:floorLamp(r.shelter?0xbac3a7:r.fuse?0xcdb48b:0x9caeaa,r.shelter),shelter:!!r.shelter,box:{minX:r.x*S,maxX:(r.x+r.w)*S,minZ:r.z*S,maxZ:(r.z+r.d)*S}});
         const record=HollowHorror.RECORDS[r.id]||HollowHorror.FLOOR_RECORDS?.[r.id];
@@ -559,15 +671,15 @@ function buildRooms(){
           for(const word of record.text.split(' ')){if(ink.measureText(line+word).width>445){ink.fillText(line,28,y);y+=29;line='';}line+=word+' ';}ink.fillText(line,28,y);
           ink.fillStyle='#6b6758';ink.fillRect(204,0,104,18);noiseFill(ink,512,512,9);
           const note=own(new THREE.Mesh(new THREE.PlaneGeometry(.62,.62),new THREE.MeshStandardMaterial({map:tex(paper),roughness:1})));
-          note.position.set(cx,1.45,r.z*S+.055);dynamicWorld.add(note);
-          caseNotes.push({id:r.id,x:cx,z:r.z*S+.055,...record});
+          const noteZ=r.z*S+(outdoorNow?.11:.055);note.position.set(cx,1.45,noteZ);dynamicWorld.add(note);
+          caseNotes.push({id:r.id,x:cx,z:noteZ,...record});
         }
     if(r.shelter){
       const [dx,dz]=center(r.door.x,r.door.z),hinge=new THREE.Group();hinge.position.set(dx-S/2,0,dz);dynamicWorld.add(hinge);
-      const panel=own(new THREE.Mesh(new THREE.BoxGeometry(S-.08,H-.15,.16),isolationDoorMaterial()));
+      const panel=own(new THREE.Mesh(new THREE.BoxGeometry(S-.08,H-.15,.16),outdoorNow?new THREE.MeshStandardMaterial({color:lin(0x3a2b1e),roughness:.86}):isolationDoorMaterial()));
       panel.position.set(S/2,(H-.15)/2,0);panel.castShadow=panel.receiveShadow=true;hinge.add(panel);
-      const sign=worldLabel('ISOLATION / MANUAL LOCK','#94d4bd',2.4);sign.position.set(S/2,2,.095);hinge.add(sign);
-      const insideSign=worldLabel('MANUAL OVERRIDE','#94d4bd',1.3);insideSign.position.set(S/2,1.45,-.095);insideSign.rotation.y=Math.PI;hinge.add(insideSign);
+      const sign=worldLabel(outdoorNow?'BOLT FROM INSIDE':'ISOLATION / MANUAL LOCK','#94d4bd',2.4);sign.position.set(S/2,2,.095);hinge.add(sign);
+      const insideSign=worldLabel(outdoorNow?'DRAW THE BOLT':'MANUAL OVERRIDE','#94d4bd',1.3);insideSign.position.set(S/2,1.45,-.095);insideSign.rotation.y=Math.PI;hinge.add(insideSign);
       const handle=own(new THREE.Mesh(new THREE.BoxGeometry(.4,.075,.16),new THREE.MeshStandardMaterial({color:lin(0xb5b7a3),metalness:.8,roughness:.25})));
       handle.position.set(S-.5,1.1,.16);hinge.add(handle);
       const insideHandle=new THREE.Mesh(handle.geometry,handle.material);insideHandle.position.set(S-.5,1.1,-.16);hinge.add(insideHandle);
@@ -582,11 +694,52 @@ function buildRooms(){
   // A nearby refuge is deliberately introduced with signage rather than a surprise mechanic.
   const guide=worldLabel(TEXT().guide,'#b8bea3',3.3);guide.position.set(7.5,2.3,3.06);dynamicWorld.add(guide);
   const exitSign=worldLabel(TEXT().sign,'#e7b878',2.3);exitSign.position.set((W-1)*S-.04,1.9,(W-2)*S+S/2);exitSign.rotation.y=-Math.PI/2;dynamicWorld.add(exitSign);
-  const gate=own(new THREE.Mesh(new THREE.BoxGeometry(.14,H,S),isolationDoorMaterial()));
+  const gate=outdoorNow?ironGate():own(new THREE.Mesh(new THREE.BoxGeometry(.14,H,S),isolationDoorMaterial()));
   gate.position.set((W-1)*S-.02,H/2,(W-2)*S+S/2);gate.castShadow=true;dynamicWorld.add(gate);dynamicWorld.userData.gate=gate;dynamicWorld.userData.exitSign=exitSign;
   mazeNavigator=HollowNavigation.create({grid,cellSize:S,props:roomProps,circles:obstacles,doors:()=>roomDoors.map(d=>({...d.box,open:d.open}))});
+  if(outdoorNow)settleGrounds();
   placeWeapons();
   if(atm)addAtmosphereFixtures();
+}
+// The options decorateGrounds gets (tests/helpers/visuals-fixture.js mirrors them): the lobby pedestal and the fallen
+// chandelier as landmarks, the gate approach and, on the boss floor, its graves kept clear.
+function groundsOptions(){
+  const f=FLOOR(),avoid=[{x:(W-2+.5)*S,z:(W-2+.5)*S,r:4}];
+  if(f.boss)avoid.push({x:(f.boss.grave[0]+.5)*S,z:(f.boss.grave[1]+.5)*S,r:2.6},...f.boss.summons.map(([x,z])=>({x:(x+.5)*S,z:(z+.5)*S,r:2})));
+  return {grid,cellSize:S,height:H,rooms:specialRooms,seed:worldSeed,kind:f.boss?'graveyard':'garden',avoid,
+    centre:f.fountain?[(f.fountain[0]+.5)*S,(f.fountain[1]+.5)*S]:null,boss:f.boss||null,gate:[W-1,W-2],landmarks:{ped:{x:PED.x,z:PED.z},chan:{x:CHAN.x,z:CHAN.z}}};
+}
+// The grounds' furniture blocks like a room's; the tree line beyond the walls is scenery.
+function buildGrounds(ward){
+  for(const c of ward.userData.colliders)roomProps.push({...c,room:'grounds'});
+  bossBell=ward.userData.bell||null;bellSwing=0;
+  dynamicWorld.add(HollowVisuals.decorateHorizon(THREE,{kind:FLOOR().boss?'graveyard':'garden',seed:worldSeed,size:W*S}));
+}
+// The nearest spot to (x, z) within `reach` m where a body of radius r stands clear of walls and furniture, or null.
+function clearSpotNear(x,z,r,reach,avoid=[]){
+  let best=null,bd=Infinity;
+  for(let i=-reach;i<=reach+1e-6;i+=.25)for(let j=-reach;j<=reach+1e-6;j+=.25){const px=x+i,pz=z+j,d=Math.hypot(i,j);
+    if(d<bd&&d<=reach&&!wallAt(px,pz)&&movementClear(px,pz,px,pz,r)&&avoid.every(o=>Math.hypot(o.x-px,o.z-pz)>1.6)){best={x:px,z:pz};bd=d;}}
+  return best;
+}
+// Once the grounds stand: an ammunition box that landed in their furniture moves to a clear spot nearby, and the boss
+// floor lays out supplies and dressings around the edges of its arena.
+function settleGrounds(){
+  for(const b of ammoBoxes){if(movementClear(b.x,b.z,b.x,b.z,.45))continue;const p=clearSpotNear(b.x,b.z,.45,1.5);if(p){b.x=p.x;b.z=p.z;b.g.position.x=p.x;b.g.position.z=p.z;}}
+  const f=FLOOR().boss;if(!f)return;
+  const [x0,z0,x1,z1]=f.arena,mx=(x0+x1)>>1,mz=(z0+z1)>>1;
+  for(const [cx,cz,type,id] of [[mx,z0,'supplies','n'],[x0,mz,'medical','w'],[mx,z1,'supplies','s'],[x1,mz-2,'medical','e']]){
+    const p=clearSpotNear((cx+.5)*S,(cz+.5)*S,.5,2.5,roomLoot);
+    if(p)roomLoot.push(makeLoot(type,p.x,p.z,{id:'arena-'+id,name:'The gate plot'}));
+  }
+}
+// The gate out of a floor above ground: wrought-iron bars (one instanced mesh) that lift away like the shutter below.
+function ironGate(){
+  const group=new THREE.Group(),bars=17,mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:lin(0x1c1e1f),metalness:.8,roughness:.45}),bars+3),m=new THREE.Matrix4();
+  mesh.userData.own=true;mesh.castShadow=true;
+  for(let i=0;i<bars;i++){m.makeScale(.045,H+.3,.045).setPosition(0,.15,-S/2+.1+i*(S-.2)/(bars-1));mesh.setMatrixAt(i,m);}
+  [-H/2+.3,H/2-.3,0].forEach((y,k)=>{m.makeScale(.08,.08,S-.06).setPosition(0,y,0);mesh.setMatrixAt(bars+k,m);});
+  mesh.instanceMatrix.needsUpdate=true;group.add(mesh);return group;
 }
 // Beacon mount beside open cell (cx,cz): on the first wall found (W, E, N, S), 0.2 m off it.
 function beaconMount(cx,cz){for(const [dx,dz] of [[-1,0],[1,0],[0,-1],[0,1]])if(grid[cz+dz]?.[cx+dx]===1)return{x:cx*S+S/2+dx*(S/2-.2),z:cz*S+S/2+dz*(S/2-.2)};return{x:cx*S+S/2,z:cz*S+S/2};}
@@ -612,8 +765,9 @@ function metalAt(x,z){
   return false;
 }
 function makeLoot(type,x,z,room){
-  // The objective item keeps the loot type 'fuse' on every floor: a fuse on B1, a lift keycard on B2, a key on B3.
-  const shape=type!=='fuse'?[.5,.26,.26,.15,.15]:floor===1?[.38,.05,.25,.05,.45]:floor===2?[.54,.09,.13,.06,.45]:[.24,.55,.26,.3,.15];
+  // The objective item keeps the loot type 'fuse' on every floor: a fuse on B1, a lift keycard on B2, a key on B3, S1
+  // and S2 (S2's crypt keys heavier).
+  const shape=type!=='fuse'?[.5,.26,.26,.15,.15]:floor===1?[.38,.05,.25,.05,.45]:floor===2||floor===3?[.54,.09,.13,.06,.45]:floor===4?[.62,.11,.17,.07,.5]:[.24,.55,.26,.3,.15];
   const group=new THREE.Group();group.position.set(x,shape[3],z);dynamicWorld.add(group);
   const color=type==='fuse'?0xe9bd79:type==='medical'?0x81cbb3:0x879dae;
   const box=new THREE.Mesh(new THREE.BoxGeometry(shape[0],shape[1],shape[2]),new THREE.MeshStandardMaterial({color:lin(color),metalness:.45,roughness:.35,emissive:lin(color),emissiveIntensity:shape[4]}));box.userData.own=true;group.add(box);
@@ -621,11 +775,14 @@ function makeLoot(type,x,z,room){
   return {id:room.id+':'+type,type,x,z,g:group,taken:false,room};
 }
 // A gun lying on its case where someone dropped it, taken with E. weapon: its index in weaponDefs.
+// How each gun lies on its case: [shift along the case, height, case length].
+const WEAPON_LIE={pistol:[.05,.2,1.05],smg:[.03,.2,1.05],magnum:[.07,.185,1.05],marksman:[.24,.19,1.35],lmg:[.19,.215,1.3]};
 function makeWeaponLoot(index,x,z,room){
   const w=weaponDefs[index],group=new THREE.Group();group.position.set(x,0,z);dynamicWorld.add(group);
-  const crate=new THREE.Mesh(new THREE.BoxGeometry(.42,.16,1.05),new THREE.MeshStandardMaterial({color:lin(0x2d3429),roughness:.72,metalness:.3}));crate.position.y=.08;crate.userData.own=true;group.add(crate);
+  const [shift,lift,length]=WEAPON_LIE[w.id]||[.22,.2,1.05];
+  const crate=new THREE.Mesh(new THREE.BoxGeometry(.42,.16,length),new THREE.MeshStandardMaterial({color:lin(0x2d3429),roughness:.72,metalness:.3}));crate.position.y=.08;crate.userData.own=true;group.add(crate);
   const model=HollowVisuals.makeWeapon(THREE,w.id,{world:true});model.userData.decoration=true;
-  model.rotation.set(0,0,Math.PI/2);model.position.set(-.04,.2,w.id==='pistol'?.05:.22);group.add(model);
+  model.rotation.set(0,0,Math.PI/2);model.position.set(-.04,lift,shift);group.add(model);
   const label=worldLabel(w.name.toUpperCase()+' · [E]','#e7d9a2',1.2);label.scale.y=.4;label.position.set(0,.75,0);group.add(label);group.userData.label=label;
   return {id:room.id+':'+w.id,type:'weapon',weapon:index,x,z,g:group,taken:false,room};
 }
@@ -702,13 +859,13 @@ function collectLoot(l){
 function rewardLoot(type){
   if(type==='fuse'){fuses=roomLoot.filter(v=>v.type==='fuse'&&v.taken).length;showMsg(fuses===3?TEXT().all:`${TEXT().kick} recovered · ${fuses}/3.`,3.5);}
   else if(type==='medical'){P.health=Math.min(100,P.health+45);showMsg('Field dressing · +45 health.',2);}
-  else if(type==='ammo'){weapons[0].reserve+=20;weapons[1].reserve+=6;weapons[2].reserve+=3;reserve=weapons[weaponIndex].reserve;showMsg(ammoText([20,6,3]),3);}
-  else {weapons[0].reserve+=30;weapons[1].reserve+=12;weapons[2].reserve+=6;reserve=weapons[weaponIndex].reserve;decoys=Math.min(5,decoys+1);battery=1;showMsg('Supplies secured · ammunition, battery and a decoy.',3);}
+  else if(type==='ammo'){const drop=RULES.AMMO_DROPS.ammo;weaponDefs.forEach((w,i)=>weapons[i].reserve+=drop[w.id]||0);reserve=weapons[weaponIndex].reserve;showMsg(ammoText(drop),3);}
+  else {const drop=RULES.AMMO_DROPS.supplies;weaponDefs.forEach((w,i)=>weapons[i].reserve+=drop[w.id]||0);reserve=weapons[weaponIndex].reserve;decoys=Math.min(5,decoys+1);battery=1;showMsg('Supplies secured · ammunition, battery and a decoy.',3);}
   if(automaticLoot(type)&&mag===0&&reserve>0)startReload();
 }
-// Rounds for a gun not found yet are kept for it: they are in its reserve when it turns up.
+// Rounds for a gun not found yet are kept for it: they are in its reserve when it turns up. amounts: by gun id.
 function ammoText(amounts){
-  const got=weaponDefs.map((w,i)=>owned[i]?`+${amounts[i]} ${['carbine','sidearm','shells'][i]}`:'').filter(Boolean).join(' / ');
+  const got=weaponDefs.map((w,i)=>owned[i]&&amounts[w.id]?`+${amounts[w.id]} ${WEAPON_ROUNDS[w.id]||w.id}`:'').filter(Boolean).join(' / ');
   return `Ammunition · ${got}.`+(owned.every(Boolean)?'':' Spare rounds packed for guns not found yet.');
 }
 function queueAction(action){
@@ -735,6 +892,8 @@ function powerExit(){
   if(fuses<3||exitPowered)return;
   exitPowered=true;exitRelease=FLOOR().release;alarmT=0;sMetal(0,90,.22);
   showMsg(TEXT().powered,5);
+  // The cemetery gate is chained to the bell: it calls the Gravekeeper, not the floor.
+  if(FLOOR().boss){bossAwaken();return;}
   // The lift and the floodgate below are loud enough to wake most of a floor.
   if(!NET.inGame||NET.role==='host')alertMonsters(100,(W-2)*S+S/2,(W-2)*S+S/2,floor?45:18);
 }
@@ -749,7 +908,7 @@ function throwDecoy(){
 function updateRooms(dt){
   damageT=Math.max(0,damageT-dt);hitMarkerT=Math.max(0,hitMarkerT-dt);noticeT=Math.max(0,noticeT-dt);
   for(const d of roomDoors){d.angle=lerp(d.angle,d.open?-Math.PI/2:0,1-Math.exp(-dt*10));d.hinge.rotation.y=d.angle;}
-  if(exitPowered&&!exitOpen){
+  if(exitPowered&&!exitOpen&&!bossHolds()){
     if(!NET.inGame||NET.role==='host'){exitRelease=Math.max(0,exitRelease-dt);if(exitRelease===0){exitOpen=true;showMsg(TEXT().opened,4);}}
     alarmT-=dt;if(alarmT<=0){alarmT=3.2;sWardSound('alarm',(W-2)*S+S/2,(W-2)*S+S/2);if(!NET.inGame||NET.role==='host')alertMonsters(100,(W-2)*S+S/2,(W-2)*S+S/2);}
   }
@@ -776,8 +935,12 @@ const torch=HollowVisuals.makeFlashlight(THREE);
 const lensMat=torch.userData.lensMaterial;
 torch.position.set(-0.25,-0.27,-0.44);torch.rotation.set(0.06,-0.07,0);torch.visible=false;fpRig.add(torch);
 
-// Three distinct, fully modeled weapons share the same first-person rig.
+// Seven distinct, fully modeled weapons share the same first-person rig.
 const weaponDefs=RULES.WEAPONS;
+// HUD slot labels, the action shown over the rounds, and what an ammunition pickup calls each gun's rounds.
+const WEAPON_TAG={rifle:'AR',pistol:'M9',shotgun:'SG',smg:'SMG',magnum:'.44',marksman:'DMR',lmg:'LMG'};
+const WEAPON_ACTION={rifle:'AUTOMATIC',pistol:'SEMI-AUTOMATIC',shotgun:'PUMP ACTION',smg:'AUTOMATIC',magnum:'REVOLVER',marksman:'BOLT ACTION',lmg:'BELT FED'};
+const WEAPON_ROUNDS={rifle:'carbine',pistol:'sidearm',shotgun:'shells',smg:'SMG',magnum:'.44',marksman:'.308',lmg:'belt'};
 const weaponModels=weaponDefs.map(w=>HollowVisuals.makeWeapon(THREE,w.id));
 let weaponIndex=0,weapons=weaponDefs.map(w=>({mag:w.capacity,reserve:w.reserve}));
 let gun=weaponModels[0],gunMag=gun.userData.magazine,muzzleFlash=gun.userData.muzzleFlash;
@@ -798,7 +961,7 @@ function selectWeapon(index,step){
   if(!owned[index]||index===weaponIndex)return;
   weapons[weaponIndex].mag=mag;weapons[weaponIndex].reserve=reserve;
   gun.visible=false;weaponIndex=index;gun=weaponModels[index];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;
-  mag=weapons[index].mag;reserve=weapons[index].reserve;reloadT=0;fireT=.24;gunKick=0;flashT=0;semiFired=false;weaponAudio?.equip(weaponDefs[index].id);
+  mag=weapons[index].mag;reserve=weapons[index].reserve;reloadT=0;fireT=.24;gunKick=0;flashT=0;semiFired=false;shotT=9;weaponAudio?.equip(weaponDefs[index].id);
 }
 
 /* ---------- impacts ---------- */
@@ -1044,7 +1207,7 @@ let visited=new Uint8Array(W*W),ammoBoxes=[];
 // The ward's look: the dark hemisphere/fog, the torch on and the rifle out.
 function setHell(){
   dynamicWorld.visible=true;
-  applyEnv([ENV.hell,ENV.morgue,ENV.hollow][floor]||ENV.hell);document.body.dataset.floor=FLOOR().code;
+  applyEnv([ENV.hell,ENV.morgue,ENV.hollow,ENV.garden,ENV.graveyard][floor]||ENV.hell);document.body.dataset.floor=FLOOR().code;setOutdoor(!!FLOOR().outdoor);
   canvas.style.filter='none';$('grain').style.opacity=preferences.effects?.027:0;$('vignette').style.opacity=.6;
   torchOn=true;torch.visible=false;gunOut=true;gun.visible=true;
 }
@@ -1166,6 +1329,7 @@ function startFloor(kit){
   danger=0;ambientT=14;$('flash').style.opacity=0;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
   visited=new Uint8Array(W*W);
   setHell();P.pos.set(PED.x-.85,0,PED.z);P.yaw=Math.PI/2;P.pitch=0;spawnMonsters(FLOOR().active,FLOOR().sleepers);grace=10;state='play';
+  setupBoss();checkpointBanner=!!FLOOR().outdoor;
   checkpoint={floor,kit:copyKit(kit),elapsed,score:{...scoreBase}};
   if(floor>0)saveCampaign();
   if(scoreBase.points>0)hud.score(scoreBase.points);
@@ -1186,6 +1350,7 @@ const CARD_MS=1600,CARD_AFTER_MS=700;
 function transition(code,name,note,build){
   state='descend';releaseInput();stopAudio();
   $('descendCode').textContent=code;$('descendName').textContent=name;$('descendNote').textContent=note;
+  $('descendWay').textContent=RULES.FLOORS.find(f=>f.code===code)?.outdoor?'Above ground':'Going down';
   showScreen('descend');const shown=performance.now();
   const run=()=>{
     if(state!=='descend')return;
@@ -1202,7 +1367,8 @@ function descend(){
   if(state!=='play'||NET.inGame||floor>=RULES.FLOORS.length-1)return;
   scoreBase=runScore();const kit=currentKit(),next=RULES.FLOORS[floor+1],from=FLOOR().exit;
   sThud(P.pos.x,1,P.pos.z,.7,50);
-  transition(next.code,next.name,`Down through the ${from}. Everything you carry comes with you.`,()=>enterFloor(floor+1,kit));
+  const way=!next.outdoor?`Down through the ${from}.`:FLOOR().outdoor?`Through the ${from}, into the churchyard.`:`Up through the ${from}, into the open air.`;
+  transition(next.code,next.name,`${way} Everything you carry comes with you.`,()=>enterFloor(floor+1,kit));
 }
 // Death below B1 goes back to the start of the floor with what the survivor carried down.
 function retryFloor(c){
@@ -1263,7 +1429,7 @@ function env(g,now,a,peak,dec){g.gain.setValueAtTime(0.0001,now);g.gain.exponent
 function fadeTo(g,v,time){if(!AC)return;const n=AC.currentTime;g.gain.cancelScheduledValues(n);g.gain.setValueAtTime(g.gain.value,n);g.gain.linearRampToValueAtTime(v,n+time);}
 function sStep(vol,kind){
   if(!AC)return;const n=AC.currentTime,s=noiseSrc(),f=AC.createBiquadFilter(),g=AC.createGain();
-  f.type='lowpass';f.frequency.value=kind==='carpet'?rnd(250,380):rnd(380,700);
+  f.type='lowpass';f.frequency.value=kind==='carpet'||kind==='grass'?rnd(250,380):rnd(380,700);
   s.connect(f);f.connect(g);g.connect(master);env(g,n,0.006,vol,0.13);s.start(n,Math.random());s.stop(n+0.2);
   if(kind==='metal'&&Math.random()<0.5){const o=AC.createOscillator(),og=AC.createGain();o.type='triangle';o.frequency.value=rnd(380,520);o.connect(og);og.connect(master);env(og,n,0.002,vol*0.08,0.25);o.start(n);o.stop(n+0.3);}
 }
@@ -1273,7 +1439,7 @@ function sThud(x,y,z,vol,freq){
   const o=AC.createOscillator(),og=AC.createGain();o.frequency.setValueAtTime(70,n);o.frequency.exponentialRampToValueAtTime(35,n+0.25);o.connect(og);og.connect(p);env(og,n,0.01,vol*0.8,0.3);o.start(n);o.stop(n+0.4);
 }
 function sCreature(m,cue,volume=1){
-  const id=sVoice(m.kind,cue,m.pos.x,cue==='step'?.15:m.stats.head,m.pos.z,cue==='step'?volume*(STEP_LEVEL[m.kind]||1):volume);
+  const kind=m.voiceKind||m.kind,id=sVoice(kind,cue,m.pos.x,cue==='step'?.15:m.stats.head,m.pos.z,cue==='step'?volume*(STEP_LEVEL[kind]||1):volume);
   if(id!=null)vox(m).said[cue]=t;
   return id;
 }
@@ -1285,7 +1451,7 @@ function updateMonsterAudio(m,dt,moved){
 // sCreature applies I2's per-kind step weighting (STEP_LEVEL). I2: may refine the step volumes here.
 function onMonsterFootstep(m,intensity){
   sCreature(m,'step',(m.state==='stalk'?.3:1)*(.45+.55*intensity));
-  if(m.kind==='warden'&&state==='play'){const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);if(d<9)camFX.addTrauma(.12*(1-d/9));}
+  if((m.kind==='warden'||m.boss)&&state==='play'){const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z),r=m.boss?16:9;if(d<r)camFX.addTrauma((m.boss?.2:.12)*(1-d/r));}
 }
 function sClick(){if(!AC)return;const n=AC.currentTime,o=AC.createOscillator(),g=AC.createGain();o.type='square';o.frequency.value=2400;o.connect(g);g.connect(master);env(g,n,0.002,0.06,0.03);o.start(n);o.stop(n+0.05);}
 function sMetal(at,f,v){if(!AC)return;const n=AC.currentTime+at,o=AC.createOscillator(),g=AC.createGain();o.type='triangle';o.frequency.value=f;o.connect(g);g.connect(master);env(g,n,0.002,v,0.09);o.start(n);o.stop(n+0.15);
@@ -1310,13 +1476,17 @@ function sWardSound(kind,x,z){
   // Disconnect the whole transient graph when its final scheduled source ends.
   sources[sources.length-1].onended=()=>nodes.forEach(node=>node.disconnect());
 }
+// The ward's unseen noises, as they carry above ground (S1, S2).
+const OUTDOOR_CAPTIONS=[
+  {steps:'[Footsteps on the gravel, beyond the hedge.]',scrape:'[Something drags itself through the borders.]',pipe:'[A gate creaks somewhere in the dark.]',breath:'[Breathing, on the other side of the hedge.]',relay:'[A key turns. Something in the borders stirs.]'},
+  {steps:'[Footsteps between the graves.]',scrape:'[Stone scrapes on stone, somewhere behind the wall.]',pipe:'[The bell rope creaks.]',breath:'[Breathing, under the ground.]',relay:'[A key turns. Something under the graves stirs.]'}];
 function updateHorror(dt){
   captionT=Math.max(0,captionT-dt);if(captionT===0)captionText='';
   const events=horror.update(dt,{active:state==='play',threat:danger,sheltered:!!currentShelter(),fuses,powered:exitPowered,effects:preferences.effects});
   for(const event of events){
     const x=P.pos.x+Math.cos(event.bearing||P.yaw)*(event.distance||3),z=P.pos.z+Math.sin(event.bearing||P.yaw)*(event.distance||3);
     sWardSound(event.kind,x,z);
-    if(captionT<=0){captionText=event.caption;captionT=5;}
+    if(captionT<=0){captionText=outdoorNow&&OUTDOOR_CAPTIONS[FLOOR().boss?1:0][event.kind]||event.caption;captionT=5;}
   }
 }
 function sAmbient(){
@@ -1338,7 +1508,7 @@ addEventListener('keydown',e=>{
   if(!e.repeat){
     const actions={KeyF:'torch',KeyR:'reload',KeyE:'interact',KeyQ:'weapon',KeyV:'decoy',KeyM:'map',Space:'jump',Escape:'pause'};
     if(actions[e.code])inputAction(actions[e.code],true);
-    if(state==='play'&&['Digit1','Digit2','Digit3'].includes(e.code)){const i=Number(e.code.slice(-1))-1;if(owned[i])selectWeapon(i);else showMsg(`No ${weaponDefs[i].name} yet. Guns lie where their owners fell.`,2.2);}
+    if(state==='play'&&/^Digit[1-9]$/.test(e.code)&&Number(e.code.slice(-1))<=weaponDefs.length){const i=Number(e.code.slice(-1))-1;if(owned[i])selectWeapon(i);else showMsg(`No ${weaponDefs[i].name} yet. Guns lie where their owners fell.`,2.2);}
     if(['KeyC','ControlLeft','ControlRight'].includes(e.code))inputAction('crouch',true);
     if(state==='spect'&&(e.code==='Space'||e.code==='Tab')){e.preventDefault();cycleSpect();}
   }
@@ -1366,7 +1536,7 @@ function inputAction(action,pressed){
   if(action==='weapon'&&state==='play')selectWeapon(weaponIndex+1,1);
   if(action==='interact')interact();
   if(action==='decoy')throwDecoy();
-  if(action==='map'){mapExpanded=!mapExpanded;$('map').classList.toggle('expanded',mapExpanded);}
+  if(action==='map'){mapExpanded=!mapExpanded;$('map').classList.toggle('expanded',mapExpanded);mapT=0;}
 }
 const controls=window.HollowControls?HollowControls.create({canvas,onAction:inputAction,onLook:look,onMove:(x,y)=>{touchMove.x=x;touchMove.y=y;}}):null;
 function lock(){if(controls?controls.touch:IS_TOUCH)return;try{const r=canvas.requestPointerLock();if(r&&r.catch)r.catch(()=>showMsg('Click the game to capture the mouse.',2));}catch(e){}}
@@ -1501,7 +1671,7 @@ function updatePlayer(dt){
         const vault=roomProps.some(p=>p.h>.8&&p.h<=1.1&&Math.abs(P.pos.x-p.x)<p.w/2+PR+.18&&Math.abs(P.pos.z-p.z)<p.d/2+PR+.18);
         P.velY=vault?5.65:5.15;P.onGround=false;P.coyote=0;P.jumpBuffer=0;P.stamina=mv.stamina;sStep(.1,stepKind());
   }
-  const speed=mv.speed*hurtSlow(dt);
+  const speed=mv.speed*(weaponDefs[weaponIndex].move||1)*hurtSlow(dt);
   const fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw),rx=Math.cos(P.yaw),rz=-Math.sin(P.yaw);
   if(slideT>0&&inputLength<.1)iz=1;
   const tx=(fx*iz+rx*ix)*speed,tz=(fz*iz+rz*ix)*speed;
@@ -1523,7 +1693,7 @@ function updatePlayer(dt){
   }
   P.noise=mouseDown&&mag>0?1:mv.noise;
 }
-function stepKind(){return specialRooms.some(r=>r.type==='lounge'&&RULES.insideRoom(r,P.pos.x,P.pos.z))?'carpet':'metal';}
+function stepKind(){if(outdoorNow)return specialRooms.some(r=>HollowVisuals.OUTDOOR_LOOKS?.[r.look]?.clad&&RULES.insideRoom(r,P.pos.x,P.pos.z))?'wood':'grass';return specialRooms.some(r=>r.type==='lounge'&&RULES.insideRoom(r,P.pos.x,P.pos.z))?'carpet':'metal';}
 // One camera-rig step per frame (loop and HollowTest.advance). Footsteps follow the rig's plant events.
 function updateCameraRig(dt){
   let dy=P.yaw-camPrevYaw;dy-=Math.round(dy/(2*Math.PI))*2*Math.PI;
@@ -1693,6 +1863,7 @@ function chargeCue(m,local){
   if(local&&stingerCD<=0&&Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z)<9){stingerCD=8;flashDanger();}
 }
 function updateMonster(m,dt){
+  if(m.boss){updateBoss(m,dt);return;}
   if(m.dead){if(m.g.visible){m.deadT+=dt;if(m.deadT>18)m.g.visible=false;}return;}
   if(m.dormant){updateSleeper(m,dt);return;}
   // Getting up off the floor: it cannot move or strike until it stands.
@@ -1819,7 +1990,10 @@ function animateMonster(m,dt){
   animIn.lunge=m.lungeBoost>0?1:(m.lungeT||0);animIn.stagger=m.stagger||0;animIn.turn=dt>0?dy/dt:0;
   animIn.watched=m.watched===true;animIn.time=t;animIn.effects=preferences.effects===true;animIn.dead=m.dead===true||m.dormant===true;
   const pose=m.anim.update(dt,animIn);
+  if(close&&kill.on)killJoints(pose);
   HollowMonsterAnim.apply(m.g,pose,m.pos.x,m.pos.z,m.yaw,close);
+  if(m.boss)bossPose(m,dt,close);
+  if(close&&kill.on)killPlace(m);
   if(pose.footstep&&!m.dead)onMonsterFootstep(m,pose.stepIntensity);
 }
 
@@ -1940,6 +2114,7 @@ function hitMonster(m,dmg,from,headshot,strength,info){
   if(info&&m.hp<=0){shot.force=info.deathForce;shot.region=info.region;shot.gib=!!info.gib;}
   if(m.hp>0)m.anim.hit(shot);
   if(from)m.lastSeen.set(from.x,0,from.z);else m.lastSeen.copy(P.pos);m.lost=0;
+  if(m.boss)bossHit(m,dmg,headshot);
   if(m.hp<=0){
     m.dead=true;m.dormant=false;m.wakeIn=-1;m.riseT=0;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
     m.anim.die(shot);fxKill=1;
@@ -1947,6 +2122,230 @@ function hitMonster(m,dmg,from,headshot,strength,info){
     showMsg(left?`${m.stats.name} down · ${left} threats remain.`:'The corridors are silent. Restore the exit power.',2.5);
   }else if(m.kind==='warden'&&noticeT<=0){noticeT=12;showMsg('It barely flinched. Save ammunition: break sight, lock a room, hide.',3.2);}
 }
+/* ---------- the Gravekeeper (S2's boss) ---------- */
+// It walks outside the 20-body pool, and so outside co-op (which never leaves B1): monsters[MAX_MON], added the first
+// time a boss floor starts. In its grave it counts as dead and unspawned, like an empty slot. act: grave, toll (the
+// bell), rise, then hunt and its attacks (windup > charge > recover, slamUp > recover, enrage at half health), dead.
+// It paths, slides along walls and squeezes between graves at the Warden's radius; its own 0.8 m body takes the
+// bullets and blocks the survivor.
+const BOSS_NAV=.58,BOSS_UP=new THREE.Vector3(0,1,0);
+let boss=null,bossBell=null,bellSwing=0,bellT=0,bellNext=0,checkpointBanner=false;
+function bossBody(){
+  if(boss)return boss;
+  const kind='gravekeeper',stats=RULES.MONSTERS[kind],voiceKind=kind,g=HollowVisuals.makeMonster(THREE,kind),anim=HollowMonsterAnim.create(kind,{seed:MAX_MON});
+  g.visible=false;scene.add(g);
+  boss={g,kind,stats,boss:true,voiceKind,pos:new THREE.Vector3(),yaw:0,state:'wander',path:[],repath:0,lastSeen:new THREE.Vector3(),lost:0,searchT:0,stepT:0,spotCD:0,hp:stats.hp,dead:true,deadT:0,stagger:0,voiceT:3,stalkT:0,watchT:0,flank:1,
+    lungeT:0,lungeCD:0,lungeBoost:0,attackT:0,screamT:0,senseT:0,seenTarget:null,heardTarget:null,anim,animYaw:0,watched:false,spawned:false,dormant:false,sleep:0,rate:0,rouser:null,wakeIn:-1,riseT:0,stirred:false,lay:[0,0,0,0,0,0],layR:.5,
+    act:'gone',actT:0,phase:1,sink:0,chargeCD:0,slamCD:0,dirX:0,dirZ:0,chargeLeft:0,enrage:false,summoned:0,downT:0,bashT:0,pose:{up:0,rear:0,low:0}};
+  monsters.push(boss);
+  return boss;
+}
+// Every start of a floor: on the boss floor the Gravekeeper lies in its grave before the gate; anywhere else it is gone.
+function setupBoss(){
+  const f=FLOOR().boss;
+  if(!f){if(boss){boss.act='gone';boss.g.visible=false;}return;}
+  const b=bossBody(),[gx,gz]=f.grave;
+  b.pos.set((gx+.5)*S,0,(gz+.5)*S);b.yaw=Math.PI;b.g.position.copy(b.pos);
+  b.dead=true;b.spawned=false;b.dormant=false;b.g.visible=false;b.hp=b.stats.hp;b.phase=1;b.act='grave';b.actT=0;b.sink=-b.stats.height-.4;b.state='wander';b.path=[];b.repath=0;
+  b.chargeCD=3;b.slamCD=2;b.attackT=0;b.stagger=0;b.enrage=false;b.summoned=0;b.deadT=0;b.downT=0;b.bashT=0;b.pose.up=b.pose.rear=b.pose.low=0;
+  b.anim.reset();b.g.userData.eyeMat.color.setHex(b.g.userData.eyeColor||0xff2a14);bellSwing=0;bellT=0;bellNext=0;
+}
+// While it is up (from the first toll until it falls) the gate stays chained and the bell is the only alarm.
+const BOSS_UP_ACTS=new Set(['toll','rise','hunt','windup','charge','slamUp','recover','enrage']);
+function bossHolds(){return !!(boss&&FLOOR().boss&&exitPowered&&!exitOpen&&boss.hp>0&&BOSS_UP_ACTS.has(boss.act));}
+// The cemetery gate is used: the bell tolls, and a moment later the Gravekeeper climbs out of its grave before the gate.
+function bossAwaken(){
+  const b=boss;if(!b||b.act!=='grave')return;
+  b.act='toll';b.actT=1.5;bellSwing=1;bellT=0;bellNext=0;
+}
+function bossRise(m){
+  const rise=2.6;
+  m.act='rise';m.actT=rise;m.dead=false;m.spawned=true;m.g.visible=true;m.state='search';m.hp=m.stats.hp;m.deadT=0;
+  m.yaw=Math.atan2(P.pos.x-m.pos.x,P.pos.z-m.pos.z);m.animYaw=m.yaw;m.g.position.copy(m.pos);m.g.rotation.set(0,m.yaw,0);
+  m.anim.reset();m.anim.scream(rise);m.sink=-m.stats.height-.4;
+  sRumble(m.pos.x,m.pos.z,rise+.4);sCreature(m,'wake');graveDirt(m.pos.x,m.pos.z,6);
+  hud.banner('THE GRAVEKEEPER',{tone:'danger',kicker:'It keeps the gate',duration:3.6});
+  if(localInDanger()){const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z);camFX.addTrauma(.5+.35*Math.max(0,1-d/25));playStinger('scare','gravekeeper');flashDanger();}
+  showMsg('Something climbed out of the grave before the gate. The gate will not open while it walks.',4.5);
+}
+function graveDirt(x,z,n){if(atm)for(let i=0;i<n;i++)atm.debris(x+rnd(-.9,.9),.12,z+rnd(-1.2,1.2),{dir:BOSS_UP,color:0x3a2c20,sparks:0});}
+function bellStep(dt){
+  if(!bossBell)return;
+  bellT+=dt;bellSwing=Math.max(0,bellSwing-dt*.09);bossBell.rotation.z=Math.sin(bellT*3.2)*.6*bellSwing;
+  if(bellSwing>.12&&bellT>=bellNext){bellNext=bellT+Math.PI*2/3.2;sBell(.35+.65*bellSwing);}
+}
+// (x, z) through the navigator at the Warden's radius, or straight at it when the way is clear.
+function bossPath(m,x,z){m.path=mazeNavigator?mazeNavigator.path(m.pos.x,m.pos.z,Math.max(S+.65,Math.min((W-1)*S-.65,x)),Math.max(S+.65,Math.min((W-1)*S-.65,z)),BOSS_NAV):[];}
+function bossMove(m,x,z,speed,dt,turn){
+  const dx=x-m.pos.x,dz=z-m.pos.z,d=Math.hypot(dx,dz);if(d<.001)return d;
+  const step=Math.min(d,speed*dt);m.pos.x+=dx/d*step;m.pos.z+=dz/d*step;
+  m.yaw=angLerp(m.yaw,Math.atan2(dx,dz),Math.min(1,dt*(turn||3)));return d;
+}
+function bossFollow(m,speed,dt){
+  if(!m.path.length)return;const [wx,wz]=m.path[0];
+  bossMove(m,wx,wz,speed,dt,3.5);if(Math.hypot(m.pos.x-wx,m.pos.z-wz)<.08)m.path.shift();
+}
+function bossFace(m,dt,rate){m.yaw=angLerp(m.yaw,Math.atan2(P.pos.x-m.pos.x,P.pos.z-m.pos.z),Math.min(1,dt*rate));}
+// Its blows go through damagePlayer as a copy of it carrying that blow's damage (the caught close-up shows it).
+function bossStrike(m,damage,message){
+  const blow=Object.create(m),before=P.health;blow.stats=Object.assign({},m.stats,{damage});
+  damagePlayer(blow);
+  if(caughtBy===blow)caughtBy=m;
+  if(P.health<before&&P.health>0&&message)showMsg(message,3);
+  return P.health<before;
+}
+function bossSlam(m){
+  const d=Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z),reach=4.5;
+  sThud(m.pos.x,.2,m.pos.z,1,60);audioAfter(.12,()=>sThud(m.pos.x,.4,m.pos.z,.55,140));sRumble(m.pos.x,m.pos.z,1.3);
+  if(atm)for(let k=0;k<8;k++){const a=k/8*Math.PI*2;atm.debris(m.pos.x+Math.cos(a)*1.7,.1,m.pos.z+Math.sin(a)*1.7,{dir:BOSS_UP,color:0x3b2e22,sparks:0});}
+  if(!localInDanger())return;
+  camFX.addTrauma(Math.max(.15,.8*(1-d/14)));
+  if(d<reach&&P.pos.y<.35&&los(m.pos.x,m.pos.z,P.pos.x,P.pos.z))bossStrike(m,m.phase===2?44:36,'The ground broke under you. When it raises its arms, get clear or jump.');
+}
+// Half its health gone: it screams, comes on faster and calls the dead up out of the graves around the gate (pool
+// slots MAX_MON - 3 and up, which S2 leaves free after its waking and sleeping bodies).
+function bossEnrage(m){
+  m.phase=2;m.act='enrage';m.actT=2;m.path=[];
+  m.anim.scream(2);sCreature(m,'scream');audioAfter(.6,()=>{if(!m.dead)sCreature(m,'howl');});
+  hud.banner('THE GRAVEKEEPER IS ENRAGED',{tone:'danger',kicker:'The dead answer it',duration:3});wakeBannerT=simulationTime;
+  m.g.userData.eyeMat.color.setHex(0xff4a1c);
+  if(localInDanger()){camFX.addTrauma(.5);flashDanger();}
+  showMsg('It screamed, and the graves around the gate are opening. Keep moving.',4);
+}
+function bossSummon(m){
+  const list=FLOOR().boss.summons;m.summoned=0;
+  list.forEach(([cx,cz],k)=>{
+    const slot=MAX_MON-list.length+k,o=monsters[slot];if(!o||!o.dead)return;
+    const x=(cx+.5)*S,z=(cz+.5)*S;
+    resetMonster(o,x,z,Math.atan2(P.pos.x-x,P.pos.z-z));layDown(o,slot);wakeMonster(o,{x:P.pos.x,z:P.pos.z});
+    monCount=Math.max(monCount,slot+1);graveDirt(x,z,4);sRumble(x,z,1.1);m.summoned++;
+  });
+}
+function bossHit(m,dmg,headshot){
+  m.stagger=0;
+  if(m.phase===1&&m.hp>0&&m.hp<=m.stats.hp*.5)m.enrage=true;
+}
+function bossDown(m){
+  m.act='dead';m.deadT=0;m.downT=0;m.spawned=true;m.path=[];
+  exitRelease=Math.min(exitRelease,3.5);alarmT=3.2;
+  scoreBase.points+=2500;hud.score(runScore().points);
+  hud.banner('THE GRAVEKEEPER FALLS',{tone:'objective',kicker:'The gate is unchaining',duration:3.5});
+  bellSwing=Math.max(bellSwing,.8);bellNext=bellT;
+  audioAfter(.9,()=>{sThud(m.pos.x,.3,m.pos.z,1,55);sRumble(m.pos.x,m.pos.z,1.6);if(localInDanger())camFX.addTrauma(.45);graveDirt(m.pos.x,m.pos.z,5);});
+  if(localInDanger())camFX.addTrauma(.5);
+  showMsg('It went down into the earth it came from. The gate is unchaining. RUN.',5);
+}
+function updateBoss(m,dt){
+  if(!FLOOR().boss||m.act==='gone')return;
+  bellStep(dt);
+  if(m.act==='grave')return;
+  if(m.act==='toll'){m.actT-=dt;if(m.actT<=0)bossRise(m);return;}
+  if(m.act==='dead'){
+    // The body lies a while, then the earth takes it back.
+    m.deadT+=dt;m.downT+=dt;
+    if(m.downT>4)m.sink=-Math.min(m.stats.height+.5,(m.downT-4)*.5);
+    if(m.downT>4&&m.downT<11&&Math.random()<dt*2.5)graveDirt(m.pos.x,m.pos.z,1);
+    if(m.downT>13){m.spawned=false;m.g.visible=false;}
+    return;
+  }
+  if(m.dead){if(m.hp<=0)bossDown(m);return;}
+  m.actT-=dt;m.attackT=Math.max(0,m.attackT-dt);m.chargeCD=Math.max(0,m.chargeCD-dt);m.slamCD=Math.max(0,m.slamCD-dt);
+  m.lungeT=Math.max(0,m.lungeT-dt);m.stagger=0;m.g.userData.speed=0;
+  if(m.act==='rise'){
+    const k=clamp01(1-m.actT/2.6);m.sink=(-m.stats.height-.4)*(1-ease(0,1,k));
+    if(Math.random()<dt*5)graveDirt(m.pos.x,m.pos.z,1);
+    if(m.actT<=0){m.act='hunt';m.sink=0;m.state='chase';m.repath=0;m.chargeCD=Math.max(m.chargeCD,2.5);sCreature(m,'scream');}
+    return;
+  }
+  if(!localInDanger()){updateMonsterAudio(m,dt,0);return;}
+  const tx=P.pos.x,tz=P.pos.z,d=Math.hypot(tx-m.pos.x,tz-m.pos.z),fast=m.phase===2?1.25:1,oldX=m.pos.x,oldZ=m.pos.z;
+  m.lastSeen.set(tx,0,tz);m.state='chase';
+  if(m.act==='enrage'){bossFace(m,dt,2);if(!m.summoned&&m.actT<1.3)bossSummon(m);if(m.actT<=0){m.act='hunt';m.repath=0;}}
+  else if(m.act==='windup'){
+    bossFace(m,dt,5);
+    if(m.actT<=0){const dx=tx-m.pos.x,dz=tz-m.pos.z,l=Math.max(.01,Math.hypot(dx,dz));m.dirX=dx/l;m.dirZ=dz/l;m.act='charge';m.chargeLeft=Math.min(22,l+5);m.lungeT=.3;sCreature(m,'scream');}
+  }else if(m.act==='charge'){
+    // A straight run at three times its chase: it stops at the first wall, grave or body in the way.
+    let left=m.stats.chase*3*fast*dt,blocked=false;
+    while(left>1e-4&&!blocked&&m.act==='charge'){
+      const step=Math.min(.2,left),bx=m.pos.x,bz=m.pos.z;left-=step;
+      m.pos.x+=m.dirX*step;m.pos.z+=m.dirZ*step;resolve(m.pos,BOSS_NAV);
+      const went=Math.hypot(m.pos.x-bx,m.pos.z-bz);m.chargeLeft-=went;
+      if(went<step*.5)blocked=true;
+      if(Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z)<m.stats.radius+PR+.3&&P.pos.y<1.6){
+        bossStrike(m,m.phase===2?62:54,'It ran you down. Step aside when it rears back.');m.act='recover';m.actT=1.1;
+      }
+    }
+    m.yaw=angLerp(m.yaw,Math.atan2(m.dirX,m.dirZ),Math.min(1,dt*8));
+    if(m.act==='charge'&&blocked){
+      m.act='recover';m.actT=1.7;sThud(m.pos.x,1.2,m.pos.z,.9,70);graveDirt(m.pos.x+m.dirX*.8,m.pos.z+m.dirZ*.8,3);
+      if(Math.hypot(P.pos.x-m.pos.x,P.pos.z-m.pos.z)<14)camFX.addTrauma(.35);
+    }else if(m.act==='charge'&&m.chargeLeft<=0){m.act='recover';m.actT=.9;}
+  }else if(m.act==='slamUp'){bossFace(m,dt,2.5);if(m.actT<=0){bossSlam(m);m.act='recover';m.actT=1.05;}}
+  else if(m.act==='recover'){bossFace(m,dt,1.2);if(m.actT<=0){m.act='hunt';m.repath=0;}}
+  else{
+    if(m.enrage){m.enrage=false;bossEnrage(m);}
+    else if(m.slamCD<=0&&d<3.4){m.act='slamUp';m.actT=m.phase===2?.65:.85;m.slamCD=m.phase===2?4.5:6.5;m.anim.scream(1);sCreature(m,'growl');}
+    else if(m.chargeCD<=0&&d>5&&d<17&&movementClear(m.pos.x,m.pos.z,tx,tz,BOSS_NAV)){m.act='windup';m.actT=m.phase===2?.7:.95;m.chargeCD=m.phase===2?4.5:6.5;m.anim.scream(1.1);sCreature(m,'notice');}
+    else{
+      const speed=m.stats.chase*fast,shelter=currentShelter(),door=shelter&&roomDoors.find(o=>o.room===shelter&&!o.open&&o.health>0);
+      if(door){
+        // Shut in a refuge: it beats the door down.
+        const fx=door.box.x,fz=door.box.z+1.3,dd=Math.hypot(fx-m.pos.x,fz-m.pos.z);
+        if(dd<.6){m.yaw=angLerp(m.yaw,Math.atan2(door.box.x-m.pos.x,door.box.z-m.pos.z),Math.min(1,dt*4));door.health-=dt*(door.locked?8:14);m.bashT-=dt;
+          if(m.bashT<=0){m.bashT=1.1;m.lungeT=.3;m.anim.attack();sThud(door.box.x,1,door.box.z,.6,65);if(Math.hypot(P.pos.x-door.box.x,P.pos.z-door.box.z)<8)camFX.addTrauma(.2);}
+          if(door.health<=0){door.open=true;door.locked=false;door.revision++;showMsg('It tore the door off. Get out of there.',3);}}
+        else{m.repath-=dt;if(m.repath<=0){bossPath(m,fx,fz);m.repath=.5;}bossFollow(m,speed,dt);}
+      }else if(movementClear(m.pos.x,m.pos.z,tx,tz,BOSS_NAV)){bossMove(m,tx,tz,speed,dt,3);m.path=[];}
+      else{m.repath-=dt;if(m.repath<=0){bossPath(m,tx,tz);m.repath=.45;}bossFollow(m,speed,dt);}
+      if(d<m.stats.radius+PR+.55&&m.attackT<=0&&P.pos.y<1.6&&los(m.pos.x,m.pos.z,tx,tz)){m.attackT=m.phase===2?1.1:1.5;m.lungeT=.3;bossStrike(m,m.stats.damage,'The Gravekeeper hits like a falling tree. Keep your distance.');}
+    }
+  }
+  resolve(m.pos,BOSS_NAV);
+  if(m.act!=='charge'&&(P.pos.y||0)<m.stats.height&&RULES.blocksCircleMove({x:oldX,z:oldZ},m.pos,m.stats.radius,{x:P.pos.x,z:P.pos.z,r:PR})){m.pos.x=oldX;m.pos.z=oldZ;}
+  m.pos.y=0;m.g.position.copy(m.pos);m.g.rotation.y=m.yaw;
+  const moved=Math.hypot(m.pos.x-oldX,m.pos.z-oldZ);m.g.userData.speed=moved/Math.max(dt,.001);m.g.userData.chasing=true;
+  updateMonsterAudio(m,dt,moved);
+}
+// After HollowMonsterAnim.apply: how deep it stands (rising, or a body sinking), and its telegraphs: arms raised before
+// the slam, reared back before the charge, head down in it.
+function bossPose(m,dt,close){
+  if(close)return;
+  const g=m.g,u=g.userData,o=m.pose,k=1-Math.exp(-dt*9);
+  g.position.y+=m.sink;
+  o.up+=((m.act==='slamUp'?1:0)-o.up)*k;o.rear+=((m.act==='windup'?1:0)-o.rear)*k;o.low+=((m.act==='charge'?1:0)-o.low)*k;
+  if(m.dead)return;
+  if(u.armL&&u.armR){const a=-2.5*o.up+.9*o.rear;u.armL.rotation.x+=a;u.armR.rotation.x+=a;u.armL.rotation.z-=.35*o.up;u.armR.rotation.z+=.35*o.up;}
+  g.rotation.x+=.3*o.low-.22*o.rear-.12*o.up;
+}
+function aboveGroundHUD(){
+  if(checkpointBanner&&simulationTime>.5){checkpointBanner=false;hud.banner('CHECKPOINT REACHED',{tone:'info',kicker:`${FLOOR().code} · ${FLOOR().name}`,duration:4.5});}
+  const b=boss,show=!!(b&&FLOOR().boss&&!b.dead&&b.act!=='toll'&&BOSS_UP_ACTS.has(b.act)),bar=$('bossBar');
+  if(bar.hidden===show)bar.hidden=!show;
+  if(show){$('bossFill').style.width=(Math.max(0,b.hp)/b.stats.hp*100).toFixed(1)+'%';bar.classList.toggle('enraged',b.phase===2);}
+}
+function bossSnapshot(){
+  const b=boss;if(!b||!FLOOR().boss)return null;
+  return {kind:b.kind,act:b.act,hp:b.hp,maxHp:b.stats.hp,phase:b.phase,x:b.pos.x,z:b.pos.z,dead:b.dead,visible:b.g.visible,holding:bossHolds(),summoned:b.summoned,sink:b.sink,
+    bell:bossBell?bossBell.rotation.z:null};
+}
+function sBell(volume){
+  if(!AC||!bossBell)return;const n=AC.currentTime,p=makePanner(8,.6);setPos(p,bossBell.position.x,bossBell.position.y,bossBell.position.z);
+  for(const [ratio,amp,decay] of [[.5,.45,6],[1,1,5],[2.01,.55,3.6],[2.42,.42,3],[3,.3,2.4],[4.18,.2,1.6]]){
+    const o=AC.createOscillator(),g=AC.createGain();o.type='sine';o.frequency.value=196*ratio;o.connect(g);g.connect(p);
+    g.gain.setValueAtTime(.0001,n);g.gain.exponentialRampToValueAtTime(Math.max(.0002,volume*amp*.22),n+.008);g.gain.exponentialRampToValueAtTime(.0001,n+decay);o.start(n);o.stop(n+decay+.1);}
+  logCue('world','bell');
+}
+function sRumble(x,z,duration){
+  if(!AC)return;const n=AC.currentTime,p=makePanner(6,.7);setPos(p,x,.2,z);
+  const s=noiseSrc(true),f=AC.createBiquadFilter(),g=AC.createGain();f.type='lowpass';f.frequency.value=90;s.connect(f);f.connect(g);g.connect(p);
+  g.gain.setValueAtTime(.0001,n);g.gain.exponentialRampToValueAtTime(.9,n+.25);g.gain.exponentialRampToValueAtTime(.0001,n+duration);s.start(n,Math.random());s.stop(n+duration+.1);
+  const o=AC.createOscillator(),og=AC.createGain();o.frequency.setValueAtTime(48,n);o.frequency.exponentialRampToValueAtTime(28,n+duration);o.connect(og);og.connect(p);
+  og.gain.setValueAtTime(.0001,n);og.gain.exponentialRampToValueAtTime(.6,n+.2);og.gain.exponentialRampToValueAtTime(.0001,n+duration);o.start(n);o.stop(n+duration+.1);
+  logCue('world','rumble');
+}
+// Seconds since the drawn gun last fired: the bolt-action and the revolver work their bolt and cylinder by it.
+let shotT=9;
 function updateGun(dt){
   const visible=gunOut&&['play','caught','pause'].includes(state);
   weaponModels.forEach((model,i)=>{model.visible=visible&&i===weaponIndex;if(!model.visible)model.userData.muzzleFlash.visible=false;});
@@ -1954,7 +2353,9 @@ function updateGun(dt){
   if(!visible){setLight(muzzleLight,0);setLight(fpFlash,0);return;}
   if(state==='pause')return;
   const w=weaponDefs[weaponIndex];fireT-=dt;
+  const loaded=mag;
   if(state==='play'&&(mouseDown||fireQueued)&&fireT<=0&&!P.running&&(w.automatic||!semiFired))fire();
+  shotT=mag<loaded?0:shotT+dt;
   if(reloadT>0){reloadT=Math.max(0,reloadT-dt);if(reloadT===0){const take=infiniteAmmo()?w.capacity-mag:Math.min(w.capacity-mag,reserve);mag+=take;if(!infiniteAmmo())reserve-=take;weapons[weaponIndex]={mag,reserve};}}
   gunKick*=Math.exp(-dt*15);flashT-=dt;
   const progress=reloadT>0?1-reloadT/w.reload:0,rp=reloadT>0?Math.sin(Math.PI*progress):0;
@@ -1964,20 +2365,90 @@ function updateGun(dt){
   const wp=camFX.pose.weapon;
   gun.position.set(lerp(GUN_BASE.x,.025,ak)+rk*.04+wp.x,lerp(GUN_BASE.y,-.12,ak)-rp*.16-rk*.08+wp.y,GUN_BASE.z+ak*.07+wp.z);
   gun.rotation.set(rp*.45-rk*.35+wp.pitch,rk*.38+wp.yaw,rp*.6+wp.roll);
+  if(gun.userData.view){const v=gun.userData.view;gun.position.x+=lerp(v.hip[0],v.aim[0],ak);gun.position.y+=lerp(v.hip[1],v.aim[1],ak);gun.position.z+=lerp(v.hip[2],v.aim[2],ak);}
   if(gunMag)gunMag.visible=!(reloadT>0&&progress>.3&&progress<.65);
   if(gun.userData.bolt)gun.userData.bolt.position.z=(gun.userData.bolt.userData.restZ||0)+gunKick*.025;
+  // A gun with its own action (revolver, bolt-action, belt feed) poses its magazine and bolt itself.
+  if(gun.userData.pose)gun.userData.pose(reloadT>0?progress:-1,gunKick,shotT);
   const flashing=preferences.effects&&flashT>0;
   if(muzzleFlash){muzzleFlash.visible=flashing;if(flashing)muzzleFlash.rotation.z=Math.random()*6.28;}
   setLight(muzzleLight,flashing?3:0);setLight(fpFlash,flashing?3:0);
 }
 
 /* ---------- map ---------- */
-const mapCtx=$('map').getContext('2d');
+const mapEl=$('map'),mapCtx=mapEl.getContext('2d');
 function markVisited(){
   const cx=Math.floor(P.pos.x/S),cz=Math.floor(P.pos.z/S);
   if(cx>=0&&cz>=0&&cx<W&&cz<W)visited[cz*W+cx]=1;
 }
+// The plan is drawn in 150 units; the canvas behind it matches its shown size at the screen's pixel density (the minimap
+// and the M floor plan), measured by a ResizeObserver so drawing never forces a layout.
+let mapCss=0,mapGuns=[];
+if(window.ResizeObserver)new ResizeObserver(entries=>{const w=entries[0].contentRect.width;if(w>0&&w!==mapCss){mapCss=w;mapT=0;}}).observe(mapEl);
+function mapBacking(){
+  const css=mapCss||mapEl.clientWidth||112,dpr=Math.min(2,Math.max(1,window.devicePixelRatio||1)),size=Math.max(64,Math.round(css*dpr));
+  if(mapEl.width!==size){mapEl.width=size;mapEl.height=size;}
+  mapCtx.setTransform(size/150,0,0,size/150,0,0);
+  return {css,size};
+}
+// Gun pickups on the plan: a silhouette of each gun, muzzle east, in a 14-unit-high box `w` units long. Parts: r rect,
+// q rounded rect, p polygon, c circle, l line [x0,y0,x1,y1,width]; tone 1 metal, 2 furniture.
+const GUN_ICONS={
+  rifle:{w:32,parts:[[2,'p',0,4.2,6.5,3.8,6.5,7.6,1.2,9,0,9],[1,'r',6,3.6,2,3],[1,'r',7.5,3,9.5,4],[1,'r',9,1.6,5,1.4],[2,'r',17,3.3,7.5,3.4],
+    [1,'p',23.2,1.6,24.4,1.6,24.4,3.4,23.2,3.4],[1,'r',24.5,4.4,7.5,1.1],[2,'p',9.6,7,12.2,7,11.2,11.2,8.4,11.2],[2,'p',13.2,7,16.2,7,17.6,12.4,14.8,12.9]]},
+  pistol:{w:18,parts:[[2,'p',1.2,5.4,6.8,5.4,5.6,13,0,12.6],[2,'r',3.5,5.4,13.5,1.6],[2,'p',6.6,7,10,7,9,9.4,6.4,9.4],[1,'r',.5,2.2,17.5,3.4]]},
+  shotgun:{w:32,parts:[[2,'p',0,6.2,8.5,4.2,8.5,7.6,2.2,10.4,0,10.4],[1,'r',8.3,3.4,6.7,4],[1,'r',15,3.6,17,1.4],[1,'r',15,5.2,13.5,1.3],
+    [2,'q',17.5,4.6,7.5,3.2,.8],[1,'c',31.3,3.3,.6],[1,'p',10,7.4,13,7.4,12.6,8.8,10.2,8.8]]},
+  smg:{w:24,parts:[[2,'r',0,3,1.4,5.8],[1,'r',1,3.8,4,1.1],[1,'r',1,6,4,1.1],[1,'r',4.2,3,12.3,3.8],[1,'c',6.2,2.7,1.2],[1,'r',15.6,1.6,1.6,1.6],
+    [1,'r',12,2.2,6.5,1],[2,'r',12.6,4,5.8,3.6],[1,'r',18.4,4.2,3.6,1.2],[2,'r',21,3.7,3,2.2],[2,'p',6.4,6.8,9,6.8,8,11.4,5.4,11.4],[2,'p',10.2,6.8,12.6,6.8,13.4,13.8,11,13.8]]},
+  magnum:{w:24,parts:[[2,'p',2.4,6.2,6,6.2,5.6,9,4.8,13.2,2.4,13.6,.4,12.6,1.4,9],[1,'p',.8,.6,2.4,1.8,3.2,3.2,1.8,3],[1,'r',2.5,1.8,8.5,1],[1,'r',2.5,2.4,3,4.4],
+    [1,'p',6,6.6,8.8,6.6,8,9,5.8,9],[1,'r',10,3.1,14,2.1],[1,'r',10,5.2,12.8,1.5],[1,'p',22,1.6,23.4,1.6,23.6,3.1,21.6,3.1],[2,'q',5,2.1,5.6,6,1.3]]},
+  marksman:{w:36,parts:[[2,'p',0,4.4,3,4.4,5.5,6,9.5,6.4,23.5,6.2,23.5,7.8,9.5,8.8,4.5,10.4,0,11],[2,'p',7.4,8,9.8,8,9.4,11.8,6.8,11.8],
+    [1,'r',10,4.8,9,1.8],[1,'p',19,4.9,36,5.2,36,6,19,6.3],[1,'r',11.2,3.4,1.2,1.6],[1,'r',17,3.4,1.2,1.6],[1,'r',9,2.2,12,1.4],
+    [1,'p',20,2.2,22,1.2,23.2,1.2,23.2,4.6,22,4.6,20,3.6],[1,'p',7,1.6,9.6,1.9,9.6,3.9,7,4.2],[1,'r',14.2,1,1.6,1.4],[1,'l',12.2,6.4,12.8,8.3,.7],[1,'c',12.8,8.4,1.1]]},
+  lmg:{w:34,parts:[[2,'p',0,3.4,7,4,7,8.2,0,9.6],[1,'l',27,6,25,13.4,.9],[1,'l',28,6,30.4,13.4,.9],[1,'r',7,2.8,12,5.2],[1,'r',8.5,1.8,9,1.2],
+    [1,'r',20,.6,5,1.1],[1,'r',20.5,1.5,.9,2],[1,'r',23.6,1.5,.9,2],[1,'r',19,4.2,12,1.3],[2,'r',19,4.4,6,3.2],[1,'r',31,3.8,3,2.1],[1,'r',28.4,2,.9,2.4],
+    [2,'p',8,8,10.6,8,9.6,12,7,12],[2,'q',11,8,6.6,5.6,.7]]}
+};
+const gunIconCache=new Map();
+function gunIconPath(part){
+  const p=new Path2D(),[,type,...v]=part;
+  if(type==='r')p.rect(v[0],v[1],v[2],v[3]);
+  else if(type==='q'){const [x,y,w,h,r]=v;p.moveTo(x+r,y);p.arcTo(x+w,y,x+w,y+h,r);p.arcTo(x+w,y+h,x,y+h,r);p.arcTo(x,y+h,x,y,r);p.arcTo(x,y,x+w,y,r);p.closePath();}
+  else if(type==='c')p.arc(v[0],v[1],v[2],0,Math.PI*2);
+  else if(type==='l'){p.moveTo(v[0],v[1]);p.lineTo(v[2],v[3]);}
+  else{p.moveTo(v[0],v[1]);for(let i=2;i<v.length;i+=2)p.lineTo(v[i],v[i+1]);p.closePath();}
+  return p;
+}
+// One gun's icon at `unit` device pixels per icon unit: a soft shadow, a black outline round the whole shape, then the
+// parts in two tones. Painted once per kind and size, then only drawImage'd.
+function gunIcon(kind,unit){
+  const key=kind+':'+unit.toFixed(3);let icon=gunIconCache.get(key);if(icon)return icon;
+  if(gunIconCache.size>40)gunIconCache.clear();
+  const shape=GUN_ICONS[kind]||GUN_ICONS.rifle,line=Math.max(1.4,unit*.85),pad=Math.ceil(line*2+2);
+  const canvas=document.createElement('canvas');canvas.width=Math.ceil(shape.w*unit)+pad*2;canvas.height=Math.ceil(14*unit)+pad*2;
+  const x=canvas.getContext('2d');
+  x.translate(pad,pad);x.scale(unit,unit);x.lineJoin=x.lineCap='round';
+  const parts=shape.parts.map(part=>({part,path:gunIconPath(part),stroke:part[1]==='l'?part[6]:0}));
+  for(const [color,extra] of [['rgba(0,0,0,.4)',2.4],['#080a09',0]])for(const {path,stroke} of parts){
+    x.strokeStyle=color;x.lineWidth=(line*2+extra)/unit+stroke;x.stroke(path);}
+  for(const {part,path,stroke} of parts){const tone=part[0]===1?'#eef0ea':'#a7b3b5';
+    if(stroke){x.strokeStyle=tone;x.lineWidth=stroke;x.stroke(path);}else{x.fillStyle=tone;x.fill(path);}}
+  icon={canvas,w:canvas.width,h:canvas.height,pad};gunIconCache.set(key,icon);return icon;
+}
+// Untaken guns on this floor, each centred on where it lies. mapGuns keeps where they were drawn (CSS px on the map).
+function drawGunIcons(c,css,size){
+  const scale=size/css,base=Math.max(Math.min(15,css*.17),Math.min(44,css*.078)),unit=base*scale/32;
+  c.save();c.setTransform(1,0,0,1,0,0);mapGuns=[];
+  for(const l of roomLoot)if(l.type==='weapon'&&!l.taken&&l.g.visible){
+    const kind=weaponDefs[l.weapon].id,icon=gunIcon(kind,unit),x=l.x/(W*S)*size,z=l.z/(W*S)*size;
+    c.drawImage(icon.canvas,Math.round(x-icon.w/2),Math.round(z-icon.h/2));
+    mapGuns.push({id:l.id,kind,x:x/scale,z:z/scale,w:(icon.w-icon.pad*2)/scale,h:(icon.h-icon.pad*2)/scale});
+  }
+  c.restore();
+}
 function drawMap(){
+  const {css,size}=mapBacking();
   const c=mapCtx,sz=150,k=sz/W;c.clearRect(0,0,sz,sz);
   for(let z=0;z<W;z++)for(let x=0;x<W;x++){
     if(visited[z*W+x]){c.fillStyle='rgba(216,208,194,.42)';c.fillRect(x*k,z*k,k+0.5,k+0.5);continue;}
@@ -1990,9 +2461,8 @@ function drawMap(){
     if(r.shelter){c.strokeStyle='#89c7b7';c.lineWidth=1;c.strokeRect(x-2,z-2,4,4);}
     if(r.fuse&&!roomLoot.find(l=>l.room===r&&l.type==='fuse')?.taken){c.fillStyle='#e6b979';c.beginPath();c.moveTo(x,z-3);c.lineTo(x+3,z);c.lineTo(x,z+3);c.lineTo(x-3,z);c.fill();}
   }
-  // Guns not taken yet: a grey cross.
-  c.strokeStyle='#cfd6dc';c.lineWidth=1.5;
-  for(const l of roomLoot)if(l.type==='weapon'&&!l.taken&&l.g.visible){const x=l.x/S*k,z=l.z/S*k;c.beginPath();c.moveTo(x-3,z);c.lineTo(x+3,z);c.moveTo(x,z-3);c.lineTo(x,z+3);c.stroke();}
+  // Guns not taken yet: a silhouette of each.
+  drawGunIcons(c,css,size);
   c.fillStyle=exitPowered?'#96eac5':'#df6f4d';c.fillRect((W-1)*k,(W-2)*k,k,k);
   if(visited[(W-2)*W+(W-1)]){c.fillStyle='#ff3322';c.fillRect((W-1)*k,(W-2)*k,k,k);}
   const px=P.pos.x/S*k,pz=P.pos.z/S*k,fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw);
@@ -2022,28 +2492,136 @@ function updateTorch(dt){
 }
 
 /* ---------- caught ---------- */
+// The kill: HollowKillCam plays the creature's own choreography (camera, body, joints, timed blows), HollowKillFX
+// paints the lens and HollowKillAudio the gore. The kill frame is fixed when it starts: the survivor's feet and the
+// bearing to the creature (body frame: x right, y up, f forward).
+const killCam=HollowKillCam.create(),killFX=window.HollowKillFX?HollowKillFX.create():null;
+let killAudio=null,killKind=null;
+const kill={on:false,hold:false,m:null,x:0,y:0,z:0,yaw:0,fx:0,fz:-1,rx:1,rz:0,face:{x:0,y:0,f:1},faceSeen:false,faceAt:new THREE.Vector3(),
+  local:new THREE.Vector3(),off:new THREE.Vector3(),eye:new THREE.Vector3(),view:new THREE.Vector3(),dir:new THREE.Vector3(),voice:'stalker',shadows:[]};
+const KILL_JOINTS=HollowKillCam.JOINTS;
 function caught(m){
   if(!localInDanger())return;
   if(state==='pause'){showScreen(null);}
   state='caught';caughtT=0;caughtBy=m;torchOn=true;mouseDown=false;
-  stopAudio();sCreature(m,'attack');m.anim.scream(1.5);$('hud').hidden=true;
+  stopAudio();$('hud').hidden=true;$('msg').style.opacity=0;msgTimer=0;
   audioOnCaught(m);
+  startKill(m,killKind||m.kind);
 }
-function updateCaught(dt){
-  caughtT+=dt;const g=caughtBy.g;
-  const fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw),camY=P.pos.y+EYE;
-  g.position.set(P.pos.x+fx*0.72,camY-caughtBy.g.userData.headHeight,P.pos.z+fz*0.72);g.rotation.set(0,Math.atan2(-fx,-fz),0);
-  P.pitch+=(0-P.pitch)*Math.min(1,dt*12);
-  setLight(spot,preferences.effects?3.2*(1-ease(.3,1.6,caughtT)):2.6);
-  $('flash').style.opacity=0;danger=1;
-  if(caughtT>1.6&&NET.inGame){coopLocalDone('dead');return;}
-  if(caughtT>1.6){
-    state='dead';hideMonsters();setLight(spot,0);$('flash').style.opacity=0;gun.visible=false;
-    const lasted=Math.round(elapsed*10)/10,m=Math.floor(lasted/60),s=Math.floor(lasted%60),own=runScore();
-    $('deadText').textContent=`You lasted ${m}:${String(s).padStart(2,'0')} in the dark${floor?`, down to ${FLOOR().code} · ${FLOOR().name}`:''}. The corridors are quiet again.`;
-    $('retryDark').textContent=checkpoint&&checkpoint.floor?`Retry ${FLOOR().code} · ${FLOOR().name}`:'Re-enter the ward';
-    showScreen('dead');recordRun({mode:'solo',escaped:false,time:elapsed,kills:own.kills,score:own.points},'deadRank');try{document.exitPointerLock();}catch(e){}
+// Free space from the survivor along (dx, dz), at knee and chest height, up to `max` metres.
+function killClear(dx,dz,max){for(let d=.1;d<max;d+=.1)if(blocksRay(P.pos.x+dx*d,.3,P.pos.z+dz*d)||blocksRay(P.pos.x+dx*d,1.1,P.pos.z+dz*d))return d;return max;}
+function startKill(m,kind){
+  const dx=m.pos.x-P.pos.x,dz=m.pos.z-P.pos.z,d=Math.hypot(dx,dz),yaw=d>.05?Math.atan2(-dx,-dz):P.yaw;
+  kill.on=true;kill.m=m;kill.x=P.pos.x;kill.y=P.pos.y;kill.z=P.pos.z;kill.yaw=yaw;kill.faceSeen=false;
+  kill.fx=-Math.sin(yaw);kill.fz=-Math.cos(yaw);kill.rx=Math.cos(yaw);kill.rz=-Math.sin(yaw);
+  const f=HollowKillCam.FACE[m.kind]||HollowKillCam.FACE[kind]||HollowKillCam.FACE.stalker;kill.local.set(f[0],f[1],f[2]);
+  kill.voice=HollowAudio.KIND_NAMES.includes(m.kind)?m.kind:'stalker';
+  let yaw0=P.yaw-yaw;yaw0-=Math.round(yaw0/(2*Math.PI))*2*Math.PI;
+  killCam.start(kind,{motion:preferences.motion,effects:preferences.effects,yaw0,pitch0:P.pitch,eye0:P.eye,dist0:d,ceiling:H,seed:monsters.indexOf(m)+1,
+    back:killClear(-kill.fx,-kill.fz,4),left:killClear(-kill.rx,-kill.rz,3),right:killClear(kill.rx,kill.rz,3)});
+  if(killFX)killFX.start({effects:preferences.effects,seed:(Math.random()*1e9)|0});
+  if(AC&&!killAudio&&window.HollowKillAudio){try{killAudio=HollowKillAudio.create({context:AC,output:master,noiseBuffer:noiseBuf});}catch(e){killAudio=null;}}
+  m.g.rotation.order='YXZ';
+  // At arm's length the creature's body would shadow the whole torch beam: it stops casting for the kill.
+  for(const o of kill.shadows)o.castShadow=true;kill.shadows.length=0;m.g.traverse(o=>{if(o.isMesh&&o.castShadow){o.castShadow=false;kill.shadows.push(o);}});
+  killEvents(killCam.pose);
+}
+// World eye position and view direction of the current kill camera.
+function killEye(){
+  const c=killCam.pose.cam,Y=kill.yaw+c.yaw,cp=Math.cos(c.pitch);
+  kill.eye.set(kill.x+kill.rx*c.x+kill.fx*c.f,kill.y+c.y,kill.z+kill.rz*c.x+kill.fz*c.f);
+  kill.view.set(-Math.sin(Y)*cp,Math.sin(c.pitch),-Math.cos(Y)*cp);
+}
+function killEvents(p){
+  if(!p.eventCount)return;
+  const fxOn=preferences.effects,gore=fxOn?1:.35;killEye();
+  for(let i=0;i<p.eventCount;i++){const e=p.events[i];
+    if(e.type==='sfx'){if(killAudio&&killAudio.play(e.cue,{level:e.a,effects:fxOn,kind:p.track})!=null)logCue('kill',e.cue,p.track);}
+    else if(e.type==='voice'){const w=kill.faceSeen?kill.faceAt:kill.eye;sVoice(kill.voice,e.cue,w.x,w.y,w.z,1);}
+    else if(e.type==='heart'){if(killAudio)killAudio.heart(e.a,e.b);}
+    else if(e.type==='flat'||e.type==='skip'){if(killAudio){killAudio.heart(0);if(e.type==='flat')killAudio.play('flat',{effects:fxOn});}}
+    else if(e.type==='blood'){if(killFX)killFX.blood(e.b,e.c,e.a*(fxOn?1:.6));}
+    else if(e.type==='spray'){
+      // Lens blood is the overlay's: the world spray bursts off to one side of the view (its mist would fill the
+      // screen in front of the lens) and rains onto the floor.
+      if(atm){const s=Math.random()<.5?-1:1,h=Math.hypot(kill.view.x,kill.view.z)||1;
+        kill.dir.set(kill.eye.x+kill.view.x*.9-s*kill.view.z/h*.6,Math.max(.25,kill.eye.y+kill.view.y*.9-.25),kill.eye.z+kill.view.z*.9+s*kill.view.x/h*.6);
+        _atmNd.set(-s*kill.view.z/h,.8,s*kill.view.x/h);atm.blood(kill.dir.x,kill.dir.y,kill.dir.z,{dir:_atmNd,amount:Math.min(3,e.a*1.5*gore)});}
+    }else if(e.type==='crack'){if(killFX)killFX.crack(e.a,e.b,e.c);}
+    else if(e.type==='dirt'){if(killFX)killFX.dirt(e.b,e.c,e.a);if(atm)atm.debris(kill.eye.x,kill.eye.y+1.4,kill.eye.z,{dir:_atmNd.set(0,-1,0),color:0x3a2a1c,sparks:0});}
   }
+}
+function updateCaught(dt,force){
+  caughtT+=dt;
+  const p=killCam.update(kill.hold&&!force?0:dt,kill.faceSeen?kill.face:null),f=p.fx;
+  killEvents(p);
+  if(killAudio)killAudio.update(dt);
+  setLight(spot,(preferences.effects?3.2:2.6)*f.light);setLight(bounce,.55*f.light);
+  if(killFX)killFX.update(dt,f);
+  if(!(fx&&fx.enabled))killCss(f);
+  $('flash').style.opacity=0;danger=1;
+  if(!p.done)return;
+  if(NET.inGame){killEnd();coopLocalDone('dead');return;}
+  state='dead';hideMonsters();setLight(spot,0);$('flash').style.opacity=0;gun.visible=false;
+  const lasted=Math.round(elapsed*10)/10,m=Math.floor(lasted/60),s=Math.floor(lasted%60),own=runScore();
+  $('deadText').textContent=`${p.line} You lasted ${m}:${String(s).padStart(2,'0')} in the dark${floor?`, ${FLOOR().outdoor?'out in':'down to'} ${FLOOR().code} · ${FLOOR().name}`:''}. ${FLOOR().outdoor?'The night is quiet again.':'The corridors are quiet again.'}`;
+  $('retryDark').textContent=checkpoint&&checkpoint.floor?`Retry ${FLOOR().code} · ${FLOOR().name}`:'Re-enter the ward';
+  showScreen('dead');recordRun({mode:'solo',escaped:false,time:elapsed,kills:own.kills,score:own.points},'deadRank');try{document.exitPointerLock();}catch(e){}
+}
+// The kill pose on the creature's joints (the rest of the live pose stays: legs keep their stance).
+function killJoints(pose){
+  const k=killCam.pose,J=pose.joints;
+  for(let i=0;i<KILL_JOINTS.length;i++){const j=J[KILL_JOINTS[i][0]];if(!j)continue;const a=KILL_JOINTS[i][1];if(k.jointSet[i])j[a]=k.joints[i];else j[a]+=k.joints[i];}
+}
+// Places the creature so its face lands on the track's face target (or its feet on the floor when grounded), from
+// the posed rig itself, so any model (or a stand-in) is framed the same way.
+function killPlace(m){
+  const g=m.g,u=g.userData,mo=killCam.pose.mon,c=killCam.pose.cam;
+  g.rotation.set(mo.pitch,kill.yaw+mo.yaw,mo.roll);g.position.set(0,0,0);g.visible=true;g.updateMatrixWorld(true);
+  const off=u.head?u.head.localToWorld(kill.off.copy(kill.local)):kill.off.set(0,u.headHeight||2,0);
+  const tx=mo.x+mo.follow*c.x,ty=mo.y+mo.follow*c.y,tf=mo.f+mo.follow*c.f;
+  const wx=kill.x+kill.rx*tx+kill.fx*tf,wz=kill.z+kill.rz*tx+kill.fz*tf;
+  const py=lerp(kill.y+ty-off.y,kill.y+mo.drop,clamp01(mo.ground));
+  g.position.set(wx-off.x,py,wz-off.z);
+  kill.face.x=tx;kill.face.f=tf;kill.face.y=py+off.y-kill.y;kill.faceSeen=true;kill.faceAt.set(wx,py+off.y,wz);
+}
+// The kill camera replaces the rig's view; the gun is knocked out of the hands.
+function killView(cam){
+  const c=killCam.pose.cam;killEye();
+  camera.position.copy(kill.eye);camera.rotation.set(c.pitch,kill.yaw+c.yaw,c.roll);cam.fov=c.fov;
+  const g=killCam.pose.fx.gun;
+  if(g>0){gun.position.y-=g*.6;gun.position.x+=g*.14;gun.rotation.z+=g*1.5;gun.rotation.x-=g*.9;if(g>=.999)gun.visible=false;}
+}
+function killPost(u){
+  const f=killCam.pose.fx;
+  u.danger.value=1;u.damage.value=Math.max(u.damage.value,Math.min(1,f.flash*.8+f.red*.45));u.health.value=1-.9*Math.min(1,f.tunnel);
+  u.saturation.value*=1-.85*Math.min(1,f.desat);u.killFlash.value=0;
+  if(u.aberration)u.aberration.value=Math.min(1,f.aberr+f.flash*.3);
+  if(u.slowmo)u.slowmo.value=Math.min(1,f.blur)*(preferences.motion?1:.3);
+}
+// Without the post pipeline the kill grades the canvas itself: drained, hardened, blurred, and warped by a scream.
+function killCss(f){
+  const a=preferences.effects&&preferences.motion?Math.min(1,f.aberr):0,b=Math.min(1,f.blur)*(preferences.motion?1:.3);
+  canvas.style.filter=`saturate(${(1-.8*f.desat).toFixed(3)}) contrast(${(1+.25*f.red).toFixed(3)})${b>.02?` blur(${(b*2.5).toFixed(2)}px)`:''}`;
+  canvas.style.transform=a>.02?`scale(${(1+.05*a).toFixed(3)}) skew(${(a*1.6*Math.sin(t*41)).toFixed(2)}deg,${(a*.9*Math.sin(t*33)).toFixed(2)}deg)`:'';
+}
+function killEnd(){
+  if(!kill.on)return;
+  kill.on=false;kill.hold=false;kill.faceSeen=false;killCam.stop();
+  for(const o of kill.shadows)o.castShadow=true;kill.shadows.length=0;
+  if(killFX)killFX.stop();if(killAudio)killAudio.stop(.35);
+  if(!(fx&&fx.enabled))canvas.style.filter='none';
+  canvas.style.transform='';
+}
+function killSkip(){if(state==='caught'&&kill.on&&killCam.skip())killEvents(killCam.pose);}
+addEventListener('pointerdown',()=>{if(state==='caught')killSkip();});
+addEventListener('keydown',e=>{if(state==='caught'&&!e.repeat&&['Space','Enter','Escape'].includes(e.code))killSkip();});
+function killSnapshot(){
+  const s=killCam.snapshot(),g=caughtBy&&caughtBy.g;
+  return {...s,on:kill.on,hold:kill.hold,line:killCam.pose.line,face:kill.faceSeen?{x:kill.face.x,y:kill.face.y,f:kill.face.f}:null,
+    eye:kill.on?{x:kill.eye.x,y:kill.eye.y,z:kill.eye.z}:null,
+    body:kill.on&&g?{x:g.position.x,y:g.position.y,z:g.position.z,pitch:g.rotation.x,yaw:g.rotation.y,roll:g.rotation.z,visible:g.visible}:null,
+    overlay:killFX?killFX.snapshot():null,audio:killAudio?killAudio.snapshot():null};
 }
 /* ---------- grain ---------- */
 const gc=$('grain').getContext('2d'),gimg=gc.createImageData(256,144);
@@ -2068,7 +2646,7 @@ async function warmPlayPipelines(){
     if(state!=='menu')return;
     setHell();weaponModels.forEach(g=>g.visible=true);
     // Fill the navigator's per-radius clearance caches, which the first monster paths would otherwise build mid-play.
-    if(mazeNavigator)for(const kind in RULES.MONSTERS)for(const [cx,cz] of [[W-2,W-2],[W-2,3],[3,W-2],[N,N]])if(openCell(cx,cz))mazeNavigator.path(PED.x+1,PED.z,cx*S+S/2,cz*S+S/2,RULES.MONSTERS[kind].radius);
+    if(mazeNavigator)for(const kind in RULES.MONSTERS)if(!RULES.MONSTERS[kind].boss)for(const [cx,cz] of [[W-2,W-2],[W-2,3],[3,W-2],[N,N]])if(openCell(cx,cz))mazeNavigator.path(PED.x+1,PED.z,cx*S+S/2,cz*S+S/2,RULES.MONSTERS[kind].radius);
     monsters.forEach((m,i)=>{m.g.visible=true;m.g.position.set(views[0][0]+3+(i%4)*.9,0,views[0][1]-1.5+Math.floor(i/4)*1.2);m.g.updateMatrixWorld(true);});
     avatar.visible=true;avatar.userData.weapons.forEach(g=>g.visible=true);avatar.position.set(views[0][0]+2,0,views[0][1]+1.5);avatar.updateMatrixWorld(true);
     dynamicWorld.updateMatrixWorld(true);
@@ -2113,6 +2691,7 @@ function updatePostFX(dt){
   u.grain.value=hell?.35:.1;u.vignette.value=hell?.5:.3;
   u.saturation.value=hell?1:1.06;
   u.killFlash.value=fxKill;u.flash.value=fxFlash;
+  if(kill.on)killPost(u);
 }
 function updateHealthVignette(){
   const active=state==='play'||state==='caught'||state==='pause'&&prevState==='play';
@@ -2128,22 +2707,23 @@ function updateHUD(){
     const T=TEXT();
     $('locationText').textContent=active?(room?room.name:T.areas[P.pos.z<36?0:P.pos.z<72?1:2]):'';
     $('horrorCaption').textContent=active?captionText:'';
-    $('escapeStatus').textContent=active&&exitPowered?(exitOpen?T.released:T.releasing+' · '+Math.ceil(exitRelease)+'s'):'';
+    $('escapeStatus').textContent=active&&exitPowered?(exitOpen?T.released:bossHolds()?'THE GRAVEKEEPER HOLDS THE GATE':T.releasing+' · '+Math.ceil(exitRelease)+'s'):'';
     document.body.classList.toggle('reading-record',active&&captionT>0&&captionText[0]!=='[');
   if(controls)controls.update({active,state,torchOn,canInteract:!!interaction,decoys,mapExpanded});
   if(!active)return;
+  aboveGroundHUD();
   $('batBar').style.width=(battery*100).toFixed(1)+'%';$('batBar').style.background=battery<.2?'var(--ember)':'var(--bone)';
   $('stamBar').style.width=(P.stamina*100).toFixed(1)+'%';$('stamBar').style.background=P.exhausted?'var(--ember)':'var(--bone)';$('stamRow').style.opacity=1;
   $('healthBar').style.width=P.health+'%';$('healthBar').style.background=P.health<35?'var(--critical)':'var(--bone)';$('healthText').textContent=Math.ceil(P.health)+'%';$('healthText').style.color=P.health<35?'var(--critical)':'';
   $('noiseBar').style.width=Math.round(P.noise*100)+'%';$('stanceText').textContent=P.hidden?'CONCEALED':slideT>0?'SLIDING':P.crouching?'CROUCHED':P.running?'SPRINTING':P.onGround?'STANDING':'AIRBORNE';
   const remaining=roomLoot.filter(l=>l.type==='fuse'&&!l.taken).sort((a,b)=>Math.hypot(a.x-P.pos.x,a.z-P.pos.z)-Math.hypot(b.x-P.pos.x,b.z-P.pos.z));
   const nearest=remaining[0];
-  $('objectiveText').textContent=exitOpen?T.go:exitPowered?'THE ALARM IS DRAWING THEM HERE':fuses===3?T.ready:`${fuses} / 3 ${T.tags} · ${nearest?nearest.room.name.slice(5):'search marked rooms'}`;
+  $('objectiveText').textContent=exitOpen?T.go:bossHolds()?'KILL THE GRAVEKEEPER · then run for the gate':exitPowered?'THE ALARM IS DRAWING THEM HERE':fuses===3?T.ready:`${fuses} / 3 ${T.tags} · ${nearest?nearest.room.name.slice(5):'search marked rooms'}`;
   $('floorText').textContent=FLOOR().code+' · '+FLOOR().name.toUpperCase();$('wingText').textContent=T.wing;
   $('fpsText').textContent=Math.round(1000/frameAverage)+' FPS · '+qualityLevel.toUpperCase()+(renderScale<1?' '+Math.round(renderScale*100)+'%':'');
   $('weaponName').textContent=w.name;$('magTxt').textContent=mag;$('resTxt').textContent='/ '+(infiniteAmmo()?'∞':reserve);$('magTxt').style.color=mag===0?'var(--ember)':'';
-  $('ammoLbl').textContent=reloadT>0?`RELOADING · ${reloadT.toFixed(1)}s`:aiming?'AIMING':w.automatic?'AUTOMATIC':w.id==='shotgun'?'PUMP ACTION':'SEMI-AUTOMATIC';
-  if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+['AR','M9','SG'][i];$('weaponSlots').appendChild(slot);});}
+  $('ammoLbl').textContent=reloadT>0?`RELOADING · ${reloadT.toFixed(1)}s`:aiming?'AIMING':WEAPON_ACTION[w.id]||(w.automatic?'AUTOMATIC':'SEMI-AUTOMATIC');
+  if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+(WEAPON_TAG[v.id]||v.id.toUpperCase());$('weaponSlots').appendChild(slot);});}
   [...$('weaponSlots').children].forEach((slot,i)=>{slot.classList.toggle('selected',i===weaponIndex);slot.classList.toggle('locked',!owned[i]);slot.title=owned[i]?weaponDefs[i].name:'Not found yet';});
   $('reticleHit').style.opacity=hitMarkerT>0?1:0;$('cross').classList.toggle('aiming',aiming);
   let prompt='';const key=touch?'USE':'[E]';
@@ -2151,11 +2731,11 @@ function updateHUD(){
     if(interaction.type==='door'){const d=interaction.item,inside=RULES.insideRoom(d.room,P.pos.x,P.pos.z);prompt=d.open?`${key} Close isolation door`:d.locked?(inside?`${key} Unlock & open · lock integrity ${Math.ceil(d.health)}%`:'Door locked from inside'):inside?`${key} Lock door · crouch + torch OFF to hide`:`${key} Open isolation door`;}
     if(interaction.type==='loot'){const type=interaction.item.type;prompt=`${key} ${type==='fuse'?T.take:type==='medical'?'Use field dressing · +45 health':type==='weapon'?'Take the '+weaponDefs[interaction.item.weapon].name:'Collect ammunition, battery & decoy'}`;}
     if(interaction.type==='record')prompt=captionT>6?'':`${key} Read ${readNotes.has(interaction.item.id)?'case note again':'case note'}`;
-        if(interaction.type==='exit')prompt=fuses===3?`${key} ${T.start} · alarm will sound`:T.need(3-fuses);
+        if(interaction.type==='exit')prompt=fuses===3?`${key} ${T.start} · ${FLOOR().boss?'the bell will toll':'alarm will sound'}`:T.need(3-fuses);
   }else if([...roomLoot.filter(l=>automaticLoot(l.type)),...ammoBoxes].some(l=>!l.taken&&pickupReach(l,P.pos,2.4)))prompt='WALK OVER · ammunition collects automatically';
   else if(P.hidden)prompt='CONCEALED · Stay quiet. Listen for footsteps to fade.';
   else if(currentShelter())prompt='SHELTER · Close and lock the door. Crouch. Torch off.';
-  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · grey crosses = guns · green squares = shelters · red = exit`;
+  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · gun icons = weapons · green squares = shelters · red = exit`;
   $('interactionPrompt').textContent=prompt;
   $('controlsHint').textContent=touch?'Left stick: move · Drag right: look · USE: interact':
     P.hidden?'E unlock & leave · Keep your torch off until the footsteps fade':
@@ -2181,20 +2761,20 @@ function loop(){
     else if(exitOpen&&P.pos.x>W*S+.6){
       state='win';const m=Math.floor(elapsed/60),s=Math.floor(elapsed%60);
       const kills=monsters.filter((o,i)=>i<monCount&&o.dead).length;
-      $('winText').textContent=`Cold air on your face. You got out in ${fmtTime(elapsed)}. Behind you, ${kills>=monCount?'nothing is walking any more':'something keeps walking'}.`;
+      $('winText').textContent=FLOOR().boss?`The Gravekeeper lies in its own grave, and the bell is quiet. You walked out of Blackwater in ${fmtTime(elapsed)}.`:`Cold air on your face. You got out in ${fmtTime(elapsed)}. Behind you, ${kills>=monCount?'nothing is walking any more':'something keeps walking'}.`;
       $('winRank').textContent='';
       const own=runScore();clearCampaign();
       showScreen('win');recordRun({mode:'solo',escaped:true,time:elapsed,kills:own.kills,score:own.points},'winRank');try{document.exitPointerLock();}catch(e){}
       stopAudio();if(droneGain)fadeTo(droneGain,0,2);mouseDown=false;
     }
     if(droneGain){const target=preferences.effects?.025+fuses*.006:.014;droneGain.gain.setTargetAtTime(target,AC.currentTime,1.2);}
-  }else if(state==='caught')updateCaught(dt);
+  }else if(state==='caught')updateCaught(Math.min(.25,rawDt));
   if(NET.inGame){
     if(state!=='play'&&state!=='caught'&&state!=='coopEnd'){elapsed+=rawDt;simulationTime+=dt;updateRooms(dt);updateThreats(dt);}
     netTick(dt);
   }
   if(state==='play'||state==='caught'||(NET.inGame&&state!=='coopEnd'))monsters.forEach(m=>animateMonster(m,sdt));
-  if(state==='caught')camFX.addTrauma(1);
+  if(kill.on&&state!=='caught'&&state!=='dead')killEnd();
   if(!['menu','pause','dead','win','coopEnd'].includes(state))updateCameraRig(dt);
   updateGun(dt);updatePuffs(dt,sdt);
   if(msgTimer>0){msgTimer-=dt;if(msgTimer<=0)$('msg').style.opacity=0;}
@@ -2207,6 +2787,7 @@ function loop(){
     camera.rotation.set(P.pitch+cam.rot.pitch,P.yaw+cam.rot.yaw,cam.rot.roll);
     camera.position.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
     camera.translateX(cam.pos.x);camera.translateY(cam.pos.y);camera.translateZ(cam.pos.z);
+    if(state==='caught'&&kill.on)killView(cam);
   }
   baseFov=lerp(baseFov,aiming&&!reloadT&&!P.running?55:72,1-Math.exp(-dt*10));
   const fov=baseFov+(spectating?0:cam.fov);
@@ -2370,7 +2951,7 @@ function readRemote(peer,pr){
   r.nm=String(pr.nm||'Partner').slice(0,18);if(r.nm!==r.lastNm){r.lastNm=r.nm;setAvatarName(r.rig,r.nm);}
   r.gn=Math.floor(finiteNumber(pr.gn,0,0,1e9));r.al=pr.al===0?0:1;r.out=pr.out?1:0;r.ph=typeof pr.ph==='string'?pr.ph:'';
   const q=r.raw;
-  if(Array.isArray(pr.p)){q.x=finiteNumber(pr.p[0],q.x,-110,W*S+60);q.z=finiteNumber(pr.p[1],q.z,-70,W*S+70);q.yaw=finiteNumber(pr.p[2],q.yaw);q.pitch=finiteNumber(pr.p[3],q.pitch,-1.35,1.35);q.torch=!!pr.p[4];q.run=!!pr.p[5];q.y=finiteNumber(pr.p[6],0,0,H);q.crouch=!!pr.p[7];q.hidden=!!pr.p[8];q.health=finiteNumber(pr.p[9],100,0,100);q.weapon=Math.floor(finiteNumber(pr.p[10],0,0,2));q.reload=!!pr.p[11];q.aim=!!pr.p[12];
+  if(Array.isArray(pr.p)){q.x=finiteNumber(pr.p[0],q.x,-110,W*S+60);q.z=finiteNumber(pr.p[1],q.z,-70,W*S+70);q.yaw=finiteNumber(pr.p[2],q.yaw);q.pitch=finiteNumber(pr.p[3],q.pitch,-1.35,1.35);q.torch=!!pr.p[4];q.run=!!pr.p[5];q.y=finiteNumber(pr.p[6],0,0,H);q.crouch=!!pr.p[7];q.hidden=!!pr.p[8];q.health=finiteNumber(pr.p[9],100,0,100);q.weapon=Math.floor(finiteNumber(pr.p[10],0,0,weaponDefs.length-1));q.reload=!!pr.p[11];q.aim=!!pr.p[12];
     if(!r.seen){r.pos.set(q.x,0,q.z);r.yaw=q.yaw;r.pitch=q.pitch;r.seen=true;}}
   // ff: the damage this partner's shots have done to each of the others, keyed by peer
   r.sh=finiteNumber(pr.sh,0,0);r.ff=pr.ff&&typeof pr.ff==='object'&&NET.myPeer?finiteNumber(pr.ff[NET.myPeer],0,0):0;r.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];
@@ -2982,7 +3563,6 @@ function audioOnKill(info){
   const r=info.result;playStinger(info.headshot?'headshot':'kill',m.kind);
   if(r&&(r.count>=2||r.label==='WARDEN DOWN'))playStinger('streak',r.label);
 }
-// The killing blow: a cry under the scare hit, then a Stalker or Shrieker laughs over the body.
 // A blow that leaves the survivor standing (hurtfx.js plan): the world goes dull through the master low-pass and creeps
 // back; a heavy one rings in the ears, straight into the output past the muffle.
 function audioHurt(p){
@@ -3002,9 +3582,9 @@ function audioHurt(p){
     logCue('player','ring',p.kind||'blow');
   }
 }
+// The killing blow lands under the scare hit; the kill sequence (HollowKillAudio) plays the rest.
 function audioOnCaught(m){
-  if(playerAudio){playerAudio.hurt(100);playStinger('scare','caught');}
-  if(m.kind==='stalker'||m.kind==='shrieker')audioAfter(rnd(.5,.7),()=>sCreature(m,'laugh'));
+  if(playerAudio)playStinger('scare','caught');
 }
 
 /* chaos director events (I1b calls this for every event) */
@@ -3189,6 +3769,7 @@ function snapshot(){return {
   viewmodel:{weapons:weaponModels.filter(model=>model.visible).map(model=>model.userData.kind),torch:torch.visible},
   player:{speed:Math.hypot(P.vel.x,P.vel.z),sprint:P.sprint,stamina:P.stamina,exhausted:P.exhausted,sliding:slideT>0,strafe:P.strafe},
   camera:{...camFX.snapshot(),y:camFX.pose.pos.y,x:camFX.pose.pos.x,roll:camFX.pose.rot.roll,pitch:camFX.pose.rot.pitch,fovAdd:camFX.pose.fov,fov:camera.fov,weaponZ:camFX.pose.weapon.z},
+  kill:killSnapshot(),
   injury:RULES.injuryLevel(P.health),audio:creatureAudio?creatureAudio.snapshot():null,
   playerAudio:playerAudio?playerAudio.snapshot():null,weaponAudio:weaponAudio?weaponAudio.snapshot():null,audioLog:audioLog.slice(),bodyDuck:bodyBus&&AC.currentTime<duckEnd?duckDepth:1,
     horror:{...horror.snapshot(),effects:preferences.effects,notesRead:readNotes.size},
@@ -3202,8 +3783,10 @@ function snapshot(){return {
   performance:{fps:Math.round(1000/frameAverage),drawCalls:renderCalls,frames:renderedFrames,triangles:renderer.info.render.triangles,quality:qualityLevel,renderScale,pixelRatio:renderer.getPixelRatio(),wardDetail:wardDetail.value,geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,backend:window.HollowBackend},
   rooms:specialRooms.map(r=>({id:r.id,name:r.name,x:r.x,z:r.z,w:r.w,d:r.d,shelter:!!r.shelter,fuse:!!r.fuse})),
   doors:roomDoors.map(d=>({id:d.id,x:d.box.x,z:d.box.z,open:d.open,locked:d.locked,health:d.health})),
+  mapGuns:mapGuns.map(g=>({...g})),
   loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending,...(l.type==='weapon'?{weapon:weaponDefs[l.weapon].id,visible:l.g.visible}:{})})),
   ammoPickups:ammoBoxes.map((b,i)=>({id:i,x:b.x,z:b.z,taken:b.taken,pending:!!b.pending})),
+  boss:bossSnapshot(),
   enemies:monsters.slice(0,monCount).map((m,i)=>({index:i,kind:m.kind,x:m.pos.x,z:m.pos.z,hp:m.hp,dead:m.dead,state:m.state,speed:m.stats.chase,moveSpeed:m.g.userData.speed,stalkTime:m.stalkT,watchTime:m.watchT,lunge:m.lungeBoost>0,lungeCooldown:m.lungeCD,anim:animSummary(m),
     dormant:!!m.dormant,sleep:m.sleep||0,wakeIn:m.wakeIn,rising:m.riseT>0,visible:m.g.visible,body:m.dormant?m.lay.slice():null,hits:hitsSummary(m)})),
   // Hits (hitzones.js, gore.js, hurtfx.js): the last shot that struck a creature, the gore pools, the survivor's hurt.
@@ -3241,6 +3824,12 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateCameraRig(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));updatePuffs(dt);}updateHUD();updateHealthVignette();},
     hit:(index,damage)=>hitMonster(monsters[index],damage),
     aim:(index,part)=>aimAtPart(monsters[index],part),
+    // Kill sequences: slot `index` (placed at x, z when given) kills the survivor with `kind`'s track (its own by
+    // default). hold freezes the kill clock for advanceCaught, which steps it exactly.
+    kill:(index,o={})=>{const m=monsters[index];if(state!=='play'||!m)return state;if(Number.isFinite(o.x))window.HollowTest.enemy(index,{x:o.x,z:o.z,state:'chase',yaw:o.yaw||0});
+      kill.hold=false;killKind=o.kind||null;P.health=0;damageT=0;grace=0;caught(m);killKind=null;kill.hold=!!o.hold;return state;},
+    killHold:value=>{kill.hold=!!value;},killSkip,
+    advanceCaught:seconds=>{let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='caught'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;updateCaught(dt,true);if(caughtBy)animateMonster(caughtBy,dt);}return killSnapshot();},
     action:inputAction,pause,quality:applyQuality,pickupReach,
     path:(index,x,z)=>{setPathTo(monsters[index],x,z);return monsters[index].path.map(cell=>cell.slice());},
     navClear:(ax,az,bx,bz,radius)=>movementClear(ax,az,bx,bz,radius),
@@ -3249,7 +3838,15 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     build:seed=>{const kit=currentKit();kit.health=100;kit.decoys=3;kit.weapons=kit.weapons.map((w,i)=>owned[i]?{mag:weaponDefs[i].capacity,reserve:weaponDefs[i].reserve}:w);
       floor=0;buildMazeSeeded(seed);resetSurvivor(kit);P.pos.set(PED.x-.85,0,PED.z);P.vel.set(0,0,0);setHell();state='play';showScreen(null);spawnMonsters(FLOOR().active,FLOOR().sleepers);grace=10;
       checkpoint={floor:0,kit:copyKit(kit),elapsed,score:{...scoreBase}};},
-    collide:(position,radius=PR)=>{const point={...position};resolve(point,radius);return point;}
+    collide:(position,radius=PR)=>{const point={...position};resolve(point,radius);return point;},
+    // The Gravekeeper on S2: 'wake' (the bell, and the survivor's grace ends; `value` true skips the toll and the rise), 'hit' (`value` damage),
+    // 'pose' ({x, z}), 'phase' (into its second phase now). Returns its snapshot.
+    boss:(action,value)=>{const b=boss;if(!b||!FLOOR().boss)return null;
+      if(action==='wake'){grace=0;if(b.act==='grave'){exitPowered=true;exitRelease=FLOOR().release;bossAwaken();}if(value===true&&(b.act==='toll'||b.act==='rise')){if(b.act==='toll')bossRise(b);b.actT=0;updateBoss(b,.001);}}
+      else if(action==='hit')hitMonster(b,finiteNumber(value,10,0,1000),null,false,1);
+      else if(action==='pose'&&value){b.pos.set(value.x,0,value.z);b.g.position.copy(b.pos);}
+      else if(action==='phase'&&!b.dead&&b.phase===1){b.hp=Math.min(b.hp,b.stats.hp*.5);bossHit(b,0,false);}
+      return bossSnapshot();}
   });
 }
 

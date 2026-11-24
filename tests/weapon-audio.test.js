@@ -6,11 +6,16 @@ const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
 const weaponAudio = require('../public/weapon-audio');
 const script = readFileSync(require.resolve('../public/weapon-audio'), 'utf8');
-const GUNS = ['rifle', 'pistol', 'shotgun'], SURFACES = ['flesh', 'metal', 'concrete', 'wood'];
+const GUNS = ['rifle', 'pistol', 'shotgun', 'smg', 'magnum', 'marksman', 'lmg'], SURFACES = ['flesh', 'metal', 'concrete', 'wood'];
 const FLOORS = ['concrete', 'tile', 'metal', 'wood', 'carpet', 'grass'];
 const METHODS = ['shot', 'remoteShot', 'dry', 'reload', 'cancelReload', 'equip', 'hitMarker', 'impact', 'casing', 'stop', 'snapshot'];
 // systems.js WEAPONS: reload seconds and magazine sizes.
-const RELOAD = { rifle: 2.15, pistol: 1.45, shotgun: 2.85 }, CAPACITY = { rifle: 30, pistol: 12, shotgun: 6 };
+const RELOAD = { rifle: 2.15, pistol: 1.45, shotgun: 2.85, smg: 1.75, magnum: 3.1, marksman: 3.4, lmg: 4.6 };
+const CAPACITY = { rifle: 30, pistol: 12, shotgun: 6, smg: 32, magnum: 6, marksman: 5, lmg: 100 };
+// Longest shot voice: the pump and the bolt are worked inside the shot.
+const SHOT_LENGTH = { shotgun: .7, marksman: .85 };
+// The revolver keeps its empties in the cylinder until the reload.
+const BRASS = GUNS.filter(id => id !== 'magnum');
 const FPS = 60, DT = 1 / FPS, FADE = .02;
 
 // Fakes follow tests/player-audio.test.js, extended with convolvers, delays, buffers, panners and the listener.
@@ -412,7 +417,7 @@ for (const id of GUNS) {
   test(`${id}: crack, saturated body and thump, mechanical clack, and a send into the corridor tail`, () => {
     const setup = fixture();
     const played = setup.play(api => api.shot(id, { ammo: CAPACITY[id], capacity: CAPACITY[id] }));
-    inspect(setup, played, { length: id === 'shotgun' ? .7 : .3, nodes: 12 });
+    inspect(setup, played, { length: SHOT_LENGTH[id] || .3, nodes: 12 });
     const { voice, out, bus } = played, layer = layersOf(played);
     assert.equal(voice.kind, 'shot');
     assert.equal(voice.priority, weaponAudio.PRIORITIES.shot);
@@ -428,7 +433,7 @@ for (const id of GUNS) {
     const glide = layer.kick.frequency.events, sub = glide[1].value;
     assert.equal(glide[1].method, 'exponential');
     assert.ok(glide[0].value > 2.4 * sub, 'The thump drops in pitch');
-    if (id === 'pistol') assert.ok(sub > 80, 'The pistol thump stays snappier');
+    if (id === 'pistol' || id === 'smg') assert.ok(sub > 80, `The ${id} thump stays snappier`);
     else assert.ok(sub >= 50 && sub <= 80, `${id} sub at ${sub} Hz`);
     assert.deepEqual(layer.thump.connections, [layer.shaper]);
     const curve = layer.shaper.curve, last = curve.length - 1;
@@ -494,7 +499,7 @@ test('low ammo adds a rising mechanical ping; the last round rings twice and hig
     const capacity = CAPACITY[id];
     const fire = ammo => {
       const setup = fixture({ seed: 8 }), played = setup.play(api => api.shot(id, { ammo, capacity })), layer = layersOf(played);
-      inspect(setup, played, { length: id === 'shotgun' ? .7 : .3, nodes: 14 });
+      inspect(setup, played, { length: SHOT_LENGTH[id] || .3, nodes: 14 });
       const result = { ping: layer.ping, frequency: layer.ping && layer.ping.frequency.events[0].value,
         top: layer.ping && Math.max(...layer.ping.frequency.events.map(event => event.value)), rings: layer.ring && strikes(layer.ring).length };
       settle(setup);
@@ -525,6 +530,27 @@ test('the shotgun racks its pump about a third of a second after the blast, insi
   // Heavier than the rifle: a longer blast and boom, and more of the room.
   const rifle = fixture(), rifleShot = rifle.play(api => api.shot('rifle', { ammo: 30, capacity: 30 })), rifleLayer = layersOf(rifleShot);
   assert.ok(decayOf(layer.bodyGain) > 1.5 * decayOf(rifleLayer.bodyGain));
+  assert.ok(decayOf(layer.thump) > 1.5 * decayOf(rifleLayer.thump));
+  assert.ok(sendOf(played).gain.value > sendOf(rifleShot).gain.value);
+  settle(setup);
+  settle(rifle);
+});
+
+test('the M24 works its bolt up, back, forward and down from about .4 s, inside the same voice', () => {
+  const setup = fixture(), played = setup.play(api => api.shot('marksman', { ammo: 4, capacity: 5 }));
+  inspect(setup, played, { length: .85, nodes: 12 });
+  const { voice } = played, layer = layersOf(played);
+  const clacks = layer.clack.gain.events.filter(event => event.method === 'set').map(event => event.time - voice.start);
+  // In step with the viewmodel: handle up .36–.44 s, back .44–.52, forward .6–.68, down .7–.78.
+  for (const [from, to, what] of [[.36, .44, 'Handle up'], [.44, .52, 'back'], [.6, .68, 'forward'], [.7, .78, 'and down']]) {
+    assert.ok(clacks.some(time => time >= from && time <= to), what);
+  }
+  const thunks = layer.kick.frequency.events.filter(event => event.method === 'set' && event.time > voice.start + .3);
+  assert.equal(thunks.length, 2, 'The bolt slams back and home with weight');
+  assert.equal(strikes(layer.thump).length, 3);
+  // The hardest-hitting gun: more crack, a longer boom and more of the room than the carbine.
+  const rifle = fixture(), rifleShot = rifle.play(api => api.shot('rifle', { ammo: 30, capacity: 30 })), rifleLayer = layersOf(rifleShot);
+  assert.ok(peak(layer.crack) > peak(rifleLayer.crack));
   assert.ok(decayOf(layer.thump) > 1.5 * decayOf(rifleLayer.thump));
   assert.ok(sendOf(played).gain.value > sendOf(rifleShot).gain.value);
   settle(setup);
@@ -746,11 +772,13 @@ test('brass lands .35–.8 s after the shot, rings by floor, the shotgun hull is
   assert.ok(level.carpet < level.concrete && level.grass < level.concrete && level.metal >= level.concrete, 'Soft floors swallow it');
   assert.ok(decay.metal > decay.concrete && decay.carpet < decay.concrete / 2);
   for (const surface of ['lava', 'toString', '', 7]) assert.equal(instance.casing('rifle', { surface }), null);
+  context.advance(.3);
+  assert.equal(instance.casing('magnum', { surface: 'metal' }), null, 'The revolver keeps its empties until the reload');
   settle(setup);
   // Seeded landings all fall inside the window; contexts without a StereoPannerNode still get their brass.
   const seeded = fixture({ seed: 3 });
   for (let index = 0; index < 30; index++) {
-    const played = seeded.play(api => api.casing(GUNS[index % 3], { surface: FLOORS[index % 6] }));
+    const played = seeded.play(api => api.casing(BRASS[index % BRASS.length], { surface: FLOORS[index % 6] }));
     const first = Math.min(...played.sources.map(source => source.starts[0].time)) - seeded.context.currentTime;
     assert.ok(first >= .35 && first <= .8, `landed after ${first} s`);
     seeded.context.advance(.25);
@@ -810,7 +838,8 @@ test('reload foley fits inside the reload time for every weapon, duration and ma
     }
     for (const duration of [RELOAD[id], RELOAD[id] * .5, .3, 6]) {
       const [empty, full] = [counts[`${id} ${duration} true`], counts[`${id} ${duration} false`]];
-      // An empty rifle also slams its bolt home; an empty shotgun takes a fourth shell; the pistol always racks its slide.
+      // An empty rifle or SMG also slams its bolt home, an empty shotgun or M24 takes one more round, an empty .44 has
+      // its hammer thumbed back and an empty M249 is charged; the pistol always racks its slide.
       assert.equal(empty, id === 'pistol' ? full : full + 1, `${id} at ${duration} s: ${empty} vs ${full} clicks`);
     }
   }
@@ -1084,7 +1113,7 @@ test('inactive contexts stay silent; suspending or closing mid-play releases at 
 
 test('unknown weapons, surfaces, floors and malformed options return null without allocating', () => {
   const setup = fixture(), { context, instance } = setup, place = { x: 1, y: 1, z: 1 };
-  for (const id of ['toString', '__proto__', 'constructor', 'hasOwnProperty', '', 'RIFLE', 'smg', null, undefined, 42, {}, ['rifle']]) {
+  for (const id of ['toString', '__proto__', 'constructor', 'hasOwnProperty', '', 'RIFLE', 'uzi', null, undefined, 42, {}, ['rifle']]) {
     assert.equal(instance.shot(id), null);
     assert.equal(instance.remoteShot(id, place), null);
     assert.equal(instance.dry(id), null);
@@ -1336,15 +1365,15 @@ function measure(call, seeds = [5, 17, 29]) {
   return { level, peak: top };
 }
 
-test('rendered loudness: shotgun > rifle ≈ pistol > impacts > hit marker > brass, all under the ceiling', t => {
+test('rendered loudness: .44 ≈ M24 ≈ shotgun > LMG > rifle ≈ pistol > SMG > impacts > hit marker > brass, all under the ceiling', t => {
   const at = { x: 0, y: 1.6, z: -2 }, full = id => ({ ammo: CAPACITY[id], capacity: CAPACITY[id] });
   const sounds = {
-    shotgun: api => api.shot('shotgun', full('shotgun')), rifle: api => api.shot('rifle', full('rifle')),
-    pistol: api => api.shot('pistol', full('pistol')), 'remote rifle 10 m': api => api.remoteShot('rifle', { x: 0, y: 1.6, z: -10 }),
+    ...Object.fromEntries(GUNS.map(id => [id, api => api.shot(id, full(id))])),
+    'remote rifle 10 m': api => api.remoteShot('rifle', { x: 0, y: 1.6, z: -10 }),
     ...Object.fromEntries(SURFACES.map(surface => [`impact ${surface}`, api => api.impact(surface, at)])),
     'hit marker': api => api.hitMarker(), 'hit marker headshot': api => api.hitMarker({ headshot: true }),
     'hit marker armored': api => api.hitMarker({ armored: true }),
-    ...Object.fromEntries(GUNS.map(id => [`casing ${id}`, api => api.casing(id, { surface: 'metal' })])),
+    ...Object.fromEntries(BRASS.map(id => [`casing ${id}`, api => api.casing(id, { surface: 'metal' })])),
     'casing rifle concrete': api => api.casing('rifle')
   };
   const level = {};
@@ -1357,9 +1386,12 @@ test('rendered loudness: shotgun > rifle ≈ pistol > impacts > hit marker > bra
   t.diagnostic(Object.entries(level).map(([name, value]) => `${name} ${value.toFixed(1)}`).join(', '));
   const impacts = SURFACES.map(surface => level[`impact ${surface}`]);
   const markers = ['', ' headshot', ' armored'].map(kind => level[`hit marker${kind}`]);
-  const brass = [...GUNS.map(id => level[`casing ${id}`]), level['casing rifle concrete']];
+  const brass = [...BRASS.map(id => level[`casing ${id}`]), level['casing rifle concrete']];
   assert.ok(level.shotgun > Math.max(level.rifle, level.pistol) + 1.5, 'The shotgun is the biggest gun');
   assert.ok(Math.abs(level.rifle - level.pistol) < 2.5, 'Rifle and pistol sit together');
+  assert.ok(Math.min(level.magnum, level.marksman) > level.shotgun - 1, 'The .44 and the M24 are as loud as the shotgun');
+  assert.ok(level.lmg > level.rifle + 1 && level.lmg < Math.min(level.magnum, level.marksman), 'The belt-fed gun is heavier than the carbine');
+  assert.ok(level.smg < level.pistol - 2 && level.smg > Math.max(...impacts) + 3, 'The SMG is lighter: it fires fifteen a second');
   assert.ok(Math.min(level.rifle, level.pistol) > Math.max(...impacts) + 6, 'Guns over impacts');
   assert.ok(Math.min(...impacts) > Math.max(...markers) + 1.5, 'Close impacts over the hit marker');
   assert.ok(Math.min(...markers) > Math.max(...brass) + 4, 'The hit marker over brass');

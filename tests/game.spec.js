@@ -93,7 +93,7 @@ async function approach(page,item){
   expect(spot,`${item.id} has a clear approach`).toBeTruthy();return spot;
 }
 
-test('different enemy damage, armor, medical aid, the fuse-powered descent and the B3 floodgate escape work',async({page})=>{
+test('different enemy damage, armor, medical aid, the fuse-powered descent, the B3 floodgate and the S2 escape work',async({page})=>{
   await start(page);await pose(page,{x:13,z:7.5,yaw:Math.PI/2});
   await page.evaluate(()=>{HollowTest.enemy(0,{x:12,z:7.5,state:'chase'});});
   await expect.poll(async()=>(await state(page)).health).toBe(32);
@@ -119,7 +119,7 @@ test('different enemy damage, armor, medical aid, the fuse-powered descent and t
   expect(b2.checkpoint).toMatchObject({floor:1,owned:['rifle','pistol','shotgun']});expect(b2.score).toEqual(opened.score);
   expect(b2.seed).not.toBe(opened.seed);expect(b2.rooms).toHaveLength(12);
   await expect(page.locator('#floorText')).toHaveText('B2 · RECORDS & MORGUE');
-  // B3's surface floodgate is the way out: three keys, a 25-second release, then the open air.
+  // B3's surface floodgate: three keys, a 25-second release, then up into the open air (S1).
   await page.evaluate(()=>{HollowTest.floor(2);HollowTest.silence();});
   const b3=await state(page);expect(b3).toMatchObject({floor:2,floorCode:'B3',fuses:0,savedFloor:2});
   await expect(page.locator('#floorText')).toHaveText('B3 · THE HOLLOW');
@@ -133,6 +133,14 @@ test('different enemy damage, armor, medical aid, the fuse-powered descent and t
   await page.evaluate(()=>{for(let i=0;i<3;i++)HollowTest.advance(10);});
   expect((await state(page)).exitOpen).toBe(true);
   await pose(page,{x:100.5,z:100.5,yaw:-Math.PI/2});await page.keyboard.down('w');
+  try{await expect.poll(async()=>(await state(page)).floor,{timeout:60000}).toBe(3);}finally{await page.keyboard.up('w');}
+  await expect.poll(async()=>(await state(page)).state).toBe('play');
+  expect(await state(page)).toMatchObject({floorCode:'S1',savedFloor:3,fuses:0,exitOpen:false});
+  // The way out is S2's cemetery gate, held by the Gravekeeper until it dies (tests/above-ground.spec.js plays it).
+  const s2=await page.evaluate(()=>{HollowTest.floor(4);HollowTest.silence();HollowTest.boss('wake',true);HollowTest.boss('hit',1000);HollowTest.advance(5);
+    HollowTest.pose({x:100.5,z:100.5,yaw:-Math.PI/2});return HollowGame.snapshot();});
+  expect(s2).toMatchObject({floorCode:'S2',savedFloor:4,exitOpen:true});expect(s2.boss).toMatchObject({act:'dead',dead:true});
+  await page.keyboard.down('w');
   try{await expect.poll(async()=>(await state(page)).state,{timeout:60000}).toBe('win');}finally{await page.keyboard.up('w');}
   await expect(page.locator('#win')).toBeVisible();
   await expect(page.locator('#winRank')).toHaveText(/^Score [\d,]+\. New personal best, posted to the board\.$/);
