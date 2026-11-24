@@ -912,6 +912,9 @@
       RV[R_SCALE] = scale;
       lowestCh(rig, c, null);
       c[RY] -= wb * RV[R_LOW];
+      // A stride can leave a planted hand or foot under the floor; what is left of the live pose comes up out of it at once.
+      const under = c[RY] + RV[R_LOW];
+      if (under < 0) c[RY] -= under * (1 - wb);
       if (t >= tEnd) settled = true;
     }
 

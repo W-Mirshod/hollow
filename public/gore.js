@@ -880,6 +880,8 @@
         if (FN[k + 3] < 1) continue;
         const e = f.joint.matrixWorld.elements, lx = FN[k + 4], ly = FN[k + 5], lz = FN[k + 6], ax = FN[k + 7], ay = FN[k + 8], az = FN[k + 9];
         const px = e[0] * lx + e[4] * ly + e[8] * lz + e[12], py = e[1] * lx + e[5] * ly + e[9] * lz + e[13], pz = e[2] * lx + e[6] * ly + e[10] * lz + e[14];
+        // A body sinking into the earth (the Gravekeeper's grave) stops spurting once the stump is under it.
+        if (py < floorY) { FN[k + 3] = 0; continue; }
         let dx = e[0] * ax + e[4] * ay + e[8] * az, dy = e[1] * ax + e[5] * ay + e[9] * az, dz = e[2] * ax + e[6] * ay + e[10] * az;
         const dl = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1; dx /= dl; dy /= dl; dz /= dl;
         const v0 = (1.4 + 2.6 * beat) * power * (1 - .5 * t / dur);
@@ -905,6 +907,7 @@
         const s = rec.slots[Math.floor(rand() * rec.slots.length) % rec.slots.length];
         if (!s || !shown(s.joint)) continue;
         M.multiplyMatrices(s.joint.matrixWorld, s.local);
+        if (M.elements[13] < floorY) continue;
         EM[0] = M.elements[12]; EM[1] = M.elements[13]; EM[2] = M.elements[14];
         EM[3] = (rand() - .5) * .3; EM[4] = -.4 * rand(); EM[5] = (rand() - .5) * .3;
         EM[6] = .005 + .004 * rand(); EM[7] = (.025 + .025 * rand()) * (.7 + .4 * rec.bleed); EM[8] = 0;

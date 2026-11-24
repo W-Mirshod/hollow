@@ -1085,9 +1085,10 @@ function strikeMonster(m,w,guest){
   const tally={...s.tally,force:s.force,distance:s.distance,killed,kind:m.kind,stats:m.stats,maxPellet:s.maxPellet,side:s.side};
   let v=HZ.verdict(w,tally,{});
   // The body reacts where the shot did the most harm (a blast to the legs buckles them even if one pellet strays higher);
-  // the direction is the killing or heaviest pellet's.
-  const legs=s.tally.legL+s.tally.legR,kneel=v.kneel&&!m.dormant,region=v.region;
-  const info={region,side:s.side<0?-1:1,dirX:d.x,dirZ:d.z,stagger:s.stagger,knockX:s.knockX,knockZ:s.knockZ,
+  // the direction is the killing or heaviest pellet's. The Gravekeeper flinches (its rig's own heavy tuning) but is never
+  // shoved or dropped to a knee: its attacks own where it stands.
+  const legs=s.tally.legL+s.tally.legR,kneel=v.kneel&&!m.dormant&&!m.boss,region=v.region,shove=m.boss?0:1;
+  const info={region,side:s.side<0?-1:1,dirX:d.x,dirZ:d.z,stagger:s.stagger,knockX:s.knockX*shove,knockZ:s.knockZ*shove,
     kneel,kneelSide:v.kneelSide,kneelTime:Math.min(2.4,1+.4*legs),deathForce:v.deathForce,gib:v.gib};
   const strength=Math.min(2,s.strength)*resist;
   m.hitRegion=region;m.lastHit={damage:s.damage,region,pellets:s.pellets,strength};

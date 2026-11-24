@@ -56,7 +56,7 @@ test('loads as a browser global and a CommonJS module', () => {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/hurtfx.js'), 'utf8'), context);
   for (const api of [context.HollowHurtFX, Hurt]) {
     assert.ok(Object.isFrozen(api));
-    assert.deepEqual(Object.keys(api.KINDS), ['warden', 'stalker', 'crawler', 'shrieker']);
+    assert.deepEqual(Object.keys(api.KINDS), ['warden', 'stalker', 'crawler', 'shrieker', 'gravekeeper']);
     assert.equal(typeof api.plan, 'function');
   }
 });
@@ -88,6 +88,12 @@ test('heavier blows punch harder, slow longer, ring the ears and throw more bloo
   assert.ok(warden.jolt.stagger > 2 * blow('crawler', 19).jolt.stagger, 'and the legs buckling');
   assert.ok(warden.slow.factor < .5);
   assert.equal(blow('crawler', 19).ring, null, 'A Crawler bite does not ring');
+  // The Gravekeeper's spade hits harder than a Warden's fist, damage for damage.
+  const spade = blow('gravekeeper', 45);
+  assert.equal(blow('gravekeeper', 54).heavy, true, 'its charge is a heavy blow');
+  assert.ok(spade.ring && spade.muffle.amount > .75, 'its spade rings and dulls the ears');
+  assert.ok(spade.jolt.stagger > blow('warden', 45).jolt.stagger && spade.slow.factor < blow('warden', 45).slow.factor &&
+    spade.slow.time > blow('warden', 45).slow.time, 'and drags the legs down harder and longer than a Warden blow');
   // A light blow once badly hurt still rings.
   assert.ok(blow('shrieker', 24, { health: 12 }).ring && !blow('shrieker', 24, { health: 90 }).heavy);
   assert.equal(blow('shrieker', 24, { health: 12 }).heavy, true);

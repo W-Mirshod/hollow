@@ -236,6 +236,25 @@ test('a decapitation hides the head, caps the neck, throws skull and flesh, and 
   }
 });
 
+test('the Gravekeeper loses its head on its own rig, and nothing spurts or drips once its body sinks under the floor', () => {
+  const { scene, gore } = setup();
+  const c = creature(scene, 'gravekeeper'), head = c.u.head;
+  gore.wound('m', { root: c.g, object: meshOf(c.u.armR), point: centre(c.u.armR), normal: { x: 0, y: 0, z: 1 } });
+  assert.ok(gore.decapitate('m', c.g, head, { dir: { x: 0, y: 0, z: -1 }, force: .5, chunks: 0 }));
+  assert.ok(!head.visible && gore.headless('m'));
+  gore.bleed('m', c.g, 1.5);
+  step(gore, .3);
+  assert.ok(gore.snapshot().drops > 0, 'it bleeds on the surface');
+  c.g.position.y = -4.1;                 // bossPose: the grave has taken it
+  step(gore, 1);
+  const stains = gore.snapshot().splats;
+  step(gore, 2);
+  assert.equal(gore.snapshot().drops, 0, 'not from under the floor');
+  assert.equal(gore.snapshot().splats, stains, 'and it leaves no new stains over the grave');
+  gore.clear('m');
+  assert.ok(head.visible, 'its head is back for the next run');
+});
+
 test('wounded creatures drip a trail; corpses pool once they have fallen', () => {
   const { scene, gore } = setup();
   const c = creature(scene, 'stalker');

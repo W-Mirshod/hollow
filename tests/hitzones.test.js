@@ -91,7 +91,7 @@ test('the classifier agrees with raycasts on the real visuals.js meshes', () => 
   const V = visuals();
   let seed = 11;
   const rnd = () => { seed = seed * 16807 % 2147483647; return seed / 2147483647; };
-  for (const kind of KINDS) {
+  for (const kind of [...KINDS, 'gravekeeper']) {
     const g = V.makeMonster(THREE, kind), st = RULES.MONSTERS[kind], yaw = rnd() * 6, ray = new THREE.Raycaster();
     g.position.set(3, 0, -7); g.rotation.set(0, yaw, 0); g.updateMatrixWorld(true);
     let hits = 0, agree = 0;
@@ -125,10 +125,17 @@ test('posed bodies: a kneeling or leaning creature is read in its own posed fram
 });
 
 test('unknown kinds scale the closest template to their stats', () => {
-  const p = Z.profile('gravekeeper', GRAVEKEEPER);
+  assert.equal(Z.profile('gravekeeper', GRAVEKEEPER).parts, Z.BODIES.gravekeeper.parts, 'the Gravekeeper has its own fitted body');
+  const p = Z.profile('colossus', GRAVEKEEPER);
   assert.equal(p.quad, false);
-  assert.ok(p.parts.length === Z.BODIES.warden.parts.length, 'a broad boss uses the warden template');
-  const kind = 'gravekeeper', opts = { stats: GRAVEKEEPER, distance: 8 };
+  assert.ok(p.parts.length === Z.BODIES.warden.parts.length, 'an unknown broad boss uses the warden template');
+  for (const kind of ['colossus', 'gravekeeper']) {
+    const opts = { stats: GRAVEKEEPER, distance: 8 };
+    assert.equal(frontal(kind, 3.3, opts).region, 'head', kind);
+    assert.match(frontal(kind, 2.2, opts).region, /chest|gut/, kind);
+    assert.match(frontal(kind, .5, { ...opts, lx: -.25 }).region, /leg/, kind);
+  }
+  const kind = 'colossus', opts = { stats: GRAVEKEEPER, distance: 8 };
   assert.equal(frontal(kind, 3.3, opts).region, 'head');
   assert.match(frontal(kind, 2.2, opts).region, /chest|gut/);
   assert.match(frontal(kind, .5, { ...opts, lx: -.4 }).region, /leg/);

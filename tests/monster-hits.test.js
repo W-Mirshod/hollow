@@ -11,7 +11,7 @@ const { spawnSync } = require('node:child_process');
 const THREE = require('three');
 const Anim = require('../public/monster-anim.js');
 
-const KINDS = ['warden', 'stalker', 'crawler', 'shrieker'];
+const KINDS = ['warden', 'stalker', 'crawler', 'shrieker', 'gravekeeper'];
 const AXES = ['x', 'y', 'z'], ROOT = ['x', 'y', 'z', 'pitch', 'yaw', 'roll'];
 
 let visualsModule;

@@ -17,12 +17,14 @@
   // How each creature's blow lands. style: the screen wound (blunt splats, claw rakes, a bite from below). jolt: the
   // sideways punch, pitch: the view knocked up (+) or yanked down (-), trauma: shake, stagger: the view dropping as the
   // legs buckle, slow: [speed at its worst, seconds], ring and muffle: how much a heavy blow rings and dulls the ears,
-  // blood: how much lands on the screen. Unknown creatures (a boss) get DEFAULT scaled by their damage.
+  // blood: how much lands on the screen. Unknown creatures get DEFAULT scaled by their damage.
   const KINDS = Object.freeze({
     warden: Object.freeze({ style: 'blunt', jolt: 1.3, pitch: .9, trauma: 1.2, stagger: 1.3, slow: Object.freeze([.4, 1.1]), ring: 1, muffle: 1, blood: 1.1 }),
     stalker: Object.freeze({ style: 'claw', jolt: 1.05, pitch: .3, trauma: 1, stagger: .8, slow: Object.freeze([.6, .6]), ring: .35, muffle: .5, blood: 1, marks: 3 }),
     crawler: Object.freeze({ style: 'bite', jolt: .6, pitch: -.7, trauma: .8, stagger: .55, slow: Object.freeze([.45, 1.2]), ring: 0, muffle: .25, blood: .85 }),
-    shrieker: Object.freeze({ style: 'claw', jolt: .85, pitch: .25, trauma: .9, stagger: .7, slow: Object.freeze([.6, .7]), ring: .9, muffle: .7, blood: .9, marks: 4 })
+    shrieker: Object.freeze({ style: 'claw', jolt: .85, pitch: .25, trauma: .9, stagger: .7, slow: Object.freeze([.6, .7]), ring: .9, muffle: .7, blood: .9, marks: 4 }),
+    // The boss's spade and the ground it breaks: the heaviest blow there is, driving the view down into the legs.
+    gravekeeper: Object.freeze({ style: 'blunt', jolt: 1.5, pitch: 1.1, trauma: 1.4, stagger: 1.6, slow: Object.freeze([.35, 1.3]), ring: 1, muffle: 1, blood: 1.2 })
   });
   const DEFAULT = Object.freeze({ style: 'blunt', jolt: 1, pitch: .5, trauma: 1, stagger: 1, slow: Object.freeze([.55, .8]), ring: .6, muffle: .7, blood: 1 });
   const STYLES = Object.freeze(['blunt', 'claw', 'bite']);
