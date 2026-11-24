@@ -70,6 +70,7 @@
     <div class="meter noise-meter"><span>Noise</span><div class="bar"><i id="noiseBar"></i></div></div>
   </div>
   </div>
+  <div id="bossBar" class="boss-bar" hidden><span class="boss-name">The Gravekeeper</span><div class="boss-track"><i id="bossFill"></i></div></div>
   <div class="field-telemetry"><span id="fpsText"></span><span class="telemetry-rule"></span><span id="wingText">BW / LOWER WING</span></div>
 </div>
 <div class="feedback-stack">
@@ -240,7 +241,7 @@
 
 <div class="screen form descend" id="descend" hidden aria-labelledby="descendName" aria-live="polite">
   <div class="panel">
-    <div class="overline">Going down / <span id="descendCode">B2</span></div>
+    <div class="overline"><span id="descendWay">Going down</span> / <span id="descendCode">B2</span></div>
     <h1 class="title" id="descendName">Records &amp; Morgue</h1>
     <p class="lede" id="descendNote"></p>
   </div>
