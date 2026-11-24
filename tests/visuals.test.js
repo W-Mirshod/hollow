@@ -96,6 +96,72 @@ test('four articulated creatures preserve the game animation contract at bounded
 
 const GUNS = Systems.WEAPONS.map(w => w.id);
 
+test('the Gravekeeper towers on the shared joint contract and owns its one lit lantern', () => {
+  const g = V.makeMonster(THREE, 'gravekeeper'), sibling = V.makeMonster(THREE, 'gravekeeper'), u = g.userData;
+  try {
+    assert.equal(u.kind, 'gravekeeper');
+    // Boss gameplay dimensions: 3.6 m tall, head hit height 3.05 m, 0.8 m body radius.
+    assert.deepEqual([u.height, u.bodyRadius, u.headHeight], [3.6, .8, 3.05]);
+    for (const key of ['legL', 'legR', 'armL', 'armR', 'neck', 'head', 'jaw', 'restPose', 'eyeMat', 'eyeColor', 'glow', 'limbs', 'knees', 'elbows',
+      'phase', 'twitch', 'twitchT', 'speed', 'chasing', 'height', 'bodyRadius', 'headHeight', 'stride', 'resources']) assert.ok(key in u, key);
+    for (const name of ['legL', 'legR', 'armL', 'armR', 'neck', 'head', 'jaw']) assert.ok(u[name].isGroup, name);
+    assert.equal(u.head.parent, u.neck, 'the head is its own joint under the neck');
+    assert.equal(u.jaw.parent, u.head);
+    assert.equal(u.neck.position.y, u.headHeight, 'head pivot must agree with gameplay hit height');
+    // (Element-wise: arrays built inside the visuals.js sandbox have another realm's prototype.)
+    assert.ok([u.legL, u.legR, u.armL, u.armR].every((limb, i) => u.limbs[i] === limb) && u.limbs.length === 4);
+    for (const limb of u.limbs) assert.equal(limb.parent, g);
+    assert.equal(u.knees.length, 2); assert.equal(u.elbows.length, 2);
+    for (const joint of [...u.knees, ...u.elbows]) assert.ok(u.limbs.includes(joint.parent));
+    let lights = 0; g.traverse(o => { if (o.isLight) lights++; });
+    assert.equal(lights, 0, 'the lantern glows by emission, not a light pass');
+    assert.ok(meshCount(g) <= 16, `gravekeeper draws ${meshCount(g)}`);
+    assert.ok(triangleCount(g) <= 45000);
+    const bounds = new THREE.Box3().setFromObject(g);
+    assert.ok(bounds.max.y <= u.height + .035 && bounds.max.y >= u.height - .12, `gravekeeper stands ${bounds.max.y.toFixed(3)} m`);
+    assert.ok(bounds.min.y >= -.035 && bounds.min.y < .09, 'feet must rest near the floor');
+    const headBounds = new THREE.Box3().setFromObject(u.head);
+    assert.ok(headBounds.min.y < u.headHeight && headBounds.max.y > u.headHeight, 'head misses its hit height');
+    // One owned eye and one owned lantern per clone: death writes and disposal never reach a sibling.
+    const unique = u.resources.uniqueMaterials;
+    assert.ok(unique.length === 2 && unique[0] === u.eyeMat && unique[1] === u.lanternMat, 'eye and lantern are the clone-owned materials');
+    assert.notEqual(u.eyeMat, sibling.userData.eyeMat);
+    assert.notEqual(u.lanternMat, sibling.userData.lanternMat);
+    assert.ok(u.lanternMat.emissiveIntensity > 0 && u.lanternMat.emissive.getHex() !== 0);
+    assert.equal(u.eyeMat.emissive.getHex(), 0);
+    let eyes = 0, lanterns = 0;
+    g.traverse(o => {
+      if (!o.isMesh) return;
+      assert.equal(o.material.metalness, 0);
+      if (o.material === u.lanternMat) lanterns++;
+      else if (o.material === u.eyeMat) { eyes++; assert.equal(o.parent, u.head); }
+      else {
+        assert.equal(o.material.emissive.getHex(), 0, 'nothing but the lantern glows');
+        assert.ok(o.geometry.attributes.color, 'batched vertex tints');
+      }
+    });
+    assert.deepEqual([eyes, lanterns], [1, 1]);
+    sibling.userData.lanternMat.emissiveIntensity = 0;
+    assert.ok(u.lanternMat.emissiveIntensity > 0, 'dousing one lantern leaves the other lit');
+    // The jaw moves on its own and the mouth opens into shadow well behind the face.
+    const closed = new THREE.Box3().setFromObject(u.jaw);
+    u.jaw.rotation.x += .3;
+    assert.ok(!closed.equals(new THREE.Box3().setFromObject(u.jaw)), 'jaw must move independently');
+    u.jaw.rotation.x -= .3;
+    g.updateMatrixWorld(true);
+    const origin = new THREE.Vector3(0, -.16, 1).applyMatrix4(u.head.matrixWorld);
+    const direction = new THREE.Vector3(0, 0, -1).transformDirection(u.head.matrixWorld);
+    const hit = new THREE.Raycaster(origin, direction).intersectObject(u.head, true)[0];
+    const color = hit.object.geometry.attributes.color, vertex = hit.face.a;
+    assert.ok(color.getX(vertex) < .01 && color.getY(vertex) < .01 && color.getZ(vertex) < .01, 'mouth must open into shadow');
+    const slit = u.head.children.find(mesh => mesh.material === u.eyeMat);
+    assert.ok(u.head.worldToLocal(hit.point.clone()).z < slit.position.z - .015, 'mouth needs real depth');
+    assertFiniteGeometry(g);
+  } finally {
+    V.disposeGroup(g); V.disposeGroup(sibling);
+  }
+});
+
 test('weapon models have independent moving magazines, bolts, and correctly oriented muzzles', () => {
   const muzzle = {};
   for (const kind of GUNS) for (const world of [false, true]) {
@@ -294,7 +360,7 @@ test('Blackwater patients have dry recessed eyes and dressed articulated limbs w
 });
 
 test('creature rest poses are immutable additive baselines and upright jaws stay articulated', () => {
-  for (const kind of ['warden', 'stalker', 'crawler', 'shrieker']) {
+  for (const kind of ['warden', 'stalker', 'crawler', 'shrieker', 'gravekeeper']) {
     const g = V.makeMonster(THREE, kind), u = g.userData;
     assert.ok(Object.isFrozen(u.restPose));
     const parts = [...u.limbs, ...u.knees, ...u.elbows, u.neck, u.head, ...(u.jaw ? [u.jaw] : [])];
@@ -381,7 +447,7 @@ test('faceted creature primitives stay cached across rebuilds without spherical 
   }
   const shared = new Set(), owned = new Set(), disposals = new Map();
   const rebuild = () => {
-    for (const kind of ['warden', 'stalker', 'crawler', 'shrieker']) {
+    for (const kind of ['warden', 'stalker', 'crawler', 'shrieker', 'gravekeeper']) {
       const first = V.makeMonster(tracked, kind), second = V.makeMonster(tracked, kind);
       assert.notEqual(first.userData.eyeMat, second.userData.eyeMat);
       assert.equal(first.userData.resources.uniqueMaterials[0], first.userData.eyeMat);

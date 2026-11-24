@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const THREE = require('three');
 const Anim = require('../public/monster-anim.js');
 
-const KINDS = ['warden', 'stalker', 'crawler', 'shrieker'];
+const KINDS = ['warden', 'stalker', 'crawler', 'shrieker', 'gravekeeper'];
 const BIPEDS = KINDS.filter(kind => !Anim.KINDS[kind].quad);
 const ROOT = ['x', 'y', 'z', 'pitch', 'yaw', 'roll'];
 const AXES = ['x', 'y', 'z'];
@@ -721,8 +721,9 @@ test('falling and fallen bodies stay on the floor of the real meshes', () => {
   const box = g => { g.updateMatrixWorld(true); return new THREE.Box3().setFromObject(g, true); };
   for (const kind of KINDS) {
     const g = V.makeMonster(THREE, kind), K = Anim.KINDS[kind];
-    // The warden's hunched bulk lies ~0.95 m thick (and sinks 6 cm into the floor); the others stay under 0.95 m.
-    const ceiling = kind === 'warden' ? 1.1 : .95;
+    // The warden's hunched bulk lies ~0.95 m thick (and sinks 6 cm into the floor); the others stay under 0.95 m. The
+    // 3.6 m Gravekeeper lies on the coffin lid strapped to its back, or face down on its spade arm: under 1.35 m.
+    const ceiling = kind === 'warden' ? 1.1 : kind === 'gravekeeper' ? 1.35 : .95;
     const shots = K.quad
       ? [['from its right', 1, 0, false], ['from its left', -1, 0, false], ['headshot from its left', -1, 0, true]]
       : [['from the front', 0, -1, false], ['from behind', 0, 1, false], ['headshot from the front', 0, -1, true],
