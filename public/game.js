@@ -391,12 +391,12 @@ function movePlayer(dx,dz){
 }
 // Above ground there is sky over the hedges and walls (they stand a little over H): a shot or a glance can pass over.
 let outdoorNow=false;
-function blocksRay(x,y,z){
+function blocksRay(x,y,z,props=roomProps){
   if(outdoorNow){if(y<0||y<H+.4&&wallAt(x,z))return true;}
   else if(y<0||y>H||wallAt(x,z))return true;
     if(!exitOpen&&Math.abs(x-((W-1)*S-.02))<.12&&Math.abs(z-((W-2)*S+S/2))<S/2)return true;
   for(const d of roomDoors)if(!d.open&&Math.abs(x-d.box.x)<d.box.w/2&&Math.abs(z-d.box.z)<d.box.d/2)return true;
-  for(const p of roomProps)if(y<p.h&&Math.abs(x-p.x)<p.w/2&&Math.abs(z-p.z)<p.d/2)return true;
+  for(const p of props)if(y<p.h&&Math.abs(x-p.x)<p.w/2&&Math.abs(z-p.z)<p.d/2)return true;
   return false;
 }
 function los(ax,az,bx,bz){const dx=bx-ax,dz=bz-az,d=Math.hypot(dx,dz),steps=Math.ceil(d/.32);for(let i=1;i<steps;i++)if(blocksRay(ax+dx*i/steps,1.2,az+dz*i/steps))return false;return true;}
@@ -607,7 +607,7 @@ function buildMaze(){
     const lid=new THREE.Mesh(lidGeo,boxLabelMat);lid.position.set(0,0.152,0.1601);g.add(lid);
     g.position.set(wx+rnd(-0.5,0.5),0,wz+rnd(-0.5,0.5));g.rotation.y=rnd(0,6.28);maze.add(g);
     ammoBoxes.push({g,x:g.position.x,z:g.position.z,taken:false});}
-  buildRooms();
+  buildRooms();placeLaserPickups();
   maze.updateMatrix();maze.matrixAutoUpdate=false;
   maze.traverse(o=>{if(o.isMesh){o.updateMatrix();o.matrixAutoUpdate=false;}});
 }
@@ -859,6 +859,7 @@ function collectLoot(l){
 function rewardLoot(type){
   if(type==='fuse'){fuses=roomLoot.filter(v=>v.type==='fuse'&&v.taken).length;showMsg(fuses===3?TEXT().all:`${TEXT().kick} recovered · ${fuses}/3.`,3.5);}
   else if(type==='medical'){P.health=Math.min(100,P.health+45);showMsg('Field dressing · +45 health.',2);}
+  else if(type==='laser'){lasers=Math.min(LZ.max,lasers+1);showMsg(`Laser burst charge · ${lasers} carried · ${controls&&controls.touch?'LASER':'G'} fires it.`,3);}
   else if(type==='ammo'){const drop=RULES.AMMO_DROPS.ammo;weaponDefs.forEach((w,i)=>weapons[i].reserve+=drop[w.id]||0);reserve=weapons[weaponIndex].reserve;showMsg(ammoText(drop),3);}
   else {const drop=RULES.AMMO_DROPS.supplies;weaponDefs.forEach((w,i)=>weapons[i].reserve+=drop[w.id]||0);reserve=weapons[weaponIndex].reserve;decoys=Math.min(5,decoys+1);battery=1;showMsg('Supplies secured · ammunition, battery and a decoy.',3);}
   if(automaticLoot(type)&&mag===0&&reserve>0)startReload();
@@ -905,6 +906,120 @@ function throwDecoy(){
   if(NET.inGame&&NET.role==='guest')queueAction({type:'decoy',x:r2(x),z:r2(z)});
   showMsg(`Noise decoy thrown · ${decoys} remaining. Move away quietly.`,2.5);
 }
+/* ---------- the laser burst ---------- */
+// The charges lie along the way: FLOOR().lasers of them in corridor cells spread from near the start to the far side (a
+// stream of their own off the floor's seed, so co-op partners agree and nothing else on the floor moves), never in a
+// room, the lobby, by the exit, on a grave, in furniture or within reach of another pickup.
+function placeLaserPickups(){
+  for(const l of laserPickups){laserGroup.remove(l.g);const label=l.g.userData.label;label.geometry.dispose();label.material.map.dispose();label.material.dispose();}
+  laserPickups=[];
+  const f=FLOOR(),count=f.lasers||0;if(!count||!mazeNavigator)return;
+  const dist=distField(Math.floor((PED.x-.85)/S),Math.floor(PED.z/S)),graves=f.boss?[f.boss.grave,...f.boss.summons]:[];
+  const skip=(cx,cz)=>{const [x,z]=center(cx,cz);
+    return cx<=6&&cz<=4||cx>=W-3&&Math.abs(cz-(W-2))<=2||specialRooms.some(r=>RULES.insideRoom(r,x,z))||graves.some(([gx,gz])=>Math.abs(gx-cx)+Math.abs(gz-cz)<=1)||
+      ammoBoxes.some(b=>Math.hypot(b.x-x,b.z-z)<2.4)||roomLoot.some(l=>Math.hypot(l.x-x,l.z-z)<2.4)||!movementClear(x,z,x,z,.45);};
+  HL.place({size:W,dist,count,rand:seeded((worldSeed^0x6c617a72)>>>0),near:6,spacing:7,skip}).forEach(({cx,cz},i)=>{
+    const [x,z]=center(cx,cz),g=laserFX.pickup();g.position.set(x,0,z);
+    const label=worldLabel('LASER BURST · WALK OVER','#ff9d8e',1.35);label.scale.y=.4;label.position.set(0,.75,0);label.visible=false;g.add(label);g.userData.label=label;
+    laserGroup.add(g);laserPickups.push({id:i,g,x,z,taken:false,pending:false});
+  });
+}
+function fireLaser(){
+  if(state!=='play'||laserCD>0)return;
+  if(lasers<=0){showMsg('No laser charges. More lie along the corridors: red stars on the floor plan.',2.6);sClick();return;}
+  lasers--;laserCD=LZ.cooldown;laserFlashT=.3;
+  laserBlast(P.pos.x,P.pos.y,P.pos.z,null);
+  if(NET.inGame){NET.lb=[NET.lb[0]+1,r2(P.pos.x),r2(P.pos.z),r2(P.pos.y)];sendNet(true);}
+}
+// A burst at (x, y, z) (y: under the feet), the survivor's own (owner null) or partner R's: everyone sees the beams,
+// hears it and feels it; solo and the host decide what it cuts (laserStep).
+function laserBlast(x,y,z,owner){
+  const span=LZ.range+.6,near=roomProps.filter(p=>Math.abs(p.x-x)<span+p.w/2&&Math.abs(p.z-z)<span+p.d/2);
+  const blocks=(bx,by,bz)=>blocksRay(bx,by,bz,near),view=HL.scan({x,y,z,range:LZ.range,heights:LZ.heights,blocks});
+  laserFX.fire({scan:view,angle:Math.random()*Math.PI*2,spin:Math.random()<.5?-1:1,flare:!!owner});
+  laserLast={x:r2(x),z:r2(z),mine:!owner,kills:0,hit:[],boss:0};
+  laserBlasts.push({x,y,z,t:0,mine:!owner,blocks,view,hit:new Set(),kills:0,cuts:0,boss:0,report:laserLast});
+  sLaser(x,y+1.15,z,!owner);
+  const k=owner?Math.max(0,1-Math.hypot(P.pos.x-x,P.pos.z-z)/24):1;
+  if(state==='play'&&k>0){camFX.addTrauma(.55*k);if(preferences.effects)fxFlash=Math.max(fxFlash,.5*k);}
+  if(!NET.inGame||NET.role==='host')alertMonsters(LZ.noise,x,z,LZ.wake);
+  // Where the beams first meet the walls, they burn.
+  if(atm)for(let h=0;h<view.heights.length;h++)for(let i=h*2;i<view.bins;i+=6){const r=view.table[h*view.bins+i];if(r>=LZ.range-.05)continue;
+    const a=i/view.bins*Math.PI*2;_atmNd.set(-Math.cos(a),.3,-Math.sin(a));atm.sparks(x+Math.cos(a)*r,y+view.heights[h],z+Math.sin(a)*r,{dir:_atmNd,count:4,color:0xff5a30,speed:2.5});}
+}
+// The bursts still cutting: as the beams' front reaches a creature with nothing in between, it is cut down. Solo and
+// the host decide; a co-op guest marks what its own burst went through, so the host's verdict counts as its kill and
+// the body comes apart the laser's way.
+function laserStep(dt){
+  laserCD=Math.max(0,laserCD-dt);laserFullT=Math.max(0,laserFullT-dt);
+  if(!laserBlasts.length)return;
+  const decide=!NET.inGame||NET.role==='host';let shot=false;
+  for(const b of laserBlasts){
+    b.t+=dt;if(b.t>HL.SWEEP)continue;
+    const bodies=monsters.map(m=>b.hit.has(m)?null:laserBody(m,b));
+    for(const h of HL.targets({x:b.x,y:b.y,z:b.z,range:LZ.range,front:HL.front(b.t,LZ.range),heights:LZ.heights,blocks:b.blocks,bodies})){
+      const m=monsters[h.index];b.hit.add(m);
+      if(decide){if(b.mine&&!shot){dopaShotBegin();shot=true;}laserCut(m,b,h);}
+      else if(b.mine){m.dopaHitT=m.laserT=simulationTime;m.dopaHead=false;m.dopaDist=h.distance;m.laserDir=laserDir(m,b);b.kills++;b.report.kills++;b.report.hit.push(h.index);}
+    }
+    // The beams burn along the walls as they sweep.
+    if(atm&&preferences.effects&&b.t>.12)for(let n=0;n<2;n++){const v=b.view,hh=Math.floor(Math.random()*v.heights.length),i=Math.floor(Math.random()*v.bins),r=v.table[hh*v.bins+i];
+      if(r<LZ.range-.05){const a=i/v.bins*Math.PI*2;_atmNd.set(-Math.cos(a),.25,-Math.sin(a));atm.sparks(b.x+Math.cos(a)*r,b.y+v.heights[hh],b.z+Math.sin(a)*r,{dir:_atmNd,count:3,color:0xff5a30,speed:2});}}
+  }
+  if(shot)dopaShotEnd();
+  for(const b of laserBlasts)if(b.t>HL.SWEEP&&b.mine){
+    const left=lasers?`${lasers} charge${lasers===1?'':'s'} left`:'no charges left',burned=b.boss?` · the Gravekeeper burned (−${b.boss})`:'';
+    showMsg(b.kills?`Laser burst · ${b.kills} cut down${burned} · ${left}.`:burned?`Laser burst${burned} · ${left}.`:`Laser burst · nothing in reach · ${left}.`,3);
+  }
+  laserBlasts=laserBlasts.filter(b=>b.t<=HL.SWEEP);
+}
+// What the beams can cut of creature m: standing, an upright cylinder from the floor to its height (the Gravekeeper
+// only what is out of its grave); lying, the nearest of its three body points, low. Dead or not out yet: nothing.
+function laserBody(m,b){
+  if(m.dead||!m.spawned&&!m.dormant)return null;
+  if(m.dormant){const l=m.lay;let k=0;for(let i=2;i<6;i+=2)if(Math.hypot(l[i]-b.x,l[i+1]-b.z)<Math.hypot(l[k]-b.x,l[k+1]-b.z))k=i;return {x:l[k],z:l[k+1],r:m.layR,bottom:0,top:.62};}
+  return {x:m.pos.x,z:m.pos.z,r:m.stats.radius,bottom:0,top:m.stats.height+(m.boss?Math.min(0,m.sink):0)};
+}
+function laserDir(m,b){const dx=m.pos.x-b.x,dz=m.pos.z-b.z,l=Math.hypot(dx,dz)||1;return {x:dx/l,y:0,z:dz/l};}
+// One body the beams went through: a creature dies where it stands with its head cut off (and, for the first two of a
+// burst, an arm), the cuts burning; the Gravekeeper loses LZ.boss of its health, and its head too if that kills it.
+function laserCut(m,b,h){
+  const dir=laserDir(m,b),dmg=m.boss?LZ.boss:m.hp+1,kills=m.hp-dmg<=0,y=b.y+LZ.heights[h.layer];
+  if(b.mine)dopaShotHit(m,false,h.distance);
+  hitMonster(m,dmg,{x:b.x,z:b.z},false,2,{region:'neck',side:b.cuts%2?1:-1,dirX:dir.x,dirZ:dir.z,stagger:.7,knockX:0,knockZ:0,kneel:false,deathForce:1.8,gib:kills});
+  if(atm){_atmNd.set(-dir.x,.5,-dir.z);atm.sparks(m.pos.x-dir.x*m.stats.radius,Math.min(y,m.stats.height*.9),m.pos.z-dir.z*m.stats.radius,{dir:_atmNd,count:22,color:0xff6a3a,speed:3.2});}
+  if(m.boss){b.boss+=dmg;b.report.boss+=dmg;}
+  if(m.dead){laserGore(m,dir,y,b.cuts++<2);b.kills++;b.report.kills++;}
+  b.report.hit.push(monsters.indexOf(m));
+}
+function laserGore(m,dir,y,arm){
+  const u=m.g.userData,prof=HZ.profile(m.kind,m.stats),cy=Math.max(.2,Math.min(y,m.stats.height*.85));
+  m.gored=true;m.g.updateMatrixWorld(true);
+  if(u.head)gore.decapitate(m,m.g,u.head,{dir,force:2.2,chunks:12});
+  if(arm){const side=(m.cutSide=(m.cutSide||0)+1)%2?'armL':'armR';if(u[side])gore.sever(m,m.g,u[side],{dir,force:1.7});}
+  gore.chunks(m.pos.x,cy,m.pos.z,dir.x,.35,dir.z,{count:9,speed:2.8,bone:.25});
+  gore.spray(m.pos.x,cy,m.pos.z,dir.x,.2,dir.z,{amount:3.2,reach:2,cone:.55});
+  gore.bleed(m,m.g,1.6);
+  gore.pool(m,m.g,{local:{x:0,y:prof.quad?prof.hip*.8:prof.hip,z:0},size:Math.min(1.5,.6+prof.radius*1.2),delay:.6,grow:7});
+}
+// The discharge: a falling saw through a resonant band, a high hiss, a buzzing hum while the beams sweep, a thump.
+function sLaser(x,y,z,own){
+  logCue('world','laser',own?'own':'partner');
+  if(!AC)return;const n=AC.currentTime,p=makePanner(own?3:5,own?.8:1);setPos(p,x,y,z);
+  const o=AC.createOscillator(),f=AC.createBiquadFilter(),g=AC.createGain();o.type='sawtooth';o.frequency.setValueAtTime(2600,n);o.frequency.exponentialRampToValueAtTime(70,n+.6);
+  f.type='bandpass';f.Q.value=3.5;f.frequency.setValueAtTime(3400,n);f.frequency.exponentialRampToValueAtTime(260,n+.6);o.connect(f);f.connect(g);g.connect(p);env(g,n,.003,.55,.75);o.start(n);o.stop(n+.85);
+  const hum=AC.createOscillator(),hg=AC.createGain();hum.type='square';hum.frequency.setValueAtTime(110,n);hum.frequency.linearRampToValueAtTime(155,n+.75);hum.connect(hg);hg.connect(p);
+  hg.gain.setValueAtTime(.0001,n);hg.gain.exponentialRampToValueAtTime(.09,n+.05);hg.gain.setValueAtTime(.09,n+.7);hg.gain.exponentialRampToValueAtTime(.0001,n+1.05);hum.start(n);hum.stop(n+1.1);
+  const s=noiseSrc(),hf=AC.createBiquadFilter(),ng=AC.createGain();hf.type='highpass';hf.frequency.value=3200;s.connect(hf);hf.connect(ng);ng.connect(p);env(ng,n,.002,.4,.45);s.start(n,Math.random());s.stop(n+.55);
+  sThud(x,.3,z,.9,140);
+}
+// The floor plan's mark for a laser charge still lying there: a small red star.
+function laserGlyph(c,x,z){
+  c.lineCap='round';
+  for(const [color,width] of [['rgba(0,0,0,.7)',2.4],['#ff4a36',1.1]]){c.strokeStyle=color;c.lineWidth=width;c.beginPath();
+    for(let i=0;i<8;i++){const a=i*Math.PI/4,r1=i%2?3:4.2;c.moveTo(x+Math.cos(a)*1.3,z+Math.sin(a)*1.3);c.lineTo(x+Math.cos(a)*r1,z+Math.sin(a)*r1);}c.stroke();}
+  c.fillStyle='#ffd8cf';c.beginPath();c.arc(x,z,1.15,0,7);c.fill();
+}
 function updateRooms(dt){
   damageT=Math.max(0,damageT-dt);hitMarkerT=Math.max(0,hitMarkerT-dt);noticeT=Math.max(0,noticeT-dt);
   for(const d of roomDoors){d.angle=lerp(d.angle,d.open?-Math.PI/2:0,1-Math.exp(-dt*10));d.hinge.rotation.y=d.angle;}
@@ -918,6 +1033,8 @@ function updateRooms(dt){
   const concealed=door&&!door.open&&door.locked&&P.crouching&&!torchOn&&!P.running&&!mouseDown;
   hideTime=concealed?hideTime+dt:0;P.hidden=hideTime>1.25;
   for(const l of roomLoot)if(!l.taken){l.g.userData.label.visible=Math.hypot(P.pos.x-l.x,P.pos.z-l.z)<3.2;l.g.userData.label.rotation.y=P.yaw;}
+  for(const l of laserPickups)if(!l.taken){l.g.userData.label.visible=Math.hypot(P.pos.x-l.x,P.pos.z-l.z)<3.6;l.g.userData.label.rotation.y=P.yaw;l.g.userData.spin.rotation.y+=dt*1.3;}
+  laserFX.pulse(simulationTime);
   for(const d of decoyEvents){d.remaining-=dt;d.pulse-=dt;if(d.pulse<=0){d.pulse=1.2;sThud(d.x,.1,d.z,.6,680);if(!NET.inGame||NET.role==='host')alertMonsters(23,d.x,d.z,6);}}
   decoyEvents=decoyEvents.filter(d=>d.remaining>0);
   interactionT-=dt;if(interactionT<=0){interactionT=.1;interaction=findInteraction();refreshRoomLights();}
@@ -977,6 +1094,7 @@ function updatePuffs(dt,sdt=dt){for(const sp of puffs){if(!sp.visible)continue;s
   // Wounds ride their joints: wounded creatures get this frame's pose before the gore follows it.
   for(const m of monsters)if(m.gored&&m.g.visible)m.g.updateMatrixWorld(true);
   gore.update(sdt);
+  laserFX.setQuality(qualityLevel);laserFX.setEffects(preferences.effects);laserFX.update(sdt);laserFlashT=Math.max(0,laserFlashT-dt);
   hurtFX.update(dt);
 }
 
@@ -987,6 +1105,12 @@ function updatePuffs(dt,sdt=dt){for(const sp of puffs){if(!sp.visible)continue;s
 const HZ=window.HollowHitZones;
 const gore=window.HollowGore.create({THREE,scene,quality:qualityLevel,effects:preferences.effects,blocks:blocksRay,floorY:0,ceiling:H});
 const hurtFX=window.HollowHurtFX.create({root:$('hud'),document,effects:preferences.effects,motion:preferences.motion});
+// The laser burst (laser.js): G sends beams out of the survivor on every side that cut down every creature within LZ.range
+// m (systems.js) the walls do not shield. A run starts with LZ.start charges; more lie along each floor's corridors
+// (laserPickups, walk over). laserBlasts: bursts still cutting, the survivor's own or a co-op partner's.
+const LZ=RULES.LASER,HL=window.HollowLaser,laserFX=HL.create({THREE,scene,quality:qualityLevel,effects:preferences.effects}),laserGroup=new THREE.Group();
+scene.add(laserGroup);
+let lasers=LZ.start,laserPickups=[],laserBlasts=[],laserCD=0,laserFullT=0,laserFlashT=0,laserLast=null;
 const _hitRay=new THREE.Raycaster(),_hitList=[],_hitV=new THREE.Vector3(),_hitBack=new THREE.Vector3();
 const _meshHit={object:null,point:new THREE.Vector3(),normal:new THREE.Vector3(),distance:0},_hzc={};
 let shotStamp=0,lastShot=null,hurtSlowT=0,hurtSlowDur=1,hurtSlowF=1,hurtPulse=1,hurtSeed=0,hurtLast=null;
@@ -1256,7 +1380,7 @@ function layBodies(first,n,df){
     cells.push({x,z,wx,wz,room,rank:room&&room.type==='morgue'?0:1,r:Math.random()});
   }
   cells.sort((a,b)=>a.rank-b.rank||a.r-b.r);
-  const used=[],near=(x,z)=>roomLoot.some(l=>Math.hypot(l.x-x,l.z-z)<3)||ammoBoxes.some(b=>Math.hypot(b.x-x,b.z-z)<2.4);
+  const used=[],near=(x,z)=>roomLoot.some(l=>Math.hypot(l.x-x,l.z-z)<3)||ammoBoxes.some(b=>Math.hypot(b.x-x,b.z-z)<2.4)||laserPickups.some(l=>Math.hypot(l.x-x,l.z-z)<2.4);
   let ci=0,placed=0;
   for(let i=first;i<first+n;i++){
     const m=monsters[i];let ok=false;
@@ -1296,17 +1420,17 @@ function layDown(m,slot){
 }
 function layDistance(m,x,z){const l=m.lay;return Math.min(Math.hypot(l[0]-x,l[1]-z),Math.hypot(l[2]-x,l[3]-z),Math.hypot(l[4]-x,l[5]-z));}
 function hideMonsters(){monsters.forEach(m=>{m.g.visible=false;m.spawned=false;m.dead=true;m.dormant=false;m.riseT=0;m.wakeIn=-1;});stopAudio(state==='dead');}
-// A kit is everything the survivor carries between floors: health, the guns found so far and their rounds, decoys and
-// the torch battery. A new run gets the starting kit: full health and the sidearm alone.
+// A kit is everything the survivor carries between floors: health, the guns found so far and their rounds, decoys, laser
+// charges and the torch battery. A new run gets the starting kit: full health and the sidearm alone.
 // The M9 sidearm never runs dry: reloads always refill it and its reserve is never spent.
 const infiniteAmmo=()=>weaponDefs[weaponIndex].id==='pistol';
 function freshKit(){
   const has=weaponDefs.map(w=>RULES.STARTING_WEAPONS.includes(w.id));
-  return {health:100,owned:has,weapons:weaponDefs.map((w,i)=>has[i]?{mag:w.capacity,reserve:w.reserve}:{mag:0,reserve:0}),weapon:Math.max(0,has.indexOf(true)),decoys:3,battery:1};
+  return {health:100,owned:has,weapons:weaponDefs.map((w,i)=>has[i]?{mag:w.capacity,reserve:w.reserve}:{mag:0,reserve:0}),weapon:Math.max(0,has.indexOf(true)),decoys:3,lasers:LZ.start,battery:1};
 }
 function currentKit(){
   weapons[weaponIndex]={mag,reserve};
-  return {health:Math.max(1,P.health),owned:owned.slice(),weapons:weapons.map(w=>({mag:w.mag,reserve:w.reserve})),weapon:weaponIndex,decoys,battery};
+  return {health:Math.max(1,P.health),owned:owned.slice(),weapons:weapons.map(w=>({mag:w.mag,reserve:w.reserve})),weapon:weaponIndex,decoys,lasers,battery};
 }
 function resetSurvivor(kit){
   kit=kit||freshKit();
@@ -1315,6 +1439,7 @@ function resetSurvivor(kit){
   for(const k in keys)keys[k]=false;
   weaponModels.forEach(g=>g.visible=false);owned=kit.owned.slice();weapons=kit.weapons.map(w=>({mag:w.mag,reserve:w.reserve}));weaponIndex=owned[kit.weapon]?kit.weapon:Math.max(0,owned.indexOf(true));
   gun=weaponModels[weaponIndex];gunMag=gun.userData.magazine;muzzleFlash=gun.userData.muzzleFlash;decoys=kit.decoys;battery=kit.battery;
+  lasers=Math.floor(finiteNumber(kit.lasers,LZ.start,0,LZ.max));laserBlasts=[];laserCD=laserFlashT=0;laserFX.clear();
   mag=weapons[weaponIndex].mag;reserve=weapons[weaponIndex].reserve;reloadT=0;fireT=.3;gunKick=0;mouseDown=false;fireQueued=false;flashT=0;hitMarkerT=0;setLight(muzzleLight,0);setLight(fpFlash,0);
   stowOwnedWeapons();
 }
@@ -1356,7 +1481,7 @@ function enterFloor(index,kit,seed){
   worldSeed=seed||1+Math.floor(Math.random()*2e9);buildMazeSeeded(worldSeed);
   startFloor(kit);
 }
-function copyKit(k){return {health:k.health,owned:k.owned.slice(),weapons:k.weapons.map(w=>({mag:w.mag,reserve:w.reserve})),weapon:k.weapon,decoys:k.decoys,battery:k.battery};}
+function copyKit(k){return {health:k.health,owned:k.owned.slice(),weapons:k.weapons.map(w=>({mag:w.mag,reserve:w.reserve})),weapon:k.weapon,decoys:k.decoys,lasers:k.lasers,battery:k.battery};}
 // The score of the whole run: floors already cleared plus this floor's streak.
 function runScore(){const own=streak.snapshot();return {kills:scoreBase.kills+own.kills,points:scoreBase.points+own.points};}
 // Between floors: a black title card. It paints before the build holds the main thread, then stays up long enough to
@@ -1405,7 +1530,7 @@ function savedCampaign(){
   const k=s.kit,has=weaponDefs.map((w,i)=>!!(Array.isArray(k.owned)&&k.owned[i])||RULES.STARTING_WEAPONS.includes(w.id));
   const kit={health:finiteNumber(k.health,100,1,100),owned:has,
     weapons:weaponDefs.map((w,i)=>{const v=Array.isArray(k.weapons)&&k.weapons[i]||{};return {mag:Math.floor(finiteNumber(v.mag,0,0,w.capacity)),reserve:Math.floor(finiteNumber(v.reserve,0,0,999))};}),
-    weapon:Math.floor(finiteNumber(k.weapon,1,0,weaponDefs.length-1)),decoys:Math.floor(finiteNumber(k.decoys,3,0,5)),battery:finiteNumber(k.battery,1,0,1)};
+    weapon:Math.floor(finiteNumber(k.weapon,1,0,weaponDefs.length-1)),decoys:Math.floor(finiteNumber(k.decoys,3,0,5)),lasers:Math.floor(finiteNumber(k.lasers,LZ.start,0,LZ.max)),battery:finiteNumber(k.battery,1,0,1)};
   const score=s.score&&typeof s.score==='object'?s.score:{};
   return {floor:fl,kit,elapsed:finiteNumber(s.elapsed,0,0,7200),score:{points:Math.floor(finiteNumber(score.points,0,0,1e6)),kills:Math.floor(finiteNumber(score.kills,0,0,999))}};
 }
@@ -1521,7 +1646,7 @@ addEventListener('keydown',e=>{
   if(state==='play'&&['AltLeft','AltRight','Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ControlLeft','ControlRight'].includes(e.code))e.preventDefault();
   keys[e.code]=true;
   if(!e.repeat){
-    const actions={KeyF:'torch',KeyR:'reload',KeyE:'interact',KeyQ:'weapon',KeyV:'decoy',KeyM:'map',Space:'jump',Escape:'pause'};
+    const actions={KeyF:'torch',KeyR:'reload',KeyE:'interact',KeyQ:'weapon',KeyV:'decoy',KeyG:'laser',KeyM:'map',Space:'jump',Escape:'pause'};
     if(actions[e.code])inputAction(actions[e.code],true);
     if(state==='play'&&/^Digit[1-9]$/.test(e.code)&&Number(e.code.slice(-1))<=weaponDefs.length){const i=Number(e.code.slice(-1))-1;if(owned[i])selectWeapon(i);else showMsg(`No ${weaponDefs[i].name} yet. Guns lie where their owners fell.`,2.2);}
     if(['KeyC','ControlLeft','ControlRight'].includes(e.code))inputAction('crouch',true);
@@ -1551,6 +1676,7 @@ function inputAction(action,pressed){
   if(action==='weapon'&&state==='play')selectWeapon(weaponIndex+1,1);
   if(action==='interact')interact();
   if(action==='decoy')throwDecoy();
+  if(action==='laser')fireLaser();
   if(action==='map'){mapExpanded=!mapExpanded;$('map').classList.toggle('expanded',mapExpanded);mapT=0;}
 }
 const controls=window.HollowControls?HollowControls.create({canvas,onAction:inputAction,onLook:look,onMove:(x,y)=>{touchMove.x=x;touchMove.y=y;}}):null;
@@ -2365,7 +2491,7 @@ function updateGun(dt){
   const visible=gunOut&&['play','caught','pause'].includes(state);
   weaponModels.forEach((model,i)=>{model.visible=visible&&i===weaponIndex;if(!model.visible)model.userData.muzzleFlash.visible=false;});
   if(gunOut)torch.visible=false;
-  if(!visible){setLight(muzzleLight,0);setLight(fpFlash,0);return;}
+  if(!visible){setLight(muzzleLight,0);setLight(fpFlash,0);laserLight(0);return;}
   if(state==='pause')return;
   const w=weaponDefs[weaponIndex];fireT-=dt;
   const loaded=mag;
@@ -2387,7 +2513,13 @@ function updateGun(dt){
   if(gun.userData.pose)gun.userData.pose(reloadT>0?progress:-1,gunKick,shotT);
   const flashing=preferences.effects&&flashT>0;
   if(muzzleFlash){muzzleFlash.visible=flashing;if(flashing)muzzleFlash.rotation.z=Math.random()*6.28;}
-  setLight(muzzleLight,flashing?3:0);setLight(fpFlash,flashing?3:0);
+  setLight(muzzleLight,flashing?3:0);setLight(fpFlash,flashing?3:0);laserLight(flashing?3:0);
+}
+const MUZZLE_TINT=muzzleLight.color.clone(),FP_TINT=fpFlash.color.clone(),LASER_TINT=new THREE.Color().setHex(0xff2a18,THREE.LinearSRGBColorSpace);
+function laserLight(level){
+  const k=laserFlashT>0?Math.min(1,laserFlashT/.3):0;
+  muzzleLight.color.copy(k>0?LASER_TINT:MUZZLE_TINT);fpFlash.color.copy(k>0?LASER_TINT:FP_TINT);
+  if(k>0){setLight(muzzleLight,Math.max(level,7*k));setLight(fpFlash,Math.max(level,4*k));}
 }
 
 /* ---------- map ---------- */
@@ -2476,6 +2608,7 @@ function drawMap(){
     if(r.shelter){c.strokeStyle='#89c7b7';c.lineWidth=1;c.strokeRect(x-2,z-2,4,4);}
     if(r.fuse&&!roomLoot.find(l=>l.room===r&&l.type==='fuse')?.taken){c.fillStyle='#e6b979';c.beginPath();c.moveTo(x,z-3);c.lineTo(x+3,z);c.lineTo(x,z+3);c.lineTo(x-3,z);c.fill();}
   }
+  for(const l of laserPickups)if(!l.taken)laserGlyph(c,l.x/S*k,l.z/S*k);
   // Guns not taken yet: a silhouette of each.
   drawGunIcons(c,css,size);
   c.fillStyle=exitPowered?'#96eac5':'#df6f4d';c.fillRect((W-1)*k,(W-2)*k,k,k);
@@ -2492,6 +2625,12 @@ function updatePickups(){
     const b=ammoBoxes[i];if(b.taken||!pickupReach(b,P.pos))continue;
     if(NET.inGame&&NET.role==='guest'){if(!b.pending&&queueAction({type:'ammo',id:i}))b.pending=NET.actionSeq;continue;}
     b.taken=true;b.g.visible=false;rewardLoot('ammo');NET.tk.push(i);sPickup();
+  }
+  for(const l of laserPickups){
+    if(l.taken||l.pending||!pickupReach(l,P.pos))continue;
+    if(lasers>=LZ.max){if(laserFullT<=0){laserFullT=4;showMsg(`Laser charges full · ${LZ.max} carried. Use one first.`,2);}continue;}
+    if(NET.inGame&&NET.role==='guest'){if(queueAction({type:'lpick',id:l.id}))l.pending=NET.actionSeq;continue;}
+    l.taken=true;l.g.visible=false;NET.lk.push(l.id);rewardLoot('laser');sPickup('laser');
   }
 }
 
@@ -2665,7 +2804,7 @@ async function warmPlayPipelines(){
     monsters.forEach((m,i)=>{m.g.visible=true;m.g.position.set(views[0][0]+3+(i%4)*.9,0,views[0][1]-1.5+Math.floor(i/4)*1.2);m.g.updateMatrixWorld(true);});
     avatar.visible=true;avatar.userData.weapons.forEach(g=>g.visible=true);avatar.position.set(views[0][0]+2,0,views[0][1]+1.5);avatar.updateMatrixWorld(true);
     dynamicWorld.updateMatrixWorld(true);
-    warmCam.aspect=camera.aspect;warmCam.updateProjectionMatrix();gore.prewarm(true);
+    warmCam.aspect=camera.aspect;warmCam.updateProjectionMatrix();gore.prewarm(true);laserFX.prewarm(true);
     for(const [x,z] of views)for(const yaw of yaws){
       if(state!=='menu'||graphicsDown)break;
       warmCam.position.set(x,EYE,z);warmCam.rotation.set(-.15,yaw,0);warmCam.updateMatrixWorld(true);
@@ -2676,7 +2815,7 @@ async function warmPlayPipelines(){
     if(state==='menu'&&!graphicsDown)await renderer.compileAsync(fpScene,camera);
   }catch(e){console.warn('[The Hollow] pipeline warm-up skipped:',e);}
   finally{
-    warming=false;renderRequested=true;gore.prewarm(false);
+    warming=false;renderRequested=true;gore.prewarm(false);laserFX.prewarm(false);
     if(state==='menu'){monsters.forEach(m=>m.g.visible=false);weaponModels.forEach(g=>g.visible=false);}
     if(!NET.inGame){avatar.visible=false;avatar.userData.weapons.forEach((g,i)=>g.visible=i===RIGS[0].weapon);}
   }
@@ -2724,7 +2863,7 @@ function updateHUD(){
     $('horrorCaption').textContent=active?captionText:'';
     $('escapeStatus').textContent=active&&exitPowered?(exitOpen?T.released:bossHolds()?'THE GRAVEKEEPER HOLDS THE GATE':T.releasing+' · '+Math.ceil(exitRelease)+'s'):'';
     document.body.classList.toggle('reading-record',active&&captionT>0&&captionText[0]!=='[');
-  if(controls)controls.update({active,state,torchOn,canInteract:!!interaction,decoys,mapExpanded});
+  if(controls)controls.update({active,state,torchOn,canInteract:!!interaction,decoys,lasers,mapExpanded});
   if(!active)return;
   aboveGroundHUD();
   $('batBar').style.width=(battery*100).toFixed(1)+'%';$('batBar').style.background=battery<.2?'var(--ember)':'var(--bone)';
@@ -2736,6 +2875,7 @@ function updateHUD(){
   $('objectiveText').textContent=exitOpen?T.go:bossHolds()?'KILL THE GRAVEKEEPER · then run for the gate':exitPowered?'THE ALARM IS DRAWING THEM HERE':fuses===3?T.ready:`${fuses} / 3 ${T.tags} · ${nearest?nearest.room.name.slice(5):'search marked rooms'}`;
   $('floorText').textContent=FLOOR().code+' · '+FLOOR().name.toUpperCase();$('wingText').textContent=T.wing;
   $('fpsText').textContent=Math.round(1000/frameAverage)+' FPS · '+qualityLevel.toUpperCase()+(renderScale<1?' '+Math.round(renderScale*100)+'%':'');
+  $('laserTxt').textContent=`LASER ×${lasers}`+(touch?'':' · G');$('laserTxt').classList.toggle('empty',!lasers);
   $('weaponName').textContent=w.name;$('magTxt').textContent=mag;$('resTxt').textContent='/ '+(infiniteAmmo()?'∞':reserve);$('magTxt').style.color=mag===0?'var(--ember)':'';
   $('ammoLbl').textContent=reloadT>0?`RELOADING · ${reloadT.toFixed(1)}s`:aiming?'AIMING':WEAPON_ACTION[w.id]||(w.automatic?'AUTOMATIC':'SEMI-AUTOMATIC');
   if($('weaponSlots').children.length!==weaponDefs.length){$('weaponSlots').textContent='';weaponDefs.forEach((v,i)=>{const slot=document.createElement('span');slot.textContent=(i+1)+' '+(WEAPON_TAG[v.id]||v.id.toUpperCase());$('weaponSlots').appendChild(slot);});}
@@ -2748,19 +2888,20 @@ function updateHUD(){
     if(interaction.type==='record')prompt=captionT>6?'':`${key} Read ${readNotes.has(interaction.item.id)?'case note again':'case note'}`;
         if(interaction.type==='exit')prompt=fuses===3?`${key} ${T.start} · ${FLOOR().boss?'the bell will toll':'alarm will sound'}`:T.need(3-fuses);
   }else if([...roomLoot.filter(l=>automaticLoot(l.type)),...ammoBoxes].some(l=>!l.taken&&pickupReach(l,P.pos,2.4)))prompt='WALK OVER · ammunition collects automatically';
+  else if(laserPickups.some(l=>!l.taken&&pickupReach(l,P.pos,2.4)))prompt=lasers>=LZ.max?`LASER CHARGES FULL · ${LZ.max} carried`:'WALK OVER · laser burst charge';
   else if(P.hidden)prompt='CONCEALED · Stay quiet. Listen for footsteps to fade.';
   else if(currentShelter())prompt='SHELTER · Close and lock the door. Crouch. Torch off.';
-  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · gun icons = weapons · green squares = shelters · red = exit`;
+  else if(simulationTime<15)prompt=`MAP · amber diamonds = ${T.many} · gun icons = weapons · red stars = laser charges · green squares = shelters · red = exit`;
   $('interactionPrompt').textContent=prompt;
   $('controlsHint').textContent=touch?'Left stick: move · Drag right: look · USE: interact':
     P.hidden?'E unlock & leave · Keep your torch off until the footsteps fade':
-    mag===0?'R reload · Q switch weapon · V throw a noise decoy':
+    mag===0?(lasers?'R reload · Q switch weapon · G laser burst · V throw a noise decoy':'R reload · Q switch weapon · V throw a noise decoy'):
     P.running?'C while sprinting: slide · Release SHIFT to aim and fire':
-    simulationTime<20?'WASD move · SHIFT sprint · C crouch · E use · F torch · M floor plan':'';
+    simulationTime<20?'WASD move · SHIFT sprint · C crouch · E use · F torch · G laser burst · M floor plan':'';
 }
 function stepSurvival(dt){
   simulationTime+=dt;updatePlayer(dt);updateRooms(dt);updateHorror(dt);updateThreats(dt);hitsStep(dt);
-  updateTorch(dt);updatePickups();markVisited();
+  updateTorch(dt);updatePickups();markVisited();laserStep(dt);
   chaosStep(dt);
 }
 function loop(){
@@ -2850,10 +2991,10 @@ function loop(){
 }
 
 /* ---------- co-op (two to four players over the live room) ---------- */
-const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false,recorded:false,gen:0,seed:0,shots:0,tk:[],dm:[],ff:{},myPeer:null,sendT:0,joinT:0,over:false,unsubs:[],actions:[],actionSeq:0,actionAck:0,ackSeen:0,claimed:new Set(),joining:false,joinToken:0,spect:null,watched:null,pts:[],ptsKey:''};
+const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false,recorded:false,gen:0,seed:0,shots:0,tk:[],lk:[],lb:[0,0,0,0],dm:[],ff:{},myPeer:null,sendT:0,joinT:0,over:false,unsubs:[],actions:[],actionSeq:0,actionAck:0,ackSeen:0,claimed:new Set(),joining:false,joinToken:0,spect:null,watched:null,pts:[],ptsKey:''};
 // Everyone else in the room, keyed by peer id: the host sees every guest, a guest sees the host and the other guests.
 const REMOTES=new Map(),MAX_GUESTS=3;
-function newRemote(peer){return {present:false,peer,role:'',nm:'Partner',lastNm:'',gn:-1,al:1,out:0,sh:0,lastSh:0,ff:0,ffApplied:0,tk:[],dm:[],dmApplied:new Array(MAX_MON).fill(0),ph:'',seed:0,mc:0,mon:null,el:0,
+function newRemote(peer){return {present:false,peer,role:'',nm:'Partner',lastNm:'',gn:-1,al:1,out:0,sh:0,lastSh:0,ff:0,ffApplied:0,tk:[],lk:[],lb:[0,0,0,0],lastLb:0,dm:[],dmApplied:new Array(MAX_MON).fill(0),ph:'',seed:0,mc:0,mon:null,el:0,
   raw:{x:0,z:0,y:0,yaw:0,pitch:0,torch:false,run:false,crouch:false,hidden:false,reload:false,aim:false,health:100,weapon:0},pos:new THREE.Vector3(),vx:0,vz:0,yaw:0,pitch:0,stepD:0,seen:false,actions:[],actionAck:0,grants:[],gk:0,rig:null};}
 const partners=()=>[...REMOTES.values()].filter(r=>r.present);
 const anyPartner=()=>partners().length>0;
@@ -2970,6 +3111,8 @@ function readRemote(peer,pr){
     if(!r.seen){r.pos.set(q.x,0,q.z);r.yaw=q.yaw;r.pitch=q.pitch;r.seen=true;}}
   // ff: the damage this partner's shots have done to each of the others, keyed by peer
   r.sh=finiteNumber(pr.sh,0,0);r.ff=pr.ff&&typeof pr.ff==='object'&&NET.myPeer?finiteNumber(pr.ff[NET.myPeer],0,0):0;r.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];
+  r.lk=Array.isArray(pr.lk)?pr.lk.filter(i=>Number.isInteger(i)&&i>=0&&i<laserPickups.length):[];
+  if(Array.isArray(pr.lb)&&pr.lb.length>=3)r.lb=[Math.floor(finiteNumber(pr.lb[0],0,0,1e6)),finiteNumber(pr.lb[1],0,-110,W*S+60),finiteNumber(pr.lb[2],0,-70,W*S+70),finiteNumber(pr.lb[3],0,0,H)];
   if(NET.role==='host'&&r.role==='guest'){r.dm=Array.isArray(pr.dm)?pr.dm.slice(0,MAX_MON).map(v=>finiteNumber(v,0,0)):[];r.actions=Array.isArray(pr.actions)?pr.actions.slice(0,32):[];
     r.gk=Math.floor(finiteNumber(pr.gk,0,0));if(r.grants.length)r.grants=r.grants.filter(g=>g.n>r.gk);}
   if(NET.role==='guest'&&r.role==='host'){r.mon=Array.isArray(pr.mon)?pr.mon.slice(0,MAX_MON).map(v=>Array.isArray(v)&&v.length>=4&&v.slice(0,4).every(Number.isFinite)?[finiteNumber(v[0],0,-110,W*S+60),finiteNumber(v[1],0,-70,W*S+70),finiteNumber(v[2],0),Math.floor(v[3])&31,finiteNumber(v[4],0,-100,100)]:null):null;r.mc=Math.floor(finiteNumber(pr.mc,0,0,MAX_MON));r.el=finiteNumber(pr.el,0,0,7200);
@@ -2983,14 +3126,14 @@ function readRemote(peer,pr){
       if(Array.isArray(pr.fuses))for(const l of roomLoot)if(l.type==='fuse'&&pr.fuses.includes(l.id)){l.taken=true;l.g.visible=false;}
       if(Array.isArray(pr.loot))for(const l of roomLoot)if(pr.loot.includes(l.id)){l.taken=true;l.g.visible=false;}
       const grants=pr.grants&&typeof pr.grants==='object'&&NET.myPeer?pr.grants[NET.myPeer]:null;
-      if(Array.isArray(grants))for(const grant of grants){if(grant&&typeof grant.id==='string'&&!NET.claimed.has(grant.id)&&['ammo','medical','supplies'].includes(grant.type)){NET.claimed.add(grant.id);rewardLoot(grant.type);sPickup();}}
+      if(Array.isArray(grants))for(const grant of grants){if(grant&&typeof grant.id==='string'&&!NET.claimed.has(grant.id)&&['ammo','medical','supplies','laser'].includes(grant.type)){NET.claimed.add(grant.id);rewardLoot(grant.type);sPickup();}}
       fuses=roomLoot.filter(l=>l.type==='fuse'&&l.taken).length;exitPowered=!!pr.power;
             exitRelease=finiteNumber(pr.release,exitPowered?FLOOR().release:0,0,FLOOR().release);exitOpen=exitPowered&&pr.exitOpen===1;
-      const ack=pr.acks&&typeof pr.acks==='object'&&NET.myPeer?Number(pr.acks[NET.myPeer])||0:0;NET.ackSeen=ack;NET.actions=NET.actions.filter(a=>a.n>ack);for(const item of [...ammoBoxes,...roomLoot])if(item.pending&&item.pending<=ack)item.pending=false;
+      const ack=pr.acks&&typeof pr.acks==='object'&&NET.myPeer?Number(pr.acks[NET.myPeer])||0:0;NET.ackSeen=ack;NET.actions=NET.actions.filter(a=>a.n>ack);for(const item of [...ammoBoxes,...roomLoot,...laserPickups])if(item.pending&&item.pending<=ack)item.pending=false;
     }
     if(pr.ph==='lobby'&&NET.inGame&&state==='coopEnd'){$('ceWait').textContent=`Waiting for ${r.nm} to start another round.`;}
   }
-  if(!was){r.lastSh=r.sh;r.ffApplied=r.ff;if(NET.inGame)showMsg(`${r.nm} is here.`,2.5);}
+  if(!was){r.lastSh=r.sh;r.lastLb=r.lb[0];r.ffApplied=r.ff;if(NET.inGame)showMsg(`${r.nm} is here.`,2.5);}
 }
 function partnerLeft(r){
   if(NET.inGame&&state!=='coopEnd'){
@@ -3021,11 +3164,11 @@ function hostStart(){
 }
 function startCoopRound(seed,gen){
   initAudio();
-  NET.gen=gen;NET.seed=seed;NET.inGame=true;NET.over=false;NET.myAl=true;NET.myOut=false;NET.recorded=false;NET.shots=0;NET.ff={};NET.tk=[];NET.dm=new Array(MAX_MON).fill(0);
+  NET.gen=gen;NET.seed=seed;NET.inGame=true;NET.over=false;NET.myAl=true;NET.myOut=false;NET.recorded=false;NET.shots=0;NET.ff={};NET.tk=[];NET.lk=[];NET.lb=[0,0,0,0];NET.dm=new Array(MAX_MON).fill(0);
   runToken++;$('ceRank').textContent='';
   rigLights(true);
   NET.actions=[];NET.actionSeq=0;NET.actionAck=0;NET.ackSeen=0;NET.claimed.clear();NET.spect=null;NET.watched=null;
-  for(const r of REMOTES.values()){r.actions=[];r.actionAck=0;r.grants=[];r.gk=0;r.dmApplied=new Array(MAX_MON).fill(0);r.lastSh=r.gn===gen?r.sh:0;r.ffApplied=r.gn===gen?r.ff:0;r.seen=false;}
+  for(const r of REMOTES.values()){r.actions=[];r.actionAck=0;r.grants=[];r.gk=0;r.dmApplied=new Array(MAX_MON).fill(0);r.lastSh=r.gn===gen?r.sh:0;r.lastLb=r.gn===gen?r.lb[0]:0;r.ffApplied=r.gn===gen?r.ff:0;r.seen=false;}
   // Co-op rounds are played on B1.
   floor=0;scoreBase={points:0,kills:0};checkpoint=null;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
   buildMazeSeeded(seed);resetSurvivor();
@@ -3088,7 +3231,7 @@ function sendNet(force){
   const now=performance.now();if(!force&&now-NET.sendT<67)return;NET.sendT=now;
   const ff={};for(const id in NET.ff)ff[id]=r2(NET.ff[id]);
   const pk={gn:NET.gen,ph:NET.inGame&&!NET.over?'play':'lobby',p:[r2(P.pos.x),r2(P.pos.z),r2(P.yaw),r2(P.pitch),torchOn?1:0,P.running?1:0,r2(P.pos.y),P.crouching?1:0,P.hidden?1:0,Math.round(P.health),weaponIndex,reloadT>0?1:0,aiming&&!reloadT?1:0],
-    al:NET.myAl===false?0:1,out:NET.myOut?1:0,sh:NET.shots,ff,tk:NET.tk.slice(0,32)};
+    al:NET.myAl===false?0:1,out:NET.myOut?1:0,sh:NET.shots,ff,tk:NET.tk.slice(0,32),lk:NET.lk.slice(0,16),lb:NET.lb};
   if(NET.role==='guest'){pk.dm=NET.dm.slice(0,MAX_MON).map(r2);pk.actions=NET.actions.slice(0,12);pk.gk=NET.ackSeen;}
   if(NET.role==='host'){pk.seed=NET.seed;pk.mc=monCount;pk.el=r2(elapsed);pk.pts=NET.pts;
     pk.mon=monsters.slice(0,monCount).map(m=>[r2(m.pos.x),r2(m.pos.z),r2(m.yaw),(m.state==='chase'?1:0)|(m.dead?2:0)|(m.stagger>0?4:0)|(m.state==='stalk'?8:0)|(m.dormant?16:0),r2(m.hp)]);
@@ -3110,7 +3253,9 @@ function guestMonsters(dt){
     if(m.dead&&!dead){clearHits(m);m.spawned=true;m.g.visible=true;m.dead=false;m.deadT=0;m.pos.set(x,0,z);m.yaw=yaw;m.g.rotation.set(0,yaw,0);m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);m.state='wander';m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.spotCD=0;m.stagger=0;m.anim.reset();m.animYaw=m.yaw;
       m.dormant=false;m.riseT=0;m.wakeIn=-1;if(asleep&&!dead)layDown(m,i);}
     if(dead&&!m.dead){m.dead=true;m.dormant=false;m.riseT=0;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
-      m.anim.die({dirX:m.pos.x-P.pos.x,dirZ:m.pos.z-P.pos.z,yaw:m.yaw});
+      const lasered=simulationTime-(m.laserT??-99)<2.5;
+      m.anim.die(lasered?{dirX:m.laserDir.x,dirZ:m.laserDir.z,yaw:m.yaw,force:1.8,region:'neck',gib:true}:{dirX:m.pos.x-P.pos.x,dirZ:m.pos.z-P.pos.z,yaw:m.yaw});
+      if(lasered){m.laserT=-99;laserGore(m,m.laserDir,1.15,true);}
       const left=R.mon.slice(0,monCount).filter(q=>q&&!(q[3]&2)).length;showMsg(left?`It went down. ${left} still walking.`:'It went down. The corridors are silent.',3);}
     if(m.dead){if(m.g.visible)m.deadT+=dt;continue;}
     if(m.dormant&&!asleep){m.state=chase?'chase':'wander';wakeEffects(m);}
@@ -3147,6 +3292,8 @@ function hostActions(R){
       else if(l.type!=='medical'||R.raw.health<100){l.taken=true;l.g.visible=false;R.grants.push({id:l.id,type:l.type,n:a.n});showMsg(`${R.nm} collected ${l.type==='medical'?'a medical kit':'supplies'}.`,2);}
     }else if(a.type==='ammo'){
       const b=Number.isInteger(a.id)&&a.id>=0&&a.id<ammoBoxes.length?ammoBoxes[a.id]:null;if(b&&!b.taken&&pickupReach(b,R.raw,1.6)){b.taken=true;b.g.visible=false;NET.tk.push(a.id);R.grants.push({id:'ammo:'+a.id,type:'ammo',n:a.n});}
+    }else if(a.type==='lpick'){
+      const l=Number.isInteger(a.id)&&a.id>=0&&a.id<laserPickups.length?laserPickups[a.id]:null;if(l&&!l.taken&&pickupReach(l,R.raw,1.6)){l.taken=true;l.g.visible=false;NET.lk.push(a.id);R.grants.push({id:'laser:'+a.id,type:'laser',n:a.n});}
     }else if(a.type==='exit'&&Math.hypot(R.raw.x-(W-1)*S,R.raw.z-((W-2)*S+S/2))<3.5)powerExit();
     else if(a.type==='decoy'&&Number.isFinite(a.x)&&Number.isFinite(a.z)&&Math.hypot(a.x-R.raw.x,a.z-R.raw.z)<12)decoyEvents.push({x:a.x,z:a.z,remaining:5,pulse:0});
   }
@@ -3174,6 +3321,8 @@ function netTick(dt){
     if(R.ff<R.ffApplied)R.ffApplied=R.ff;else if(R.ff-R.ffApplied>.01){const d=R.ff-R.ffApplied;R.ffApplied=R.ff;hurtByPartner(Math.min(d,100),R);}
     // ammo boxes the partner took
     for(const ix of R.tk){const b=ammoBoxes[ix];if(b&&!b.taken){b.taken=true;b.g.visible=false;}}
+    for(const ix of R.lk){const l=laserPickups[ix];if(l&&!l.taken){l.taken=true;l.g.visible=false;}}
+    if(R.lb[0]>R.lastLb){R.lastLb=R.lb[0];if(R.al&&!R.out&&state!=='coopEnd'){const near=Math.hypot(R.lb[1]-R.raw.x,R.lb[2]-R.raw.z)<3;laserBlast(near?R.lb[1]:R.raw.x,R.lb[3]||0,near?R.lb[2]:R.raw.z,R);}}
     // the host applies each guest's hits and actions
     if(NET.role==='host'&&R.role==='guest'){for(let i=0;i<monCount;i++){const tot=Number(R.dm[i])||0,d=tot-(R.dmApplied[i]||0);if(d>0){R.dmApplied[i]=tot;hitMonster(monsters[i],Math.min(d,30),{x:R.raw.x,z:R.raw.z});}}
       hostActions(R);}
@@ -3777,7 +3926,7 @@ function animSummary(m){const a=m.anim.snapshot();return {run:a.run,lunge:a.lung
   pitch:m.g.rotation.x,roll:m.g.rotation.z,y:m.g.position.y,lowest:HollowMonsterAnim.lowest(m.kind,m.anim.pose)};}
 function snapshot(){return {
   state,seed:worldSeed,position:{x:P.pos.x,y:P.pos.y,z:P.pos.z},yaw:P.yaw,pitch:P.pitch,onGround:P.onGround,crouching:P.crouching,running:P.running,hidden:P.hidden,health:P.health,stamina:P.stamina,torchOn,battery,
-  weapon:weaponDefs[weaponIndex].id,mag,reserve,reloadT,aiming,elapsed,simulationTime,fuses,exitPowered,exitRelease,exitOpen,decoys,
+  weapon:weaponDefs[weaponIndex].id,mag,reserve,reloadT,aiming,elapsed,simulationTime,fuses,exitPowered,exitRelease,exitOpen,decoys,lasers,
   floor,floorCode:FLOOR().code,owned:weaponDefs.filter((w,i)=>owned[i]).map(w=>w.id),score:runScore(),
   checkpoint:checkpoint?{floor:checkpoint.floor,elapsed:checkpoint.elapsed,owned:weaponDefs.filter((w,i)=>checkpoint.kit.owned[i]).map(w=>w.id)}:null,
   savedFloor:savedCampaign()?.floor||0,
@@ -3801,6 +3950,8 @@ function snapshot(){return {
   mapGuns:mapGuns.map(g=>({...g})),
   loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending,...(l.type==='weapon'?{weapon:weaponDefs[l.weapon].id,visible:l.g.visible}:{})})),
   ammoPickups:ammoBoxes.map((b,i)=>({id:i,x:b.x,z:b.z,taken:b.taken,pending:!!b.pending})),
+  laserPickups:laserPickups.map(l=>({id:l.id,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending,visible:l.g.visible})),
+  laser:{...laserFX.snapshot(),cutting:laserBlasts.length,cooldown:laserCD,flash:laserFlashT,last:laserLast?{...laserLast,hit:laserLast.hit.slice()}:null},
   boss:bossSnapshot(),
   enemies:monsters.slice(0,monCount).map((m,i)=>({index:i,kind:m.kind,x:m.pos.x,z:m.pos.z,hp:m.hp,dead:m.dead,state:m.state,speed:m.stats.chase,moveSpeed:m.g.userData.speed,stalkTime:m.stalkT,watchTime:m.watchT,lunge:m.lungeBoost>0,lungeCooldown:m.lungeCD,anim:animSummary(m),
     dormant:!!m.dormant,sleep:m.sleep||0,wakeIn:m.wakeIn,rising:m.riseT>0,visible:m.g.visible,body:m.dormant?m.lay.slice():null,hits:hitsSummary(m)})),
@@ -3836,6 +3987,8 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     // Feed the auto-quality governor `count` frames of `ms` each, starting a fresh window with no settle time.
     autoQualityFrames:(ms,count)=>{const n=finiteNumber(count,0,0,2000),dt=finiteNumber(ms,16,1,1000)/1000;autoMs=autoFrames=autoSettle=0;for(let i=0;i<n;i++)autoQuality(dt);return {quality:qualityLevel,renderScale,wardDetail:wardDetail.value,autoBest};},
     health:value=>{P.health=finiteNumber(value,100,0,100);damageT=0;},torch:value=>{torchOn=value;},
+    // Sets the laser charges carried (0 to LZ.max); returns them.
+    lasers:value=>{lasers=Math.floor(finiteNumber(value,LZ.start,0,LZ.max));laserCD=0;return lasers;},
     advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateCameraRig(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));updatePuffs(dt);}updateHUD();updateHealthVignette();},
     hit:(index,damage)=>hitMonster(monsters[index],damage),
     aim:(index,part)=>aimAtPart(monsters[index],part),

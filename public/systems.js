@@ -42,27 +42,33 @@
     exhaustedRecover:.35, exhaustedSpeed:.85, jumpCost:.08, slideCost:.16, slideSpeed:7.5, slideTime:.65
   });
   // The campaign: three floors below and two above, each with three objective items behind one exit. active: monsters awake on arrival;
-  // sleepers: bodies on the floor that wake when disturbed; ammo: supply boxes; release: seconds the exit takes to open
+  // sleepers: bodies on the floor that wake when disturbed; ammo: supply boxes; lasers: laser burst charges lying along
+  // the corridors; release: seconds the exit takes to open
   // once powered (B1 keeps HollowHorror.RELEASE_SECONDS). weapons: gun -> room id where it lies, if not yet owned.
   const FLOORS = Object.freeze([
     Object.freeze({id:'b1', code:'B1', name:'Blackwater Ward', item:'power fuse', items:'power fuses', exit:'east loading shutter',
-      active:8, sleepers:5, ammo:16, release:10, weapons:Object.freeze({rifle:'armory', smg:'stores'})}),
+      active:8, sleepers:5, ammo:16, lasers:2, release:10, weapons:Object.freeze({rifle:'armory', smg:'stores'})}),
     Object.freeze({id:'b2', code:'B2', name:'Records & Morgue', item:'lift keycard', items:'lift keycards', exit:'freight lift',
-      active:6, sleepers:12, ammo:18, release:15, weapons:Object.freeze({shotgun:'m-security', rifle:'m-intake', magnum:'m-chapel', smg:'m-boiler'})}),
+      active:6, sleepers:12, ammo:18, lasers:2, release:15, weapons:Object.freeze({shotgun:'m-security', rifle:'m-intake', magnum:'m-chapel', smg:'m-boiler'})}),
     Object.freeze({id:'b3', code:'B3', name:'The Hollow', item:'floodgate key', items:'floodgate keys', exit:'surface floodgate',
-      active:10, sleepers:9, ammo:20, release:25, weapons:Object.freeze({rifle:'h-guard', shotgun:'h-cell-a', marksman:'h-control', lmg:'h-cistern', magnum:'h-store', smg:'h-cell-b'})}),
+      active:10, sleepers:9, ammo:20, lasers:2, release:25, weapons:Object.freeze({rifle:'h-guard', shotgun:'h-cell-a', marksman:'h-control', lmg:'h-cistern', magnum:'h-store', smg:'h-cell-b'})}),
     // Above ground (outdoor: a night sky, hedges or churchyard walls). S2's gate opens only once its boss is dead: the
     // Gravekeeper rises from `grave` inside the open `arena` [x0, z0, x1, z1] (cells), and later calls the bodies in
     // `summons` up out of their graves into the pool slots left free after active + sleepers.
     Object.freeze({id:'garden', code:'S1', name:'The Overgrown Garden', item:'gate key', items:'gate keys', exit:'garden gate',
-      active:9, sleepers:11, ammo:22, release:30, outdoor:true, fountain:Object.freeze([17, 17]), weapons:Object.freeze({marksman:'g-potting', rifle:'g-orangery', magnum:'g-rose'})}),
+      active:9, sleepers:11, ammo:22, lasers:2, release:30, outdoor:true, fountain:Object.freeze([17, 17]), weapons:Object.freeze({marksman:'g-potting', rifle:'g-orangery', magnum:'g-rose'})}),
     Object.freeze({id:'graveyard', code:'S2', name:'Blackwater Graveyard', item:'crypt key', items:'crypt keys', exit:'cemetery gate',
-      active:8, sleepers:9, ammo:24, release:35, outdoor:true, weapons:Object.freeze({lmg:'y-gravedigger', shotgun:'y-vestry', marksman:'y-columbarium'}),
+      active:8, sleepers:9, ammo:24, lasers:3, release:35, outdoor:true, weapons:Object.freeze({lmg:'y-gravedigger', shotgun:'y-vestry', marksman:'y-columbarium'}),
       boss:Object.freeze({kind:'gravekeeper', grave:Object.freeze([29, 30]), arena:Object.freeze([21, 21, 33, 33]),
         summons:Object.freeze([Object.freeze([23, 23]), Object.freeze([31, 23]), Object.freeze([23, 31])])})})
   ]);
   // Every run starts with the sidearm alone; the other guns lie somewhere below and are picked up when found.
   const STARTING_WEAPONS = Object.freeze(['pistol']);
+  // The laser burst (G): beams out of the survivor on every side at `heights` (m above their feet) that kill every
+  // creature within `range` m the walls, closed doors and furniture do not shield. A run starts with `start` charges and
+  // carries at most `max`; the Gravekeeper only loses `boss` of its health to one. noise: how far it is heard; wake:
+  // sleepers that far off get up. cooldown: seconds between two bursts.
+  const LASER = Object.freeze({range:8.5, heights:Object.freeze([.45, 1.15, 1.85]), start:1, max:5, boss:30, noise:30, wake:14, cooldown:1.2});
   // Sleeping bodies build disturbance toward `wake` and lose it at `decay` per second when left alone. Distances in
   // metres: a torch beam (within `cone` radians of its axis), a sprint, a walk or a crouch-walk inside its range, or
   // lingering beside one (`near`); contact (`touch`) wakes at once. A gunshot wakes sleepers within noise x `shot`.
@@ -308,5 +314,5 @@
       kind==='lmg'?Math.max(.75,1-Math.max(0,distance-25)/60):1;
     return w.damage*falloff*(headshot?(monsterKind==='warden'?WARDEN_HEADSHOT[kind]||1.1:HEADSHOT[kind]||1.85):1);
   }
-  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,AMMO_DROPS,MONSTERS,PLAYER,FLOORS,STARTING_WEAPONS,SLEEP,seeded,generateMaze,generateFloor,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage,sleepDisturbance,shotWakeDelay};
+  return {SIZE,CELL,BASELINE_SIZE,DIRECTIONS,WEAPONS,AMMO_DROPS,MONSTERS,PLAYER,FLOORS,STARTING_WEAPONS,LASER,SLEEP,seeded,generateMaze,generateFloor,flood,circleBox,blocksCircleMove,injuryLevel,insideRoom,weaponDamage,sleepDisturbance,shotWakeDelay};
 });

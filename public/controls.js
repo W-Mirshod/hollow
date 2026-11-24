@@ -14,7 +14,8 @@
     aim: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"/><circle cx="12" cy="12" r="4"/>',
     pause: '<path d="M8 5v14M16 5v14" stroke-width="3"/>',
     decoy: '<path d="m9 9 2-4h4l1 5 4 8c1 2-1 3-3 3H9c-2 0-4-1-3-3l3-9Zm2-4V2h4v3M9 13h9"/>',
-    map: '<path d="m3 5 6-3 6 3 6-3v17l-6 3-6-3-6 3V5Zm6-3v17m6-14v17"/>'
+    map: '<path d="m3 5 6-3 6 3 6-3v17l-6 3-6-3-6 3V5Zm6-3v17m6-14v17"/>',
+    laser: '<circle cx="12" cy="12" r="2.6"/><path d="M12 1.5v5.5m0 10v5.5M1.5 12H7m10 0h5.5M4.6 4.6l3.6 3.6m7.6 7.6 3.6 3.6m0-14.8-3.6 3.6m-7.6 7.6-3.6 3.6"/>'
   };
   const HOLD_ACTIONS = new Set(['fire', 'aim', 'sprint', 'crouch']);
 
@@ -35,6 +36,7 @@
     let lookLast = { x: 0, y: 0 };
     let moveX = 0;
     let moveY = 0;
+    let lasersShown = null;
     const pressed = new Map();
     const actionPointers = new Map();
     const toggled = new Map();
@@ -55,7 +57,7 @@
       ['interact', 'Use', 'Interact, close or lock a shelter'], ['reload', 'Reload', 'Reload weapon'],
       ['sprint', 'Sprint', 'Hold while moving to sprint'], ['torch', 'Torch', 'Toggle torch'],
       ['weapon', 'Weapon', 'Change weapon'], ['aim', 'Aim', 'Hold to aim'], ['pause', 'Pause', 'Pause and settings'],
-      ['decoy', 'Decoy', 'Throw a noise decoy'], ['map', 'Map', 'Expand map']
+      ['decoy', 'Decoy', 'Throw a noise decoy'], ['map', 'Map', 'Expand map'], ['laser', 'Laser', 'Fire a laser burst']
     ];
     for (const [action, label, accessible] of specs) {
       const button = document.createElement('button');
@@ -263,6 +265,12 @@
         if ('interact' in data) buttons.interact.classList.toggle('is-on', !!data.interact);
         if ('canInteract' in data) buttons.interact.classList.toggle('is-on', !!data.canInteract);
         if ('decoys' in data) buttons.decoy.setAttribute('aria-label', 'Throw a noise decoy, ' + data.decoys + ' remaining');
+        if ('lasers' in data && data.lasers !== lasersShown) {
+          lasersShown = data.lasers;
+          buttons.laser.setAttribute('aria-label', 'Fire a laser burst, ' + data.lasers + ' remaining');
+          buttons.laser.querySelector('span').textContent = 'Laser ' + data.lasers;
+          buttons.laser.classList.toggle('is-empty', !data.lasers);
+        }
         if (data.state && overlay.dataset.state !== data.state) {
           releaseAll();
           overlay.dataset.state = data.state;

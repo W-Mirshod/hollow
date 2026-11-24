@@ -353,6 +353,8 @@ body.touch-mode .boss-bar { bottom: auto; top: calc(var(--safe-top) + 8px); widt
 #weaponName { font-size: 11px; letter-spacing: .055em; color: #e8e9dc; }
 .weapon-readout { display: flex; align-items: baseline; justify-content: flex-end; gap: 12px; margin-top: 7px; }
 #ammoLbl { font: 8px var(--font-mono); text-transform: uppercase; color: var(--ash); }
+.laser-count { margin-top: 6px; font: 9px var(--font-mono); letter-spacing: .08em; color: #ff9d8e; text-shadow: 0 0 6px rgba(255, 60, 40, .45); }
+.laser-count.empty { color: var(--ash); text-shadow: none; opacity: .6; }
 .ammoRow { display: flex; align-items: baseline; gap: 6px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--bone); }
 .ammoRow b { font-size: 29px; font-weight: 400; line-height: 1; letter-spacing: -.055em; }
 .ammoRow span { font-size: 11px; color: var(--ash); }
@@ -403,6 +405,8 @@ body.touch-mode .boss-bar { bottom: auto; top: calc(var(--safe-top) + 8px); widt
 .touch-weapon { right: calc(var(--safe-right) + 119px); top: calc(var(--safe-top) + 36px); width: 43px; height: 43px; }
 .touch-decoy { left: calc(var(--safe-left) + 213px); bottom: calc(var(--safe-bottom) + 196px); width: 43px; height: 43px; }
 .touch-map { right: calc(var(--safe-right) + 174px); top: calc(var(--safe-top) + 36px); width: 43px; height: 43px; }
+.touch-laser { left: calc(var(--safe-left) + 268px); bottom: calc(var(--safe-bottom) + 196px); width: 43px; height: 43px; color: #ffd2c8; border-color: rgba(255, 118, 96, .6); background: rgba(70, 14, 10, .6); }
+.touch-laser.is-empty { color: rgba(228, 229, 214, .45); border-color: rgba(232, 230, 208, .2); background: rgba(10, 19, 14, .45); }
 .touch-pause { right: var(--safe-right); top: var(--safe-top); width: 42px; height: 42px; border-radius: 9px; }
 .touch-pause > span { display: none; }
 body.touch-mode .field-telemetry { right: calc(var(--safe-right) + 60px); }
@@ -512,6 +516,7 @@ body.touch-mode .field-telemetry { display: none; }
   .touch-reload { right: calc(var(--safe-right) + 1px); bottom: calc(var(--safe-bottom) + 39px); }
   .touch-sprint { left: calc(var(--safe-left) + 22px); bottom: calc(var(--safe-bottom) + 179px); }
   .touch-decoy { left: calc(var(--safe-left) + 9px); bottom: calc(var(--safe-bottom) + 240px); }
+  .touch-laser { left: auto; right: calc(var(--safe-right) + 14px); bottom: calc(var(--safe-bottom) + 190px); }
   .touch-pause { width: 42px; height: 42px; }
   body.touch-mode .field-guidance { width: calc(100vw - 36px); bottom: max(6px, env(safe-area-inset-bottom, 0px)); }
   body.touch-mode #controlsHint { font-size: 8px; max-width: 320px; line-height: 1.5; }
@@ -579,6 +584,7 @@ body.touch-mode .field-telemetry { display: none; }
   .touch-interact { right: calc(var(--safe-right) + 138px); bottom: calc(var(--safe-bottom) + 76px); }
   .touch-sprint { left: calc(var(--safe-left) + 113px); bottom: calc(var(--safe-bottom) + 74px); }
   .touch-decoy { left: calc(var(--safe-left) + 170px); bottom: calc(var(--safe-bottom) + 22px); }
+  .touch-laser { left: calc(var(--safe-left) + 170px); bottom: calc(var(--safe-bottom) + 78px); }
   .touch-torch { right: calc(var(--safe-right) + 59px); top: calc(var(--safe-top) + 21px); width: 39px; height: 39px; }
   .touch-weapon { right: calc(var(--safe-right) + 109px); top: calc(var(--safe-top) + 21px); width: 39px; height: 39px; }
   .touch-map { right: calc(var(--safe-right) + 159px); top: calc(var(--safe-top) + 21px); width: 39px; height: 39px; }

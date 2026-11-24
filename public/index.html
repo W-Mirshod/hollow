@@ -48,6 +48,7 @@
   <link rel="preload" href="hitzones.js" as="script">
   <link rel="preload" href="gore.js" as="script">
   <link rel="preload" href="hurtfx.js" as="script">
+  <link rel="preload" href="laser.js" as="script">
   <link rel="preload" href="game.js" as="script">
 </head>
 <body>
@@ -93,6 +94,7 @@
     <div id="weaponSlots" aria-label="Available weapons"><span class="selected">1</span><span>2</span><span>3</span></div>
     <div id="weaponName">Assault rifle</div>
     <div class="weapon-readout"><div id="ammoLbl">Ready</div><div class="ammoRow"><b id="magTxt">30</b><span id="resTxt">/ 0</span></div></div>
+    <div id="laserTxt" class="laser-count" title="Laser burst charges">LASER ×1 · G</div>
   </div>
 </div>
 <div id="cross" hidden aria-hidden="true"><i class="reticle-arm arm-left"></i><i class="reticle-arm arm-right"></i><i class="reticle-arm arm-top"></i><i class="reticle-arm arm-bottom"></i><span id="reticleHit"></span></div>
@@ -167,6 +169,7 @@
         <dt><kbd>Q</kbd> / <kbd>1–3</kbd></dt><dd>Change weapon (once found)</dd>
         <dt><kbd>F</kbd></dt><dd>Toggle shoulder torch</dd>
         <dt><kbd>V</kbd> / <kbd>M</kbd></dt><dd>Throw decoy / expand map</dd>
+        <dt><kbd>G</kbd></dt><dd>Laser burst: beams on every side cut down everything within 8.5 m</dd>
         <dt><kbd>Esc</kbd></dt><dd>Pause &amp; settings</dd>
       </dl>
       <p class="touch-instructions">Touch: left stick to move, drag right to look. Use the labeled buttons.</p>
