@@ -2665,7 +2665,7 @@ async function warmPlayPipelines(){
     monsters.forEach((m,i)=>{m.g.visible=true;m.g.position.set(views[0][0]+3+(i%4)*.9,0,views[0][1]-1.5+Math.floor(i/4)*1.2);m.g.updateMatrixWorld(true);});
     avatar.visible=true;avatar.userData.weapons.forEach(g=>g.visible=true);avatar.position.set(views[0][0]+2,0,views[0][1]+1.5);avatar.updateMatrixWorld(true);
     dynamicWorld.updateMatrixWorld(true);
-    warmCam.aspect=camera.aspect;warmCam.updateProjectionMatrix();
+    warmCam.aspect=camera.aspect;warmCam.updateProjectionMatrix();gore.prewarm(true);
     for(const [x,z] of views)for(const yaw of yaws){
       if(state!=='menu'||graphicsDown)break;
       warmCam.position.set(x,EYE,z);warmCam.rotation.set(-.15,yaw,0);warmCam.updateMatrixWorld(true);
@@ -2676,7 +2676,7 @@ async function warmPlayPipelines(){
     if(state==='menu'&&!graphicsDown)await renderer.compileAsync(fpScene,camera);
   }catch(e){console.warn('[The Hollow] pipeline warm-up skipped:',e);}
   finally{
-    warming=false;renderRequested=true;
+    warming=false;renderRequested=true;gore.prewarm(false);
     if(state==='menu'){monsters.forEach(m=>m.g.visible=false);weaponModels.forEach(g=>g.visible=false);}
     if(!NET.inGame){avatar.visible=false;avatar.userData.weapons.forEach((g,i)=>g.visible=i===RIGS[0].weapon);}
   }

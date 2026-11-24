@@ -79,6 +79,29 @@ test('loads as a browser global and a CommonJS module; meshes start hidden and d
   gore.update(1 / 60); gore.spray(0, 1, 0, 1, 0, 0); gore.dispose();
 });
 
+test('prewarm shows every pool for a pipeline compile, survives update(), and puts back exactly what was drawn', () => {
+  const { scene, gore } = setup();
+  const before = () => gore.meshes.map(m => [m.name, m.count, m.visible]);
+  const idle = before();
+  gore.prewarm(true);
+  for (const m of gore.meshes) assert.ok(m.visible && m.count >= 1, `${m.name} draws while warming`);
+  step(gore, .2);
+  for (const m of gore.meshes) assert.ok(m.visible && m.count >= 1, `${m.name} still draws after update()`);
+  gore.prewarm(false);
+  assert.deepEqual(before(), idle, 'back to nothing drawn');
+  step(gore, .1);
+  assert.ok(gore.meshes.every(m => !m.visible && m.count === 0), 'and update() keeps it hidden');
+  // With live gore the counts come back as they were, not reset.
+  gore.spray(0, 1, 0, 1, 0, 0, { amount: 1 }); step(gore, 1);
+  const live = before();
+  assert.ok(live.some(([, count]) => count > 1), 'the spray left splats');
+  gore.prewarm(true); gore.prewarm(true); step(gore, .05); gore.prewarm(false);
+  assert.deepEqual(before(), live);
+  gore.dispose(); gore.prewarm(true);
+  assert.ok(gore.meshes.every(m => m.parent === null));
+  assert.equal(scene.children.filter(n => n.name.startsWith('gore:')).length, 0);
+});
+
 test('wounds ride the joint they were shot into, and hide with it', () => {
   const { scene, gore } = setup();
   const c = creature(scene, 'stalker', 2, -3, .7), arm = meshOf(c.u.armL), point = centre(arm);

@@ -1067,6 +1067,16 @@
       wallMesh.count = wallCount; wallMesh.visible = wallCount > 0;
       if (floorDirty) { floorMesh.instanceMatrix.needsUpdate = true; floorMesh.instanceColor.needsUpdate = true; floorDirty = false; }
       if (wallDirty) { wallMesh.instanceMatrix.needsUpdate = true; wallMesh.instanceColor.needsUpdate = true; wallDirty = false; }
+      if (warmed) holdWarm();
+    }
+    // prewarm(true): every pool draws (at least) one instance, so a renderer.compileAsync() pass builds its pipelines
+    // before the first blood instead of on it; prewarm(false) puts back exactly what was drawn before.
+    let warmed = null;
+    function holdWarm() { for (const m of meshes) { if (m.count < 1) m.count = 1; m.visible = true; } }
+    function prewarm(on) {
+      if (disposed) return;
+      if (on && !warmed) { warmed = meshes.map(m => [m.count, m.visible]); holdWarm(); }
+      else if (!on && warmed) { meshes.forEach((m, i) => { m.count = warmed[i][0]; m.visible = warmed[i][1]; }); warmed = null; }
     }
 
     function setQuality(level) {
@@ -1115,7 +1125,7 @@
     }
 
     return Object.freeze({ wound, spray, splat: floorSplat, wallSplat, chunks: chunkBurst, sever, decapitate, fountain, bleed, pool, clear,
-      update, setQuality, setEffects, snapshot, woundsOf, headless, severed, dispose, meshes: Object.freeze(meshes.slice()) });
+      update, setQuality, setEffects, prewarm, snapshot, woundsOf, headless, severed, dispose, meshes: Object.freeze(meshes.slice()) });
   }
 
   return Object.freeze({ create, QUALITY, MAX });
