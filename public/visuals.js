@@ -685,12 +685,261 @@
     });
   }
 
+  // ---------- above ground ----------
+  // Pointed-leaf (lens) or round stamp of len x wid px at (cx, cy), wrapping around the tile: fn(index, u, v, edge) for
+  // every pixel inside, u along the stamp and v across it in -1..1, edge 0 on the outline and 1 on the axis.
+  function stamp(n, cx, cy, len, wid, angle, round, fn) {
+    const c = Math.cos(angle), s = Math.sin(angle), r = Math.ceil(Math.max(len, wid)) + 1;
+    const ex = Math.ceil(Math.abs(c) * len + Math.abs(s) * wid) + 1, ey = Math.ceil(Math.abs(s) * len + Math.abs(c) * wid) + 1;
+    for (let y = Math.floor(cy) - Math.min(r, ey); y <= Math.ceil(cy) + Math.min(r, ey); y++) {
+      const row = (((y % n) + n) % n) * n, dy = y - cy;
+      for (let x = Math.floor(cx) - Math.min(r, ex); x <= Math.ceil(cx) + Math.min(r, ex); x++) {
+        const dx = x - cx, u = (dx * c + dy * s) / len, v = (dy * c - dx * s) / wid;
+        const limit = round ? 1 - u * u : (1 - u * u) * (1 - u * u);
+        if (limit <= 0 || v * v >= limit) continue;
+        fn(row + (((x % n) + n) % n), u, v, 1 - Math.sqrt(v * v / limit));
+      }
+    }
+  }
+
+  // One 3 m wide x 3.2 m tall face of an overgrown box hedge (image top = hedge top): overlapping glossy leaves in
+  // clumps, deep dark gaps between sprigs, a few dead leaves, and bare woody stems and leaf litter at the foot.
+  function gardenHedge(n, seed) {
+    const N = n * n, random = seeded(seed * 4099 + 31), mm = n / 3000;
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N).fill(1), height = new Float32Array(N).fill(-38), top = new Float32Array(N).fill(-1e9);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 5, [[3, 3, 0.4], [8, 8, 0.35], [19, 19, 0.25]]), q, n);
+    const D = noiseField(n, seed + 6, [[64, 64, 0.5], [n >> 1, n >> 1, 0.5]]);
+    for (let i = 0; i < N; i++) { rgb[i * 3] = 0.012; rgb[i * 3 + 1] = 0.022; rgb[i * 3 + 2] = 0.01; }
+    // Woody stems in the gaps, mostly near the foot.
+    for (let i = 0; i < 70; i++) {
+      const x = random() * n, y = n * (0.55 + random() * 0.45), len = n * (0.05 + random() * 0.18), a = -Math.PI / 2 + (random() - 0.5) * 1.1;
+      stroke(n, x, y, x + Math.cos(a) * len, y + Math.sin(a) * len, Math.max(0.6, 7 * mm), (k, c) => {
+        if (c < 0.3 || height[k] > -20) return;
+        rgb[k * 3] = 0.075; rgb[k * 3 + 1] = 0.058; rgb[k * 3 + 2] = 0.038; rough[k] = 0.95; height[k] = -24 + c * 6;
+      });
+    }
+    const count = Math.round(30000 * (n >= 512 ? 1 : 0.75));
+    for (let i = 0; i < count; i++) {
+      const x = random() * n, y = random() * n, k0 = (y | 0) * n + (x | 0), clump = M[k0], hm = 3.2 * (1 - y / n);
+      // Thinner at the foot and in the gaps between clumps.
+      const keep = smoothstep(0.08, 0.5, hm) * (0.35 + 0.9 * smoothstep(0.3, 0.62, clump));
+      if (random() > keep) continue;
+      const len = (20 + random() * 16) * mm, wid = len * (0.42 + random() * 0.14), angle = random() * TAU;
+      const layer = (clump - 0.5) * 44 + random() * 22 - 6, dead = random() < 0.018;
+      const tone = 0.75 + random() * 0.5, yellow = random() * 0.35;
+      const r0 = dead ? 0.13 : (0.06 + 0.06 * yellow) * tone, g0 = dead ? 0.1 : (0.16 + 0.04 * yellow) * tone, b0 = dead ? 0.05 : 0.045 * tone;
+      const lit = Math.cos(angle - 2.2) * 0.18;
+      stamp(n, x, y, Math.max(0.8, len), Math.max(0.5, wid), angle, false, (k, u, v, e) => {
+        const h = layer + e * 3.2 - u * 1.5;
+        if (h <= top[k]) return;
+        top[k] = h; height[k] = h - (Math.abs(v) < 0.12 ? 0.5 : 0);
+        const shade = (1 + lit * u) * (0.82 + 0.18 * e) * (Math.abs(v) < 0.1 ? 0.8 : 1);
+        rgb[k * 3] = r0 * shade; rgb[k * 3 + 1] = g0 * shade; rgb[k * 3 + 2] = b0 * shade;
+        rough[k] = dead ? 0.85 : 0.42 + (1 - e) * 0.25 + D[k] * 0.12;
+      });
+    }
+    // Leaves deep in the hedge sit in shadow; litter collects along the foot.
+    for (let y = 0; y < n; y++) {
+      const hm = 3.2 * (1 - (y + 0.5) / n), foot = 1 - smoothstep(0.02, 0.22, hm);
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x, ao = 0.3 + 0.7 * smoothstep(-36, 14, height[i]), d = D[i];
+        let r = rgb[i * 3] * ao, g = rgb[i * 3 + 1] * ao, b = rgb[i * 3 + 2] * ao;
+        if (foot > 0) { const f = foot * (0.6 + 0.4 * d); r += (0.07 - r) * f; g += (0.055 - g) * f; b += (0.035 - b) * f; rough[i] += (0.95 - rough[i]) * f; height[i] += (-30 + d * 14 - height[i]) * f * 0.7; }
+        rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b);
+      }
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3200 / n, 0.55);
+  }
+
+  // One 3 m cell of a neglected lawn: matted, overgrown blades lying in swirls, clover, moss, bare earth, fallen leaves
+  // and a few pale flowers that catch the torch.
+  function gardenLawn(n, seed) {
+    const N = n * n, random = seeded(seed * 6151 + 7), mm = n / 3000;
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N), top = new Float32Array(N).fill(-1e9);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.45], [7, 7, 0.35], [16, 16, 0.2]]), q, n);
+    const F = upsample(noiseField(q, seed + 3, [[2, 2, 0.6], [5, 5, 0.4]]), q, n), D = noiseField(n, seed + 4, [[48, 48, 0.4], [n >> 1, n >> 1, 0.6]]);
+    for (let i = 0; i < N; i++) {
+      const d = D[i], m = M[i];
+      rgb[i * 3] = 0.058 + d * 0.025; rgb[i * 3 + 1] = 0.07 + d * 0.025 + m * 0.025; rgb[i * 3 + 2] = 0.034 + d * 0.012;
+      rough[i] = 0.95; height[i] = (d - 0.5) * 4 + (m - 0.5) * 6;
+    }
+    const blades = Math.round(42000 * (n >= 512 ? 1 : 0.6));
+    for (let i = 0; i < blades; i++) {
+      const x = random() * n, y = random() * n, k0 = (y | 0) * n + (x | 0);
+      if (random() > 0.15 + 0.95 * smoothstep(0.28, 0.55, M[k0])) continue;
+      const a = F[k0] * TAU * 1.5 + (random() - 0.5) * 2.2, len = (40 + random() * 80) * mm;
+      const layer = random() * 5 + M[k0] * 4, tone = 0.7 + random() * 0.6, dry = smoothstep(0.55, 0.85, D[k0]) * random();
+      stroke(n, x, y, x + Math.cos(a) * len, y + Math.sin(a) * len, Math.max(0.55, 1.1 * mm), (k, c, t) => {
+        const h = layer + t * 2.5 + c;
+        if (c < 0.35 || h <= top[k]) return;
+        top[k] = h; height[k] = Math.max(height[k], h);
+        const tip = t * t;
+        rgb[k * 3] = (0.055 + 0.1 * dry + tip * 0.04) * tone; rgb[k * 3 + 1] = (0.16 + 0.02 * dry + tip * 0.06) * tone; rgb[k * 3 + 2] = (0.04 + tip * 0.01) * tone;
+        rough[k] = 0.76 + 0.16 * dry;
+      });
+    }
+    // Clover and moss patches, then the fallen leaves and a few flowers on top.
+    for (let i = 0; i < 180; i++) {
+      const x = random() * n, y = random() * n, r = (9 + random() * 6) * mm;
+      for (let j = 0; j < 3; j++) {
+        const a = j * TAU / 3 + random() * 0.4;
+        stamp(n, x + Math.cos(a) * r * 0.9, y + Math.sin(a) * r * 0.9, r, r, a, true, (k, u, v, e) => {
+          const h = 7 + e * 1.5; if (h <= top[k]) return; top[k] = h; height[k] = h;
+          rgb[k * 3] = 0.06; rgb[k * 3 + 1] = 0.15 + e * 0.03; rgb[k * 3 + 2] = 0.05; rough[k] = 0.68;
+        });
+      }
+    }
+    for (let i = 0; i < 40; i++) {
+      const x = random() * n, y = random() * n, len = (24 + random() * 20) * mm, a = random() * TAU, rust = random();
+      stamp(n, x, y, len, len * (0.6 + random() * 0.3), a, true, (k, u, v, e) => {
+        const h = 9 + e * 1.2; if (h <= top[k]) return; top[k] = h; height[k] = h;
+        const s = 0.8 + 0.2 * e;
+        rgb[k * 3] = (0.13 + rust * 0.06) * s; rgb[k * 3 + 1] = (0.08 + rust * 0.03) * s; rgb[k * 3 + 2] = 0.035 * s; rough[k] = 0.8;
+      });
+    }
+    for (let i = 0; i < 26; i++) {
+      const x = random() * n, y = random() * n, r = (6 + random() * 4) * mm;
+      for (let j = 0; j < 5; j++) {
+        const a = j * TAU / 5;
+        stamp(n, x + Math.cos(a) * r, y + Math.sin(a) * r, r, r * 0.5, a, true, (k, u, v, e) => {
+          const h = 11 + e; if (h <= top[k]) return; top[k] = h; height[k] = h;
+          rgb[k * 3] = 0.62; rgb[k * 3 + 1] = 0.6; rgb[k * 3 + 2] = 0.52; rough[k] = 0.55;
+        });
+      }
+      stamp(n, x, y, r * 0.5, r * 0.5, 0, true, k => { top[k] = 12; height[k] = 12; rgb[k * 3] = 0.55; rgb[k * 3 + 1] = 0.42; rgb[k * 3 + 2] = 0.08; rough[k] = 0.6; });
+    }
+    for (let i = 0; i < N; i++) {
+      const ao = 0.55 + 0.45 * smoothstep(-2, 9, height[i]);
+      rgb[i * 3] = sat(rgb[i * 3] * ao); rgb[i * 3 + 1] = sat(rgb[i * 3 + 1] * ao); rgb[i * 3 + 2] = sat(rgb[i * 3 + 2] * ao);
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3000 / n, 0.8);
+  }
+
+  // One 3 m wide x 3.2 m tall face of an old churchyard wall: rubble stone laid in rough courses, deep crumbling mortar,
+  // moss in the joints and along the coping, lichen rosettes, rain streaks from the top and damp at the foot.
+  function graveWall(n, seed) {
+    const N = n * n, random = seeded(seed * 2909 + 13), mm = n / 3000, py = 3200 / n;
+    const D = noiseField(n, seed + 1, [[40, 40, 0.3], [120, 120, 0.35], [n >> 1, n >> 1, 0.35]]);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.4], [8, 8, 0.35], [19, 19, 0.25]]), q, n);
+    const L = upsample(noiseField(q, seed + 3, [[12, 12, 0.5], [29, 29, 0.5]]), q, n), S = noiseField(n, seed + 4, [[40, 3, 0.55], [104, 5, 0.45]]);
+    // Courses from the foot up (px rows, image top = wall top), each with its own stones (px columns, wrapping).
+    const courses = [];
+    for (let y = n; y > 0;) {
+      const h = Math.min(y, Math.round((140 + random() * 240) / py));
+      const stones = [];
+      let x = random() * n, total = 0;
+      while (total < n) { const w = Math.round((180 + random() * 440) * mm); stones.push({ x0: x + total, w: Math.min(w, n - total), tone: (random() - 0.5) * 0.11, warm: random(), bulge: 4 + random() * 9, tilt: (random() - 0.5) * 0.02 }); total += w; }
+      courses.push({ y0: y - h, y1: y, stones });
+      y -= h;
+    }
+    const rowCourse = new Int16Array(n);
+    courses.forEach((c, i) => { for (let y = Math.max(0, c.y0); y < c.y1; y++) rowCourse[y] = i; });
+    const joint = 16 * mm, round = 45 * mm;
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N);
+    for (let y = 0; y < n; y++) {
+      const c = courses[rowCourse[y]], hm = 3.2 * (1 - (y + 0.5) / n), dyTop = y + 0.5 - Math.max(0, c.y0), dyBot = c.y1 - y - 0.5;
+      const coping = smoothstep(2.9, 3.15, hm), damp = 1 - smoothstep(0.1, 0.9, hm);
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x, d = D[i], m = M[i];
+        let st = c.stones[0], lx = 0;
+        for (const s of c.stones) { const off = (((x - s.x0) % n) + n) % n; if (off < s.w) { st = s; lx = off + 0.5; break; } }
+        const dx = Math.min(lx, st.w - lx), dyy = Math.min(dyTop, dyBot);
+        let edge = Math.min(dx, dyy);
+        if (dx < round && dyy < round) edge = round - Math.hypot(round - dx, round - dyy);
+        edge += (L[i] - 0.5) * 50 * mm + (d - 0.5) * 16 * mm;
+        const stone = smoothstep(joint * 0.5, joint * 0.5 + 1.2, edge);
+        let r, g, b, ro, h;
+        const t = 0.21 + st.tone + (d - 0.5) * 0.12, warm = st.warm;
+        r = t * (1 + 0.08 * warm); g = t * (0.98 + 0.02 * warm); b = t * (0.9 - 0.06 * warm);
+        ro = 0.88 + (d - 0.5) * 0.1;
+        h = st.bulge * smoothstep(0, round * 1.2, edge) + (d - 0.5) * 3 + st.tilt * (lx - st.w / 2);
+        if (stone < 1) {
+          const mortar = 0.13 + d * 0.06;
+          r += (mortar * 1.02 - r) * (1 - stone); g += (mortar - g) * (1 - stone); b += (mortar * 0.9 - b) * (1 - stone);
+          ro += (0.97 - ro) * (1 - stone); h += (-11 + (d - 0.5) * 4 - h) * (1 - stone);
+        }
+        // Moss: in the joints and on the coping first, then over damp stone.
+        const mossAmount = smoothstep(0.5, 0.75, m * 0.7 + (1 - stone) * 0.35 + coping * 0.5 + damp * 0.15);
+        if (mossAmount > 0) { const v = mossAmount * (0.6 + 0.4 * d); r += (0.06 - r) * v; g += (0.085 - g) * v; b += (0.035 - b) * v; ro += (0.98 - ro) * v; h += 2.5 * v; }
+        const lichen = smoothstep(0.74, 0.8, M[(i * 7 + 11) % N] * 0.5 + d * 0.5) * stone * 0.5;
+        if (lichen > 0) { r += (0.34 - r) * lichen; g += (0.35 - g) * lichen; b += (0.28 - b) * lichen; h += 0.5 * lichen; }
+        const grime = smoothstep(0.35, 0.8, m) * 0.4;
+        r *= 1 - grime; g *= 1 - grime; b *= 1 - grime * 1.05;
+        const streak = smoothstep(0.55, 0.85, S[i]) * smoothstep(1.2, 3.1, hm) * 0.5;
+        r *= 1 - streak; g *= 1 - streak; b *= 1 - streak * 0.9;
+        const wet = damp * (0.5 + 0.5 * m);
+        r *= 1 - 0.45 * wet; g *= 1 - 0.42 * wet; b *= 1 - 0.38 * wet; ro -= 0.3 * wet;
+        rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b); rough[i] = ro; height[i] = h;
+      }
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3200 / n, 1.2);
+  }
+
+  // One 3 m cell of churchyard ground: dark wet loam and trodden gravel, dead grass in tussocks, moss, fallen leaves
+  // and standing water in the low spots.
+  function graveSoil(n, seed) {
+    const N = n * n, random = seeded(seed * 9973 + 5), mm = n / 3000;
+    const rgb = new Float32Array(N * 3), rough = new Float32Array(N), height = new Float32Array(N), top = new Float32Array(N).fill(-1e9);
+    const q = n >> 2, M = upsample(noiseField(q, seed + 2, [[3, 3, 0.45], [7, 7, 0.35], [15, 15, 0.2]]), q, n);
+    const G = upsample(noiseField(q, seed + 3, [[2, 2, 0.5], [5, 5, 0.3], [11, 11, 0.2]]), q, n), D = noiseField(n, seed + 4, [[40, 40, 0.35], [n >> 1, n >> 1, 0.65]]);
+    for (let i = 0; i < N; i++) {
+      const d = D[i], m = M[i];
+      rgb[i * 3] = 0.085 + d * 0.035; rgb[i * 3 + 1] = 0.068 + d * 0.028; rgb[i * 3 + 2] = 0.05 + d * 0.02;
+      rough[i] = 0.92; height[i] = (m - 0.5) * 12 + (d - 0.5) * 3; top[i] = height[i];
+    }
+    // Gravel where the paths are trodden.
+    const pebbles = Math.round(9000 * (n >= 512 ? 1 : 0.5));
+    for (let i = 0; i < pebbles; i++) {
+      const x = random() * n, y = random() * n, k0 = (y | 0) * n + (x | 0);
+      if (random() > smoothstep(0.42, 0.62, G[k0])) continue;
+      const r = (5 + random() * 10) * mm, tone = 0.11 + random() * 0.13, warm = random() * 0.03, base = height[k0];
+      stamp(n, x, y, Math.max(0.6, r), Math.max(0.5, r * (0.6 + random() * 0.4)), random() * TAU, true, (k, u, v, e) => {
+        const h = base + 2 + e * r / mm * 0.35; if (h <= top[k]) return; top[k] = h; height[k] = h;
+        const s = 0.75 + 0.25 * e;
+        rgb[k * 3] = (tone + warm) * s; rgb[k * 3 + 1] = tone * s; rgb[k * 3 + 2] = (tone - warm) * 0.95 * s; rough[k] = 0.7;
+      });
+    }
+    // Dead grass in tussocks away from the gravel.
+    const blades = Math.round(16000 * (n >= 512 ? 1 : 0.6));
+    for (let i = 0; i < blades; i++) {
+      const x = random() * n, y = random() * n, k0 = (y | 0) * n + (x | 0);
+      if (random() > smoothstep(0.5, 0.7, M[k0]) * (1 - smoothstep(0.45, 0.6, G[k0]))) continue;
+      const a = random() * TAU, len = (40 + random() * 70) * mm, tone = 0.6 + random() * 0.5, green = random() < 0.3, base = height[k0];
+      stroke(n, x, y, x + Math.cos(a) * len, y + Math.sin(a) * len, Math.max(0.55, 1 * mm), (k, c, t) => {
+        const h = base + 4 + t * 3; if (c < 0.35 || h <= top[k]) return; top[k] = h; height[k] = h;
+        rgb[k * 3] = (green ? 0.08 : 0.2) * tone; rgb[k * 3 + 1] = (green ? 0.12 : 0.16) * tone; rgb[k * 3 + 2] = (green ? 0.04 : 0.08) * tone; rough[k] = 0.8;
+      });
+    }
+    for (let i = 0; i < 60; i++) {
+      const x = random() * n, y = random() * n, len = (28 + random() * 22) * mm, rust = random(), base = height[(y | 0) * n + (x | 0)];
+      stamp(n, x, y, len, len * (0.6 + random() * 0.3), random() * TAU, true, (k, u, v, e) => {
+        const h = base + 6 + e; if (h <= top[k]) return; top[k] = h; height[k] = h;
+        rgb[k * 3] = 0.11 + rust * 0.05; rgb[k * 3 + 1] = 0.07 + rust * 0.025; rgb[k * 3 + 2] = 0.035; rough[k] = 0.75;
+      });
+    }
+    // Mud in the hollows: dark and flat.
+    for (let i = 0; i < N; i++) {
+      const m = M[i], wet = smoothstep(0.27, 0.22, m), damp = smoothstep(0.36, 0.27, m) * (1 - wet);
+      let r = rgb[i * 3], g = rgb[i * 3 + 1], b = rgb[i * 3 + 2];
+      const ao = 0.6 + 0.4 * smoothstep(-8, 8, height[i]);
+      r *= ao * (1 - 0.55 * wet - 0.2 * damp); g *= ao * (1 - 0.52 * wet - 0.2 * damp); b *= ao * (1 - 0.45 * wet - 0.18 * damp);
+      rough[i] += (0.86 - rough[i]) * wet; height[i] += (-5 - height[i]) * wet;
+      rgb[i * 3] = sat(r); rgb[i * 3 + 1] = sat(g); rgb[i * 3 + 2] = sat(b);
+    }
+    return surfaceCanvases(n, rgb, rough, height, 3000 / n, 3000 / n, 0.9);
+  }
+
   const SURFACES = {
     'ward-wall': [wardWall, [512, 1024, 1024]], 'ward-floor': [wardFloor, [512, 1024, 1024]],
     'ward-ceiling': [wardCeiling, [256, 512, 512]], 'ward-macro': [wardMacro, [256, 256, 256]], 'ward-decals': [wardDecals, [128, 256, 256]],
     'gun-metal': [gunMetal, [256, 256, 256]], 'gun-polymer': [gunPolymer, [256, 256, 256]], 'gun-wood': [gunWood, [256, 256, 256]],
-    'gun-rubber': [gunRubber, [128, 128, 128]], 'gun-fabric': [gunFabric, [256, 256, 256]]
+    'gun-rubber': [gunRubber, [128, 128, 128]], 'gun-fabric': [gunFabric, [256, 256, 256]],
+    'garden-hedge': [gardenHedge, [256, 512, 1024]], 'garden-lawn': [gardenLawn, [256, 512, 1024]],
+    'grave-wall': [graveWall, [256, 512, 1024]], 'grave-soil': [graveSoil, [256, 512, 1024]]
   };
+  // Surfaces only the floors above ground use: workers paint them after every other surface, and the boot never
+  // waits for them (see surfacePlan and prepaint.js).
+  const LATE_SURFACES = Object.freeze(['garden-hedge', 'garden-lawn', 'grave-wall', 'grave-soil']);
   // standard()'s shared material maps are surfaces too ('material-skin', ...), so texture workers can paint them.
   const MATERIAL_KINDS = ['wall', 'floor', 'metal', 'skin', 'fabric', 'concrete', 'wood'];
   for (const kind of MATERIAL_KINDS) SURFACES['material-' + kind] = [() => materialSurface(kind), [256, 256, 256]];
@@ -761,14 +1010,14 @@
   }
 
   // Every surface at a quality tier split into `workers` lists of similar pixel counts. `order` is a list of kind lists:
-  // the first group leads every list, then the next, then the kinds in none; each group largest first.
+  // the first group leads every list, then the next, then the kinds in none, then LATE_SURFACES; each group largest first.
   function surfacePlan(quality, workers, order) {
     const tier = Object.prototype.hasOwnProperty.call(DETAIL, quality) ? DETAIL[quality] : detail, groups = order || [], rank = new Map();
     groups.forEach((kinds, i) => kinds.forEach(kind => { if (!rank.has(kind)) rank.set(kind, i); }));
     const lists = Array.from({ length: Math.max(1, Math.floor(workers) || 1) }, () => ({ cost: 0, kinds: [] }));
     Object.keys(SURFACES).map(kind => {
       const n = SURFACES[kind][1][tier];
-      return { kind, rank: rank.has(kind) ? rank.get(kind) : groups.length, cost: kind === 'ward-decals' ? n * n * 8 : n * n };
+      return { kind, rank: rank.has(kind) ? rank.get(kind) : groups.length + (LATE_SURFACES.includes(kind) ? 1 : 0), cost: kind === 'ward-decals' ? n * n * 8 : n * n };
     }).sort((a, b) => a.rank - b.rank || b.cost - a.cost).forEach(job => {
       const target = lists.reduce((best, list) => list.cost < best.cost ? list : best);
       target.kinds.push(job.kind); target.cost += job.cost;
@@ -2678,6 +2927,558 @@
     return g;
   }
 
+  // ---------- above ground: rooms, grounds and the horizon of S1 (garden) and S2 (graveyard) ----------
+  function outdoorPalette(THREE) {
+    const cache = store(THREE).materials;
+    if (!cache.has('out:glass')) {
+      const glass = new THREE.MeshStandardMaterial({ color: 0x223236, roughness: 0.08, metalness: 0.2, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide });
+      glass.userData.hollowShared = true; cache.set('out:glass', glass);
+    }
+    const live = standard(THREE, 'out:lamp', 0xffd9a8, 0.35, 0);
+    live.emissive.setHex(0xffa851); live.emissiveIntensity = 1.6;
+    return {
+      wood: standard(THREE, 'out:wood', 0x5a4531, 0.86, 0, 'wood'), dark: standard(THREE, 'out:darkwood', 0x2b2118, 0.9, 0, 'wood'),
+      plank: standard(THREE, 'out:plank', 0x5f5240, 0.92, 0, 'wood'), stone: standard(THREE, 'out:stone', 0x6f6c62, 0.93, 0, 'concrete'),
+      pale: standard(THREE, 'out:pale', 0x96938a, 0.9, 0, 'concrete'), mossy: standard(THREE, 'out:mossy', 0x4d5240, 0.96, 0, 'concrete'),
+      slate: standard(THREE, 'out:slate', 0x2a2d31, 0.72, 0.05, 'concrete'), brick: standard(THREE, 'out:brick', 0x5e3427, 0.92, 0, 'wall'),
+      iron: standard(THREE, 'out:iron', 0x232627, 0.55, 0.75, 'metal'), rust: standard(THREE, 'out:rust', 0x5a3824, 0.85, 0.4, 'metal'),
+      leaf: standard(THREE, 'out:leaf', 0x1f3417, 0.78, 0, 'fabric'), leaf2: standard(THREE, 'out:leaf2', 0x2c4119, 0.8, 0, 'fabric'),
+      dry: standard(THREE, 'out:dry', 0x574b2f, 0.92, 0, 'fabric'), soil: standard(THREE, 'out:soil', 0x271e16, 1, 0, 'concrete'),
+      clay: standard(THREE, 'out:clay', 0x7d4229, 0.88, 0, 'concrete'), cloth: standard(THREE, 'out:cloth', 0x837e6b, 0.97, 0, 'fabric'),
+      bone: standard(THREE, 'out:bone', 0xaea48b, 0.8, 0, 'concrete'), rose: standard(THREE, 'out:rose', 0x5c0a12, 0.55, 0),
+      white: standard(THREE, 'out:white', 0xc9c4b5, 0.7, 0), bark: standard(THREE, 'out:bark', 0x2e261f, 0.95, 0, 'wood'),
+      pit: basic(THREE, 'out:pit', 0x050403), glass: cache.get('out:glass'), live
+    };
+  }
+
+  // A triangular prism (unit base and height, unit depth along z) for gables and grave mounds.
+  function prism(THREE, parent, mat, x, y, z, w, h, d, ry) {
+    const geom = geometry(THREE, 'out:prism', () => {
+      const s = new THREE.Shape(); s.moveTo(-0.5, 0); s.lineTo(0.5, 0); s.lineTo(0, 1); s.closePath();
+      const g = new THREE.ExtrudeGeometry(s, { depth: 1, bevelEnabled: false }); g.translate(0, 0, -0.5); return g;
+    });
+    return add(THREE, parent, geom, mat, x, y, z, w, h, d, 0, ry || 0, 0);
+  }
+
+  // oval() and link() for the floors above ground, which carry thousands of leaves, stems and bones: a coarse sphere
+  // (lo: coarser still, for the horizon and small clutter) and an open stem of a few sides. Both are unit shapes,
+  // scaled, so random sizes share one cached geometry.
+  function blob(THREE, parent, mat, x, y, z, w, h, d, rx, ry, rz, lo) {
+    const geom = geometry(THREE, lo ? 'out:blob-lo' : 'out:blob', () => new THREE.SphereGeometry(1, lo ? 6 : 8, lo ? 4 : 6));
+    return add(THREE, parent, geom, mat, x, y, z, w, h, d, rx, ry, rz);
+  }
+  function twig(THREE, parent, mat, from, to, r1, r2, sides) {
+    const n = sides || 5, taper = Math.round((r2 == null ? 1 : r2 / r1) * 20) / 20;
+    const geom = geometry(THREE, 'out:twig:' + n + ':' + taper, () => new THREE.CylinderGeometry(taper, 1, 1, n, 1, true));
+    const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2], len = Math.hypot(dx, dy, dz) || 0.001;
+    const m = add(THREE, parent, geom, mat, (from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2, r1, len, r1);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx / len, dy / len, dz / len));
+    return m;
+  }
+
+  // Shared small furniture of the outdoor rooms and grounds. Each builder adds meshes to `g` (local metres) and returns
+  // its collider box {x, z, w, d, h} (or null for low clutter that never blocks).
+  function outdoorKit(THREE, g, p, random) {
+    const k = {};
+    const C = (x, z, w, d, h) => ({ x, z, w, d, h });
+    k.lantern = (x, y, z, hanging) => {
+      if (hanging) twig(THREE, g, p.iron, [x, y + 0.2, z], [x, y + 0.75, z], 0.012);
+      box(THREE, g, p.iron, x, y + 0.18, z, 0.2, 0.03, 0.2); box(THREE, g, p.iron, x, y - 0.17, z, 0.18, 0.03, 0.18);
+      box(THREE, g, p.live, x, y, z, 0.13, 0.3, 0.13).castShadow = false;
+      for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) box(THREE, g, p.iron, x + dx * 0.08, y, z + dz * 0.08, 0.018, 0.34, 0.018);
+      prism(THREE, g, p.iron, x, y + 0.195, z, 0.22, 0.12, 0.22);
+    };
+    k.post = (x, z) => {
+      cyl(THREE, g, p.iron, x, 1.3, z, 0.045, 0.06, 2.6, 0, 0, 0, 8);
+      cyl(THREE, g, p.iron, x, 0.12, z, 0.12, 0.14, 0.24, 0, 0, 0, 8);
+      k.lantern(x, 2.78, z);
+      return C(x, z, 0.3, 0.3, 2.6);
+    };
+    k.bench = (x, z, ry, mat) => {
+      const r = joint(THREE, g, 'bench', x, 0, z); r.rotation.y = ry || 0; const m = mat || p.wood;
+      box(THREE, r, m, 0, 0.45, 0, 1.6, 0.06, 0.42); box(THREE, r, m, 0, 0.82, -0.2, 1.6, 0.3, 0.05, -0.15);
+      for (const sx of [-0.68, 0.68]) { box(THREE, r, p.iron, sx, 0.22, 0, 0.06, 0.45, 0.4); box(THREE, r, p.iron, sx, 0.62, -0.19, 0.05, 0.42, 0.05); }
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 0.6 : 1.7, turned ? 1.7 : 0.6, 0.9);
+    };
+    k.table = (x, z, w, d, mat) => {
+      bevel(THREE, g, mat || p.wood, x, 0.78, z, w, 0.06, d, 0.01);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(THREE, g, mat || p.wood, x + sx * (w / 2 - 0.08), 0.38, z + sz * (d / 2 - 0.08), 0.07, 0.76, 0.07);
+      return C(x, z, w, d, 0.82);
+    };
+    k.pot = (x, y, z, r, dead) => {
+      cyl(THREE, g, p.clay, x, y + r * 0.6, z, r, r * 0.72, r * 1.2, 0, 0, 0, 9);
+      cyl(THREE, g, p.soil, x, y + r * 1.18, z, r * 0.9, r * 0.9, 0.02, 0, 0, 0, 9);
+      const plant = dead ? p.dry : p.leaf2;
+      for (let i = 0; i < 3; i++) blob(THREE, g, plant, x + (random() - 0.5) * r, y + r * 1.4 + random() * r * 0.8, z + (random() - 0.5) * r, r * 0.55, r * 0.7, r * 0.55);
+    };
+    k.shelf = (x, z, ry, len, fill) => {
+      const r = joint(THREE, g, 'shelf', x, 0, z); r.rotation.y = ry || 0;
+      for (const sx of [-len / 2 + 0.04, len / 2 - 0.04]) box(THREE, r, p.dark, sx, 0.95, 0, 0.05, 1.9, 0.4);
+      for (let row = 0; row < 4; row++) {
+        box(THREE, r, p.plank, 0, 0.3 + row * 0.48, 0, len, 0.035, 0.42);
+        for (let j = 0; j < Math.floor(len / 0.35); j++) if (random() < 0.7) fill(r, -len / 2 + 0.22 + j * 0.35, 0.32 + row * 0.48);
+      }
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 0.5 : len, turned ? len : 0.5, 1.95);
+    };
+    k.crate = (x, z, s, ry) => { bevel(THREE, g, p.plank, x, s / 2, z, s, s, s, 0.02, 0, ry || 0); box(THREE, g, p.dark, x, s / 2, z, s * 1.01, 0.05, s * 1.01, 0, ry || 0); return C(x, z, s * 1.2, s * 1.2, s); };
+    k.barrel = (x, z) => { cyl(THREE, g, p.wood, x, 0.45, z, 0.3, 0.3, 0.9, 0, 0, 0, 12); for (const y of [0.15, 0.75]) cyl(THREE, g, p.iron, x, y, z, 0.31, 0.31, 0.04, 0, 0, 0, 12); return C(x, z, 0.65, 0.65, 0.9); };
+    k.sack = (x, z) => { blob(THREE, g, p.cloth, x, 0.25, z, 0.3, 0.3, 0.24, 0, random() * TAU); return null; };
+    k.tools = (x, z, ry) => {
+      const r = joint(THREE, g, 'tools', x, 0, z); r.rotation.y = ry || 0;
+      for (let i = 0; i < 3; i++) {
+        const sx = -0.4 + i * 0.4, lean = 0.18 + random() * 0.08;
+        twig(THREE, r, p.wood, [sx, 0.05, 0.2], [sx + lean * 0.3, 1.5, -0.1], 0.02);
+        if (i === 1) box(THREE, r, p.rust, sx, 0.2, 0.22, 0.24, 0.3, 0.03); else box(THREE, r, p.rust, sx + 0.05, 1.5, -0.12, 0.34, 0.04, 0.06);
+      }
+      return null;
+    };
+    k.bed = (x, z, ry) => {
+      const r = joint(THREE, g, 'cot', x, 0, z); r.rotation.y = ry || 0;
+      box(THREE, r, p.dark, 0, 0.32, 0, 0.9, 0.12, 1.95); bevel(THREE, r, p.cloth, 0, 0.44, 0, 0.82, 0.14, 1.85, 0.03);
+      drape(THREE, r, p.dry, -0.2, 0.45, 0.25, 0.9, 0.5, 0.02, Math.PI / 2, -0.1);
+      for (const sx of [-0.4, 0.4]) for (const sz of [-0.9, 0.9]) box(THREE, r, p.dark, sx, 0.15, sz, 0.06, 0.3, 0.06);
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 2 : 0.95, turned ? 0.95 : 2, 0.55);
+    };
+    k.stove = (x, z) => { bevel(THREE, g, p.iron, x, 0.45, z, 0.7, 0.9, 0.6, 0.02); cyl(THREE, g, p.iron, x, 2.0, z, 0.07, 0.07, 2.2, 0, 0, 0, 8); return C(x, z, 0.75, 0.65, 0.95); };
+    k.tub = (x, z, dead) => {
+      cyl(THREE, g, p.wood, x, 0.35, z, 0.42, 0.34, 0.7, 0, 0, 0, 10); cyl(THREE, g, p.soil, x, 0.69, z, 0.38, 0.38, 0.02, 0, 0, 0, 10);
+      twig(THREE, g, p.bark, [x, 0.7, z], [x + 0.05, 1.7, z], 0.05);
+      for (let i = 0; i < 5; i++) blob(THREE, g, dead ? p.dry : p.leaf, x + (random() - 0.5) * 0.6, 1.7 + random() * 0.6, z + (random() - 0.5) * 0.6, 0.35, 0.3, 0.35);
+      return C(x, z, 0.9, 0.9, 2.2);
+    };
+    k.raised = (x, z, w, d) => {
+      for (const [sx, sz, bw, bd] of [[0, -d / 2, w, 0.14], [0, d / 2, w, 0.14], [-w / 2, 0, 0.14, d], [w / 2, 0, 0.14, d]]) box(THREE, g, p.brick, x + sx, 0.2, z + sz, bw, 0.4, bd);
+      box(THREE, g, p.soil, x, 0.36, z, w - 0.1, 0.04, d - 0.1);
+      for (let i = 0; i < Math.round(w * d * 4); i++) blob(THREE, g, random() < 0.3 ? p.dry : p.leaf2, x + (random() - 0.5) * (w - 0.3), 0.45 + random() * 0.15, z + (random() - 0.5) * (d - 0.3), 0.12 + random() * 0.1, 0.12, 0.12 + random() * 0.1, 0, 0, 0, true);
+      return C(x, z, w, d, 0.45);
+    };
+    k.roses = (x, z, w) => {
+      for (let i = 0; i < Math.round(w * 2.5); i++) {
+        const px = x + (random() - 0.5) * w, pz = z + (random() - 0.5) * 0.5, h = 0.5 + random() * 0.6;
+        blob(THREE, g, p.leaf, px, h, pz, 0.32, 0.38, 0.3);
+        for (let j = 0; j < 3; j++) blob(THREE, g, p.rose, px + (random() - 0.5) * 0.4, h + 0.15 + random() * 0.25, pz + (random() - 0.5) * 0.3, 0.06, 0.05, 0.06, 0, 0, 0, true);
+      }
+    };
+    k.tuft = (x, z, s, mat) => {
+      for (let i = 0; i < 5; i++) { const a = i / 5 * TAU + random(); twig(THREE, g, mat || p.leaf2, [x, 0, z], [x + Math.cos(a) * 0.18 * s, (0.4 + random() * 0.35) * s, z + Math.sin(a) * 0.18 * s], 0.012 * s, 0.002, 3); }
+    };
+    k.statue = (x, z, ry, winged) => {
+      const r = joint(THREE, g, 'statue', x, 0, z); r.rotation.y = ry || 0;
+      bevel(THREE, r, p.mossy, 0, 0.45, 0, 0.8, 0.9, 0.8, 0.03); box(THREE, r, p.pale, 0, 0.93, 0, 0.9, 0.06, 0.9);
+      cyl(THREE, r, p.pale, 0, 1.6, 0, 0.17, 0.32, 1.3, 0, 0, 0, 10);
+      blob(THREE, r, p.pale, 0, 2.38, 0.02, 0.13, 0.16, 0.14);
+      blob(THREE, r, p.pale, 0, 2.15, 0.02, 0.24, 0.12, 0.17);
+      twig(THREE, r, p.pale, [-0.2, 2.1, 0.05], [-0.08, 1.75, 0.22], 0.05); twig(THREE, r, p.pale, [0.2, 2.1, 0.05], [0.06, 1.78, 0.22], 0.05);
+      if (winged) for (const s of [-1, 1]) blob(THREE, r, p.pale, s * 0.32, 2.1, -0.16, 0.08, 0.5, 0.3, 0.2, s * 0.4, s * 0.35);
+      return C(x, z, 0.95, 0.95, 2.5);
+    };
+    k.column = (x, z, h, r0) => { cyl(THREE, g, p.pale, x, h / 2 + 0.2, z, r0 || 0.28, (r0 || 0.28) * 1.1, h, 0, 0, 0, 12); bevel(THREE, g, p.stone, x, 0.1, z, 0.8, 0.2, 0.8, 0.02); if (h > 2.4) box(THREE, g, p.pale, x, h + 0.28, z, 0.75, 0.16, 0.75); return C(x, z, 0.8, 0.8, h + 0.2); };
+    k.headstone = (x, z, ry, style, h) => {
+      const r = joint(THREE, g, 'headstone', x, 0, z); r.rotation.y = ry || 0; const mat = random() < 0.3 ? p.mossy : random() < 0.5 ? p.pale : p.stone;
+      const hh = h || 0.8 + random() * 0.5, tilt = (random() - 0.5) * 0.14;
+      if (style === 0) { bevel(THREE, r, mat, 0, hh / 2, 0, 0.6, hh, 0.14, 0.02, tilt); cyl(THREE, r, mat, 0, hh, 0, 0.3, 0.3, 0.14, Math.PI / 2, 0, 0, 12); }
+      else if (style === 1) { box(THREE, r, mat, 0, hh * 0.6, 0, 0.13, hh * 1.2, 0.13, tilt); box(THREE, r, mat, 0, hh * 0.92, 0, 0.55, 0.12, 0.13, tilt); box(THREE, r, mat, 0, 0.08, 0, 0.5, 0.16, 0.4); }
+      else if (style === 2) { bevel(THREE, r, mat, 0, 0.15, 0, 0.6, 0.3, 0.6, 0.02); cyl(THREE, r, mat, 0, 0.3 + hh * 0.7, 0, 0.07, 0.17, hh * 1.4, 0, 0, 0, 4); }
+      else bevel(THREE, r, mat, 0, hh * 0.45, 0, 0.55, hh * 0.9, 0.16, 0.03, tilt, 0, (random() - 0.5) * 0.1);
+      const wide = style === 2 ? 0.65 : 0.62, deep = style === 2 ? 0.65 : style === 1 ? 0.42 : 0.24;
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? deep : wide, turned ? wide : deep, style === 2 ? 0.3 + hh * 1.4 : hh + 0.2);
+    };
+    k.mound = (x, z, ry, open) => {
+      prism(THREE, g, p.soil, x, 0, z, 0.9, 0.26, 1.9, ry);
+      if (open) { const ox = Math.cos(ry || 0) * 1.0, oz = -Math.sin(ry || 0) * 1.0; box(THREE, g, p.pit, x + ox, 0.006, z + oz, 0.85, 0.01, 1.9, 0, ry || 0); }
+    };
+    k.tomb = (x, z, ry) => {
+      const r = joint(THREE, g, 'tomb', x, 0, z); r.rotation.y = ry || 0;
+      bevel(THREE, r, p.stone, 0, 0.42, 0, 1.0, 0.84, 2.0, 0.03); bevel(THREE, r, p.pale, 0, 0.88, 0, 1.12, 0.1, 2.12, 0.02);
+      shroud(THREE, r, p.pale, 0, 0.92, 0).scale.set(0.6, 0.25, 1.5);
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 2.15 : 1.15, turned ? 1.15 : 2.15, 1.0);
+    };
+    k.bones = (x, z, s) => {
+      for (let i = 0; i < 9 * s; i++) blob(THREE, g, p.bone, x + (random() - 0.5) * 0.8 * s, 0.05 + random() * 0.25 * s, z + (random() - 0.5) * 0.6 * s, 0.03, 0.03, 0.2, random(), random() * TAU, 0, true);
+      for (let i = 0; i < 2 * s; i++) blob(THREE, g, p.bone, x + (random() - 0.5) * 0.6 * s, 0.12 + random() * 0.2 * s, z + (random() - 0.5) * 0.4 * s, 0.1, 0.11, 0.12);
+    };
+    k.coffin = (x, z, ry) => {
+      const r = joint(THREE, g, 'coffin', x, 0, z); r.rotation.y = ry || 0;
+      bevel(THREE, r, p.dark, 0, 0.2, 0, 0.65, 0.4, 2.0, 0.02); box(THREE, r, p.plank, 0.25, 0.43, 0.1, 0.62, 0.05, 1.9, 0, 0.25, 0.08);
+      const turned = Math.abs(Math.sin(ry || 0)) > 0.5;
+      return C(x, z, turned ? 2.05 : 0.8, turned ? 0.8 : 2.05, 0.48);
+    };
+    // lo: a silhouette for the horizon, seen only from far off.
+    k.tree = (x, z, h, dead, lo) => {
+      const lean = (random() - 0.5) * 0.4, f = h / 6.5;
+      twig(THREE, g, p.bark, [x, 0, z], [x + lean, h * 0.6, z + lean * 0.5], 0.24 * Math.max(1, f * 0.8), 0.16, lo ? 5 : 7);
+      for (let i = 0; i < 5; i++) {
+        const a = i / 5 * TAU + random(), y0 = h * (0.4 + random() * 0.25), len = h * (0.25 + random() * 0.2);
+        const end = [x + lean + Math.cos(a) * len, y0 + len * (0.4 + random() * 0.5), z + Math.sin(a) * len];
+        twig(THREE, g, p.bark, [x + lean * 0.8, y0, z + lean * 0.4], end, 0.09, 0.03, lo ? 3 : 5);
+        if (dead) twig(THREE, g, p.bark, end, [end[0] + Math.cos(a + 0.8) * len * 0.4, end[1] + len * 0.3, end[2] + Math.sin(a + 0.8) * len * 0.4], 0.03, 0.01, 3);
+        else blob(THREE, g, random() < 0.5 ? p.leaf : p.leaf2, end[0], end[1], end[2], (1.1 + random() * 0.6) * f, (0.8 + random() * 0.4) * f, (1.1 + random() * 0.6) * f, 0, random() * TAU, 0, lo);
+      }
+      if (!dead) blob(THREE, g, p.leaf, x + lean, h * 0.85, z + lean * 0.5, 1.6 * f, 1.2 * f, 1.6 * f, 0, 0, 0, lo);
+      return C(x, z, 0.55, 0.55, h * 0.6);
+    };
+    k.yew = (x, z, h, lo) => { cyl(THREE, g, p.bark, x, 0.6, z, 0.12, 0.18, 1.2, 0, 0, 0, 6); twig(THREE, g, p.leaf, [x, 0.8, z], [x, 0.8 + h, z], 0.9, 0.05, lo ? 6 : 9); return C(x, z, 1.1, 1.1, h); };
+    return k;
+  }
+
+  // Outdoor room dressing. The room's walls are hedge or churchyard-wall cells: buildings are clad inside (planks, brick,
+  // stone or glass) and roofed above the wall tops; gardens stay open to the sky. Furniture keeps to the walls, clear
+  // of the centre (pickups), the doorway (south wall; a 3-wide room's door is its west cell) and the shelter kit spot.
+  // options: {width, depth, height, look, seed}. Returns a Group; userData.colliders lists furniture boxes.
+  const OUTDOOR_LOOKS = Object.freeze({
+    shed: { clad: 'plank', roof: 'pitched', roofMat: 'slate' }, bothy: { clad: 'stone', roof: 'pitched', roofMat: 'slate' },
+    cottage: { clad: 'pale', roof: 'pitched', roofMat: 'slate' }, icehouse: { clad: 'brick', roof: 'flat', roofMat: 'mossy' },
+    summerhouse: { clad: 'plank', roof: 'pitched', roofMat: 'dark', glass: true }, glasshouse: { clad: 'brick', roof: 'glass', glass: true },
+    orangery: { clad: 'pale', roof: 'glass', glass: true }, herb: {}, aviary: {}, rose: {}, wild: {}, folly: {},
+    lodge: { clad: 'plank', roof: 'pitched', roofMat: 'slate' }, chapel: { clad: 'stone', roof: 'pitched', roofMat: 'slate', tall: true },
+    crypt: { clad: 'stone', roof: 'flat', roofMat: 'mossy' }, hut: { clad: 'plank', roof: 'pitched', roofMat: 'dark' },
+    columbarium: { clad: 'pale', roof: 'flat', roofMat: 'stone' }, ossuary: { clad: 'stone', roof: 'flat', roofMat: 'mossy' },
+    mausoleum: { clad: 'pale', roof: 'pitched', roofMat: 'stone', tall: true }, charnel: { clad: 'stone', roof: 'pitched', roofMat: 'slate' },
+    vestry: { clad: 'wood', roof: 'pitched', roofMat: 'slate' }, paupers: { clad: 'plank', roof: 'pitched', roofMat: 'dark' },
+    embalm: { clad: 'pale', roof: 'pitched', roofMat: 'slate' }
+  });
+  function decorateOutdoorRoom(THREE, options) {
+    const opts = options || {}, width = roomDimension(opts.width, 9, 3, 40), depth = roomDimension(opts.depth, 9, 3, 40);
+    const H = roomDimension(opts.height, 3.2, 2.6, 6), look = OUTDOOR_LOOKS[opts.look] ? opts.look : 'shed', spec = OUTDOOR_LOOKS[look];
+    const g = new THREE.Group(), p = outdoorPalette(THREE), colliders = [];
+    g.name = 'Above ground / ' + look;
+    let state = (Number(opts.seed) | 0) * 31 + width * 7 + depth * 13;
+    for (let i = 0; i < look.length; i++) state = Math.imul(state ^ look.charCodeAt(i), 2654435761);
+    const random = seeded(state >>> 0), kit = outdoorKit(THREE, g, p, random);
+    const W2 = width / 2, D2 = depth / 2, cells = Math.max(1, Math.round(width / 3));
+    const doorX = (Math.floor(cells / 2) - (cells === 3 ? 1 : 0) + 0.5) * width / cells - W2, half = width / cells / 2;
+    // Clear: the centre (pickups and the shelter kit), the doorway and the walk from it.
+    const blocked = (x, z, w, d) => Math.abs(x) < w / 2 + 2.1 && Math.abs(z) < d / 2 + 2.1 ||
+      Math.abs(x - doorX) < w / 2 + half + 0.2 && z + d / 2 > D2 - 2.6;
+    const put = c => { if (c) colliders.push(c); return c; };
+    const try_ = (x, z, w, d, make) => { if (blocked(x, z, w, d)) return false; put(make(x, z)); return true; };
+    const clad = spec.clad && p[spec.clad];
+    if (clad) {
+      // A boarded or flagged floor over the lawn.
+      box(THREE, g, spec.clad === 'plank' || spec.clad === 'wood' ? p.plank : p.stone, 0, 0.01, 0, width - 0.04, 0.02, depth - 0.04);
+      const t = 0.08, wainscot = spec.glass ? 0.7 : H;
+      box(THREE, g, clad, 0, wainscot / 2, -D2 + t / 2, width, wainscot, t);
+      for (const s of [-1, 1]) box(THREE, g, clad, s * (W2 - t / 2), wainscot / 2, 0, t, wainscot, depth);
+      const l0 = -W2, l1 = doorX - half, r0 = doorX + half, r1 = W2;
+      if (l1 - l0 > 0.05) box(THREE, g, clad, (l0 + l1) / 2, wainscot / 2, D2 - t / 2, l1 - l0, wainscot, t);
+      if (r1 - r0 > 0.05) box(THREE, g, clad, (r0 + r1) / 2, wainscot / 2, D2 - t / 2, r1 - r0, wainscot, t);
+      box(THREE, g, spec.glass ? p.iron : clad, doorX, H - 0.3, D2 - t / 2, half * 2, 0.6, t + 0.04);
+      for (const s of [-1, 1]) box(THREE, g, p.dark, doorX + s * half, 1.3, D2 - 0.06, 0.14, 2.6, 0.14);
+      if (spec.glass) {
+        // Iron glazing bars over a low wall; the panes are one transparent material.
+        box(THREE, g, p.glass, 0, (H + wainscot) / 2, -D2 + 0.05, width, H - wainscot, 0.02);
+        for (const s of [-1, 1]) box(THREE, g, p.glass, s * (W2 - 0.05), (H + wainscot) / 2, 0, 0.02, H - wainscot, depth);
+        for (let x = -W2; x <= W2 + 0.01; x += 1.5) box(THREE, g, p.iron, x, (H + wainscot) / 2, -D2 + 0.07, 0.05, H - wainscot, 0.05);
+        for (let z = -D2; z <= D2 + 0.01; z += 1.5) for (const s of [-1, 1]) box(THREE, g, p.iron, s * (W2 - 0.07), (H + wainscot) / 2, z, 0.05, H - wainscot, 0.05);
+        box(THREE, g, p.iron, 0, H - 0.04, -D2 + 0.07, width, 0.06, 0.06);
+      }
+    }
+    if (spec.roof === 'pitched' || spec.roof === 'glass') {
+      const rise = spec.tall ? 2.6 : 1.6, eave = D2 + 0.45, len = Math.hypot(eave, rise), a = Math.atan2(rise, eave), m = spec.roof === 'glass' ? p.glass : p[spec.roofMat] || p.slate;
+      for (const s of [-1, 1]) box(THREE, g, m, 0, H + rise / 2, s * eave / 2, width + 0.7, spec.roof === 'glass' ? 0.03 : 0.12, len, s * a);
+      box(THREE, g, p.dark, 0, H + rise + 0.02, 0, width + 0.75, 0.14, 0.18);
+      for (const s of [-1, 1]) prism(THREE, g, spec.roof === 'glass' ? p.iron : clad || p.stone, s * (W2 + 0.02), H, 0, depth + 0.6, rise, spec.roof === 'glass' ? 0.06 : 0.16, Math.PI / 2);
+      if (spec.roof === 'glass') for (let x = -W2; x <= W2 + 0.01; x += 1.5) for (const s of [-1, 1]) box(THREE, g, p.iron, x, H + rise / 2 + 0.03, s * eave / 2, 0.05, 0.05, len, s * a);
+      for (let x = -W2 + 1.5; x < W2; x += 3) box(THREE, g, p.dark, x, H - 0.08, 0, 0.14, 0.16, depth);
+      kit.lantern(0, H - 0.75, 0, true);
+    } else if (spec.roof === 'flat') {
+      box(THREE, g, p[spec.roofMat] || p.stone, 0, H + 0.2, 0, width + 0.8, 0.4, depth + 0.8);
+      box(THREE, g, p.stone, 0, H + 0.45, 0, width + 0.5, 0.1, depth + 0.5);
+      kit.lantern(0, H - 0.75, 0, true);
+    } else kit.lantern(W2 - 0.6, 2.5, -D2 + 0.6);
+    const north = -D2 + 0.45, west = -W2 + 0.45, east = W2 - 0.45;
+    const alongNorth = (step, w, d, make) => { for (let x = -W2 + w / 2 + 0.3; x <= W2 - w / 2 - 0.3; x += step) try_(x, north + d / 2 - 0.3, w, d, make); };
+    const alongSides = (step, w, d, make, sides) => {
+      for (const s of sides || [-1, 1]) for (let z = -D2 + d / 2 + 0.3; z <= D2 - d / 2 - 0.3; z += step) try_(s < 0 ? west + w / 2 - 0.3 : east - w / 2 + 0.3, z, w, d, (x, zz) => make(x, zz, s));
+    };
+    switch (look) {
+      case 'shed':
+        alongNorth(2.6, 2.2, 0.7, (x, z) => { const c = kit.table(x, z, 2.2, 0.7, p.plank); for (let i = 0; i < 4; i++) kit.pot(x - 0.8 + i * 0.5, 0.81, z, 0.13, true); return c; });
+        alongSides(2.4, 0.5, 1.8, (x, z, s) => kit.shelf(x, z, Math.PI / 2, 1.8, (r, sx, y) => cyl(THREE, r, p.clay, sx, y + 0.1, 0, 0.1, 0.07, 0.2, 0, 0, 0, 8)), [1]);
+        kit.tools(west + 0.1, -0.5, Math.PI / 2); kit.sack(west + 0.2, 1.6); kit.sack(east - 0.3, D2 - 0.6);
+        break;
+      case 'bothy': case 'lodge':
+        alongSides(9, 0.95, 2, (x, z) => kit.bed(x, z, 0), [-1]);
+        try_(east - 0.4, north + 0.3, 0.75, 0.65, (x, z) => kit.stove(x, z));
+        try_(1.2, north + 0.4, 1.4, 0.8, (x, z) => kit.table(x, z, 1.3, 0.75, p.dark));
+        alongSides(2.6, 0.5, 1.6, (x, z) => kit.shelf(x, z, Math.PI / 2, 1.6, (r, sx, y) => box(THREE, r, random() < 0.5 ? p.cloth : p.dry, sx, y + 0.1, 0, 0.22, 0.2, 0.3)), [1]);
+        break;
+      case 'cottage': case 'embalm': case 'vestry':
+        alongNorth(3, look === 'embalm' ? 2.1 : 1.8, 0.5, (x, z) => kit.shelf(x, z, 0, look === 'embalm' ? 2.1 : 1.8, (r, sx, y) => cyl(THREE, r, look === 'embalm' ? p.glass : p.white, sx, y + 0.12, 0, 0.08, 0.08, 0.24, 0, 0, 0, 8)));
+        alongSides(3.2, look === 'embalm' ? 1.0 : 0.95, 2.1, (x, z, s) => look === 'embalm' ? (shroud(THREE, g, p.cloth, x, 0.85, z), kit.table(x, z, 0.9, 2.0, p.iron)) : s < 0 ? kit.bed(x, z, 0) : kit.table(x, z, 0.9, 1.6, p.wood));
+        if (look === 'cottage') { try_(east - 1.6, D2 - 0.8, 0.75, 0.65, (x, z) => kit.stove(x, z)); kit.sack(west + 0.4, D2 - 0.5); }
+        break;
+      case 'icehouse':
+        alongSides(1.4, 0.9, 0.9, (x, z) => { bevel(THREE, g, p.white, x, 0.4, z, 0.8, 0.8, 0.8, 0.04); return { x, z, w: 0.85, d: 0.85, h: 0.8 }; });
+        for (let i = 0; i < 6; i++) blob(THREE, g, p.dry, -W2 + 1 + random() * (width - 2), 0.05, north + 0.5 + random() * 1.2, 0.5, 0.06, 0.4, 0, 0, 0, true);
+        for (let x = -W2 + 1; x < W2; x += 1.2) twig(THREE, g, p.iron, [x, H - 0.05, north], [x, H - 0.5, north], 0.012);
+        break;
+      case 'summerhouse':
+        try_(0, north + 0.3, 1.7, 0.6, (x, z) => kit.bench(x, z, 0, p.wood));
+        alongSides(9, 0.8, 0.8, (x, z) => kit.table(x, z, 0.75, 0.75, p.dark));
+        break;
+      case 'glasshouse': case 'orangery':
+        if (look === 'glasshouse') {
+          alongNorth(3.2, 2.8, 0.8, (x, z) => { const c = kit.table(x, z, 2.8, 0.8, p.plank); for (let i = 0; i < 5; i++) kit.pot(x - 1.1 + i * 0.55, 0.81, z, 0.14, random() < 0.7); return c; });
+          alongSides(3, 0.8, 2.6, (x, z) => { const c = kit.table(x, z, 0.8, 2.6, p.plank); for (let i = 0; i < 4; i++) kit.pot(x, 0.81, z - 0.9 + i * 0.6, 0.15, random() < 0.7); return c; });
+        } else {
+          alongNorth(2.2, 1.0, 1.0, (x, z) => kit.tub(x, z, random() < 0.6));
+          alongSides(2.4, 1.0, 1.0, (x, z) => kit.tub(x, z, random() < 0.6));
+        }
+        break;
+      case 'herb':
+        alongNorth(9, width - 1.2, 1.0, (x, z) => kit.raised(x, z, width - 1.4, 1.0));
+        alongSides(9, 1.0, 3.2, (x, z) => kit.raised(x, z, 1.0, 3.0), [1]);
+        try_(west + 0.4, -0.4, 0.6, 1.7, (x, z) => kit.bench(x, z, Math.PI / 2, p.wood));
+        break;
+      case 'aviary': {
+        for (let i = 0; i < 4; i++) { const a = i / 4 * Math.PI; ring(THREE, g, p.iron, 0, 0.1, 0, Math.min(W2, D2) - 0.2, 0.02, 0, a, 0, Math.PI); }
+        for (const s of [-1, 1]) ring(THREE, g, p.iron, 0, 0.1, 0, Math.min(W2, D2) - 0.2, 0.025, Math.PI / 2 * s, 0, 0, Math.PI);
+        alongSides(2.8, 0.3, 0.3, (x, z) => { twig(THREE, g, p.dark, [x, 0, z], [x, 1.9, z], 0.035); twig(THREE, g, p.dark, [x - 0.5, 1.6, z], [x + 0.5, 1.6, z], 0.02); blob(THREE, g, p.dark, x + 0.2, 1.67, z, 0.08, 0.06, 0.12); return { x, z, w: 0.3, d: 0.3, h: 1.9 }; });
+        for (let i = 0; i < 9; i++) blob(THREE, g, p.dark, (random() - 0.5) * (width - 2), 0.05, north + random() * 1.5, 0.09, 0.05, 0.13, 0, random() * TAU, 0, true);
+        break;
+      }
+      case 'rose':
+        kit.roses(0, north + 0.3, width - 1.4);
+        for (const s of [-1, 1]) { const x = s < 0 ? west : east; for (let z = -D2 + 1; z < D2 - 2.8; z += 1.1) kit.roses(x, z, 1); colliders.push({ x, z: -0.9, w: 0.7, d: depth - 3.4, h: 1 }); }
+        colliders.push({ x: 0, z: north + 0.3, w: width - 1.2, d: 0.7, h: 1 });
+        ring(THREE, g, p.iron, 0, 2.0, north + 1.0, 1.1, 0.03, 0, 0, 0, Math.PI);
+        for (const s of [-1, 1]) twig(THREE, g, p.iron, [s * 1.1, 0, north + 1.0], [s * 1.1, 2.0, north + 1.0], 0.03);
+        break;
+      case 'wild':
+        for (let i = 0; i < 26; i++) { const x = (random() - 0.5) * (width - 1.2), z = (random() - 0.5) * (depth - 1.2); if (!blocked(x, z, 0.3, 0.3)) kit.tuft(x, z, 1.6 + random(), random() < 0.5 ? p.dry : p.leaf2); }
+        try_(east - 0.6, north + 0.6, 0.95, 0.95, (x, z) => kit.statue(x, z, -0.6, true));
+        blob(THREE, g, p.pale, west + 0.8, 0.3, 0.4, 0.35, 0.3, 0.55, Math.PI / 2, 0.4, 0);
+        for (let i = 0; i < 5; i++) blob(THREE, g, p.leaf, west + 0.4 + random(), 0.3, north + 0.4 + random() * 1.5, 0.5, 0.35, 0.5);
+        break;
+      case 'folly':
+        for (const [x, z, h] of [[-W2 + 1.5, north + 0.5, 3.4], [-W2 + 4.5, north + 0.5, 1.4], [W2 - 4.5, north + 0.5, 3.4], [W2 - 1.5, north + 0.5, 2.1]]) try_(x, z, 0.85, 0.85, (xx, zz) => kit.column(xx, zz, h));
+        box(THREE, g, p.pale, -W2 + 1.5, 3.75, north + 0.5, 0.8, 0.2, 0.8);
+        for (let i = 0; i < 3; i++) { const x = W2 - 1.6 - i * 0.9, z = D2 - 1.2; if (!blocked(x, z, 0.9, 0.7)) { cyl(THREE, g, p.pale, x, 0.3, z, 0.3, 0.3, 0.7, Math.PI / 2, random(), 0, 12); colliders.push({ x, z, w: 0.8, d: 0.8, h: 0.6 }); } }
+        alongSides(9, 0.95, 0.95, (x, z) => kit.statue(x, z, 0, false), [-1]);
+        break;
+      case 'chapel': case 'paupers': {
+        const aisle = 1.6, rows = Math.floor((depth - 3.2) / 1.2);
+        try_(0, north + 0.4, 1.8, 0.8, (x, z) => { bevel(THREE, g, p.pale, x, 0.5, z, 1.8, 1.0, 0.8, 0.03); box(THREE, g, p.white, x, 1.02, z, 1.6, 0.03, 0.7); for (const s of [-0.6, 0.6]) { cyl(THREE, g, p.white, x + s, 1.2, z, 0.03, 0.03, 0.3, 0, 0, 0, 6); box(THREE, g, p.live, x + s, 1.38, z, 0.02, 0.05, 0.02).castShadow = false; } return { x, z, w: 1.9, d: 0.9, h: 1.05 }; });
+        if (look === 'chapel') { box(THREE, g, p.dark, 0, 2.3, -D2 + 0.1, 0.12, 1.4, 0.06); box(THREE, g, p.dark, 0, 2.55, -D2 + 0.1, 0.8, 0.12, 0.06); }
+        else { box(THREE, g, p.wood, 0, 2.0, -D2 + 0.1, 0.1, 1.2, 0.05); box(THREE, g, p.wood, 0, 2.3, -D2 + 0.1, 0.6, 0.1, 0.05); }
+        for (let i = 0; i < rows; i++) for (const s of [-1, 1]) {
+          const z = north + 1.8 + i * 1.2, w = W2 - aisle / 2 - 0.5, x = s * (aisle / 2 + w / 2);
+          try_(x, z, w, 0.5, (xx, zz) => { box(THREE, g, p.dark, xx, 0.45, zz, w, 0.05, 0.4); box(THREE, g, p.dark, xx, 0.75, zz + 0.2, w, 0.55, 0.05); for (const e of [-1, 1]) box(THREE, g, p.dark, xx + e * (w / 2 - 0.04), 0.4, zz, 0.05, 0.8, 0.45); return { x: xx, z: zz, w, d: 0.5, h: 0.9 }; });
+        }
+        break;
+      }
+      case 'crypt': case 'mausoleum':
+        alongNorth(look === 'crypt' ? 9 : 4, 2.15, 1.15, (x, z) => kit.tomb(x, z, Math.PI / 2));
+        if (look === 'mausoleum') { alongSides(3.6, 1.15, 2.15, (x, z) => kit.tomb(x, z, 0)); for (const s of [-1, 1]) for (const z of [-D2 + 0.5, D2 - 0.5]) kit.column(s * (W2 - 0.5), z, H - 0.2, 0.22); }
+        else alongSides(9, 0.8, 2.05, (x, z) => kit.coffin(x, z, 0), [1]);
+        for (let x = -W2 + 1; x < W2 - 0.5; x += 1.5) box(THREE, g, p.pale, x, H - 0.2, north - 0.2, 0.2, 0.4, 0.2);
+        break;
+      case 'columbarium': {
+        for (const [x, z, ry, len] of [[0, -D2 + 0.12, 0, width - 0.6], [-W2 + 0.12, 0, Math.PI / 2, depth - 3.2], [W2 - 0.12, 0, -Math.PI / 2, depth - 3.2]]) {
+          const r = joint(THREE, g, 'niches', x, 0, z); r.rotation.y = ry;
+          for (let row = 0; row < 4; row++) for (let i = 0; i < Math.floor(len / 0.6); i++) {
+            const nx = -len / 2 + 0.3 + i * 0.6, y = 0.5 + row * 0.6;
+            box(THREE, r, p.pit, nx, y, 0.01, 0.42, 0.42, 0.02).castShadow = false;
+            if (random() < 0.7) { cyl(THREE, r, random() < 0.5 ? p.clay : p.pale, nx, y - 0.08, 0.08, 0.09, 0.07, 0.24, 0, 0, 0, 8); }
+          }
+        }
+        colliders.push({ x: 0, z: -D2 + 0.15, w: width, d: 0.3, h: 2.6 });
+        try_(1.2, 1.2, 1.7, 0.6, (x, z) => kit.bench(x, z, Math.PI, p.stone));
+        break;
+      }
+      case 'ossuary': case 'charnel':
+        alongNorth(2.2, 1.6, 0.9, (x, z) => { kit.bones(x, z, 1.4); return { x, z, w: 1.6, d: 0.9, h: 0.5 }; });
+        alongSides(2.8, 0.5, 2.0, (x, z) => kit.shelf(x, z, Math.PI / 2, 2.0, (r, sx, y) => blob(THREE, r, p.bone, sx, y + 0.11, 0, 0.1, 0.11, 0.12, 0, 0, 0, true)), look === 'ossuary' ? [-1, 1] : [1]);
+        if (look === 'charnel') alongSides(9, 1.0, 2.1, (x, z) => { shroud(THREE, g, p.cloth, x, 0.85, z); return kit.table(x, z, 0.95, 2.05, p.stone); }, [-1]);
+        break;
+      case 'hut':
+        alongNorth(3, 2.0, 0.8, (x, z) => kit.coffin(x, z, Math.PI / 2));
+        kit.tools(west + 0.15, -1.2, Math.PI / 2); kit.tools(east - 0.2, 1.0, -Math.PI / 2);
+        alongSides(2.2, 0.65, 0.65, (x, z) => kit.barrel(x, z), [1]);
+        kit.mound(east - 1.3, D2 - 1.1, 0, false); kit.sack(west + 0.3, 1.8);
+        break;
+    }
+    flattenStatic(THREE, g);
+    batch(THREE, g, { boxUV: 1 });
+    g.traverse(o => { if (o.isMesh && o.material === p.glass) o.castShadow = false; });
+    g.userData = { look, width, depth, height: H, colliders, direction: 'Above ground' };
+    return g;
+  }
+
+  // The dressing of an outdoor floor's paths and lawns (it replaces decorateWard there): S1's fountain, trees, statues,
+  // benches, urns and lamp posts; S2's rows of graves, chest tombs, dead trees and yews, the boss's grave, the graves
+  // its summons climb out of and the bell by the gate. Everything with a footprint stays one stride off the cells in
+  // `avoid` ({x, z, r} world metres) and out of door approaches, and is listed in userData.colliders.
+  // options: {grid, cellSize, height, rooms, seed, kind: 'garden'|'graveyard', centre: [cx, cz], avoid, boss, landmarks}
+  function decorateGrounds(THREE, options) {
+    const opts = options || {}, grid = opts.grid || [], s = opts.cellSize || 3, kind = opts.kind === 'graveyard' ? 'graveyard' : 'garden';
+    const g = new THREE.Group(); g.name = 'Above ground / ' + kind;
+    const p = outdoorPalette(THREE), random = seeded(((opts.seed | 0) ^ 0x2c1b3c6d) >>> 0), kit = outdoorKit(THREE, g, p, random);
+    const colliders = [], practicals = [], avoid = (opts.avoid || []).slice(), rooms = opts.rooms || [];
+    g.userData = { decoration: true, practicals, colliders, liveMaterial: p.live, bell: null };
+    const W = grid.length; if (!W) return g;
+    const key = (x, z) => x + ',' + z, special = new Set();
+    for (const r of rooms) {
+      for (let z = r.z - 1; z <= r.z + r.d; z++) for (let x = r.x - 1; x <= r.x + r.w; x++) special.add(key(x, z));
+      if (r.door) for (let z = r.door.z; z <= r.door.z + 2; z++) special.add(key(r.door.x, z));
+    }
+    const open = (x, z) => grid[z]?.[x] === 0, wall = (x, z) => grid[z]?.[x] === 1;
+    const cells = [];
+    for (let z = 1; z < W - 1; z++) for (let x = 1; x < W - 1; x++) {
+      if (!open(x, z) || special.has(key(x, z)) || (x <= 6 && z <= 4)) continue;
+      const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dz]) => wall(x + dx, z + dz));
+      let around = 0; for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (open(x + dx, z + dz)) around++;
+      cells.push({ x, z, wx: (x + 0.5) * s, wz: (z + 0.5) * s, sides, around, rank: random() });
+    }
+    cells.sort((a, b) => a.rank - b.rank);
+    const taken = [];
+    // A clear 1.25 m between any two footprints keeps every creature's way through (the Warden needs 1.16 m).
+    const fits = (x, z, w, d) => avoid.every(a => Math.hypot(Math.max(0, Math.abs(a.x - x) - w / 2), Math.max(0, Math.abs(a.z - z) - d / 2)) > a.r) &&
+      taken.every(t => Math.abs(t.x - x) > (t.w + w) / 2 + 1.25 || Math.abs(t.z - z) > (t.d + d) / 2 + 1.25);
+    const place = c => { if (c) { colliders.push(c); taken.push(c); } return c; };
+    // Against a wall of cell c: centre `inset` metres off the wall face, `along` metres along it.
+    const against = (c, side, inset, along) => { const [dx, dz] = side; return [c.wx + dx * (s / 2 - inset) - dz * along, c.wz + dz * (s / 2 - inset) + dx * along, Math.atan2(-dx, -dz)]; };
+    const landmarks = opts.landmarks || {};
+    if (landmarks.ped) {
+      const { x, z } = landmarks.ped;
+      if (kind === 'garden') { cyl(THREE, g, p.pale, x, 1.03, z, 0.3, 0.3, 0.04, 0, 0, 0, 16); prism(THREE, g, p.rust, x, 1.05, z, 0.04, 0.22, 0.32, Math.PI / 2); }
+      else { bevel(THREE, g, p.dark, x, 1.08, z, 0.42, 0.1, 0.32, 0.02, -0.3); kit.lantern(x + 0.12, 1.27, z - 0.08); }
+    }
+    if (landmarks.chan) {
+      const { x, z } = landmarks.chan;
+      if (kind === 'garden') { cyl(THREE, g, p.pale, x, 0.42, z, 0.42, 0.25, 0.85, 0, 0, Math.PI / 2 - 0.15, 12); cyl(THREE, g, p.soil, x - 0.5, 0.05, z + 0.1, 0.5, 0.6, 0.1, 0, 0, 0, 9); }
+      else { kit.statue(0, 0, 0, true); const last = g.children.slice(-1)[0]; last.position.set(x, 0.5, z); last.rotation.set(Math.PI / 2 - 0.2, 0.6, 0); }
+    }
+    const used = new Set();
+    const pick = (test, count, make) => {
+      let n = 0;
+      for (const c of cells) {
+        if (n >= count) break;
+        if (used.has(key(c.x, c.z)) || !test(c)) continue;
+        if (make(c)) { used.add(key(c.x, c.z)); n++; }
+      }
+    };
+    const lamp = (c, side) => {
+      const [x, z] = side ? against(c, side, 0.35, 0) : [c.wx, c.wz];
+      if (!fits(x, z, 0.4, 0.4)) return false;
+      place(kit.post(x, z)); practicals.push({ x, z, color: kind === 'garden' ? 0xd9a466 : 0xc9a06a, phase: random() * TAU });
+      return true;
+    };
+    const boss = opts.boss || null, arena = boss && boss.arena;
+    const inArena = c => arena && c.x >= arena[0] && c.x <= arena[2] && c.z >= arena[1] && c.z <= arena[3];
+    if (kind === 'garden') {
+      if (opts.centre) {
+        const [x, z] = opts.centre;
+        cyl(THREE, g, p.pale, x, 0.32, z, 1.75, 1.85, 0.64, 0, 0, 0, 28); cyl(THREE, g, p.slate, x, 0.6, z, 1.55, 1.55, 0.04, 0, 0, 0, 28);
+        ring(THREE, g, p.pale, x, 0.64, z, 1.66, 0.11, Math.PI / 2, 0, 0);
+        cyl(THREE, g, p.pale, x, 1.1, z, 0.16, 0.28, 1.0, 0, 0, 0, 12); cyl(THREE, g, p.pale, x, 1.65, z, 0.8, 0.2, 0.22, 0, 0, 0, 18);
+        cyl(THREE, g, p.slate, x, 1.77, z, 0.68, 0.68, 0.03, 0, 0, 0, 18); kit.statue(x, z, 0.4, false);
+        const figure = g.children[g.children.length - 1]; figure.position.y = 0.95; figure.scale.setScalar(0.8);
+        colliders.push({ x, z, w: 3.3, d: 3.3, h: 0.7 }); taken.push({ x, z, w: 3.6, d: 3.6 });
+        for (let i = 0; i < 4; i++) { const a = i / 4 * TAU + Math.PI / 4; place(kit.post(x + Math.cos(a) * 4.6, z + Math.sin(a) * 4.6)); }
+        practicals.push({ x: x + 3.25, z: z + 3.25, color: 0xd9a466, phase: random() * TAU });
+      }
+      pick(c => c.around >= 8, 9, c => { const x = c.wx + (random() - 0.5) * 1.2, z = c.wz + (random() - 0.5) * 1.2; if (!fits(x, z, 0.6, 0.6)) return false; place(kit.tree(x, z, 5 + random() * 3, false)); return true; });
+      pick(c => c.sides.length === 1, 7, c => { const [x, z, ry] = against(c, c.sides[0], 0.65, 0); if (!fits(x, z, 1, 1)) return false; place(kit.statue(x, z, ry, random() < 0.4)); return true; });
+      pick(c => c.sides.length >= 1, 8, c => { const side = c.sides[0], [x, z, ry] = against(c, side, 0.4, (random() - 0.5) * 0.8); const turned = side[0] !== 0; if (!fits(x, z, turned ? 0.6 : 1.7, turned ? 1.7 : 0.6)) return false; place(kit.bench(x, z, ry)); return true; });
+      pick(c => c.sides.length >= 2, 10, c => { const [x, z] = against(c, c.sides[0], 0.55, (s / 2 - 0.55) * (random() < 0.5 ? -1 : 1)); if (!fits(x, z, 0.8, 0.8)) return false; bevel(THREE, g, p.mossy, x, 0.35, z, 0.7, 0.7, 0.7, 0.03); cyl(THREE, g, p.pale, x, 0.95, z, 0.36, 0.2, 0.5, 0, 0, 0, 12); kit.pot(x, 1.12, z, 0.1, random() < 0.5); place({ x, z, w: 0.75, d: 0.75, h: 1.3 }); return true; });
+      pick(c => c.sides.length >= 1, 9, c => lamp(c, c.sides[0]));
+      // Shrubs, flowers and long grass at the hedge feet: no footprint, walked through.
+      for (const c of cells) for (const side of c.sides) {
+        if (random() > 0.45) continue;
+        for (let i = 0; i < 3; i++) {
+          const [x, z] = against(c, side, 0.22 + random() * 0.2, (random() - 0.5) * (s - 0.6));
+          if (random() < 0.5) kit.tuft(x, z, 1 + random() * 0.8, random() < 0.3 ? p.dry : p.leaf2);
+          else { blob(THREE, g, random() < 0.5 ? p.leaf : p.leaf2, x, 0.18, z, 0.3, 0.25, 0.3, 0, 0, 0, true); if (random() < 0.4) blob(THREE, g, random() < 0.5 ? p.white : p.rose, x, 0.4, z, 0.05, 0.04, 0.05, 0, 0, 0, true); }
+        }
+      }
+    } else {
+      if (boss && boss.grave) {
+        const [gx, gz] = boss.grave, x = (gx + 0.5) * s, z = (gz + 0.5) * s;
+        kit.mound(x + 1.15, z, 0, false); box(THREE, g, p.pit, x, 0.006, z, 1.3, 0.01, 2.3);
+        const stone = kit.headstone(x, z - 1.75, 0, 0, 1.9); colliders.push(stone); taken.push({ x, z, w: 3.4, d: 3.4 });
+        for (let i = 0; i < 6; i++) blob(THREE, g, p.soil, x + (random() - 0.5) * 2, 0.06, z + (random() - 0.5) * 2.4, 0.3, 0.1, 0.25, 0, 0, 0, true);
+        practicals.push({ x: x - 1.8, z: z - 1.6, color: 0x7fa68a, phase: random() * TAU });
+        box(THREE, g, p.live, x - 0.25, 0.1, z - 1.55, 0.05, 0.12, 0.05).castShadow = false; box(THREE, g, p.live, x + 0.25, 0.1, z - 1.6, 0.05, 0.1, 0.05).castShadow = false;
+      }
+      for (const [sx, sz] of (boss && boss.summons) || []) {
+        const x = (sx + 0.5) * s, z = (sz + 0.5) * s;
+        kit.mound(x, z + 0.15, 0, false); colliders.push(kit.headstone(x, z - 1.5, 0, [0, 1, 3][random() * 3 | 0])); taken.push({ x, z, w: 2.4, d: 2.4 });
+      }
+      if (opts.gate) {
+        // The bell on its gallows frame beside the gate: it swings when the Gravekeeper is called.
+        const [ex, ez] = opts.gate, x = ex * s - 1.0, z = (ez - 2) * s + 0.5, frame = joint(THREE, g, 'bell frame', x, 0, z);
+        for (const d of [-0.75, 0.75]) box(THREE, frame, p.dark, 0, 1.6, d, 0.16, 3.2, 0.16);
+        box(THREE, frame, p.dark, 0, 3.2, 0, 0.2, 0.2, 1.8); prism(THREE, frame, p.slate, 0, 3.3, 0, 0.9, 0.5, 2.0, Math.PI / 2);
+        const bell = new THREE.Group(); bell.position.set(x, 3.08, z); g.add(bell);
+        const cup = cyl(THREE, bell, p.rust, 0, -0.4, 0, 0.16, 0.36, 0.62, 0, 0, 0, 14); cup.userData.dynamic = true;
+        const lip = ring(THREE, bell, p.rust, 0, -0.71, 0, 0.36, 0.035, Math.PI / 2, 0, 0); lip.userData.dynamic = true;
+        const clapper = blob(THREE, bell, p.iron, 0, -0.66, 0, 0.07, 0.07, 0.07); clapper.userData.dynamic = true;
+        g.userData.bell = bell; colliders.push({ x, z, w: 0.5, d: 1.9, h: 3.2 });
+      }
+      pick(c => c.around >= 6 && !inArena(c), 8, c => { const x = c.wx + (random() - 0.5), z = c.wz + (random() - 0.5); if (!fits(x, z, 1.2, 1.2)) return false; place(random() < 0.6 ? kit.tree(x, z, 5 + random() * 3, true) : kit.yew(x, z, 3.5 + random() * 2)); return true; });
+      pick(c => c.around >= 7, 7, c => { const turned = random() < 0.5, x = c.wx + (random() - 0.5) * 0.6, z = c.wz + (random() - 0.5) * 0.6; if (!fits(x, z, turned ? 2.2 : 1.2, turned ? 1.2 : 2.2)) return false; place(kit.tomb(x, z, turned ? Math.PI / 2 : 0)); if (random() < 0.5) for (let i = 0; i < 10; i++) { const a = i / 10 * TAU; twig(THREE, g, p.iron, [x + Math.cos(a) * 1.5, 0, z + Math.sin(a) * 1.5], [x + Math.cos(a) * 1.5, 0.9, z + Math.sin(a) * 1.5], 0.015); } return true; });
+      // Rows of graves: a headstone at the head, a sunken or mounded plot below it.
+      let stones = 0;
+      for (const c of cells) {
+        if (stones >= 70) break;
+        const wide = c.around >= 7, edge = c.sides.length >= 1;
+        if (!wide && !(edge && random() < 0.4)) continue;
+        const spots = wide ? [[-0.85, -0.7], [0.85, -0.7]] : [[0, 0]];
+        for (const [ox, oz] of spots) {
+          if (random() < (wide ? 0.35 : 0)) continue;
+          let x = c.wx + ox, z = c.wz + oz, ry = 0;
+          if (!wide) { const side = c.sides[0]; [x, z, ry] = against(c, side, 0.3, (random() - 0.5) * 1.4); }
+          const st = kit.headstone(0, 0, 0, random() * 4 | 0), last = g.children[g.children.length - 1];
+          if (!fits(x, z, Math.max(st.w, st.d), Math.max(st.w, st.d))) { g.remove(last); continue; }
+          last.position.set(x, 0, z); last.rotation.y = ry + (random() - 0.5) * 0.15;
+          const turned = Math.abs(Math.sin(ry)) > 0.5;
+          place({ x, z, w: turned ? st.d : st.w, d: turned ? st.w : st.d, h: st.h }); stones++;
+          if (wide && random() < 0.7) kit.mound(x, z + 1.15, 0, random() < 0.08);
+          if (random() < 0.12) box(THREE, g, p.live, x + 0.2, 0.06, z + 0.3, 0.04, 0.1, 0.04).castShadow = false;
+        }
+      }
+      // Flat ledger stones and leaning markers between them: no footprint.
+      for (const c of cells) if (c.around >= 7 && random() < 0.25) box(THREE, g, random() < 0.5 ? p.stone : p.mossy, c.wx + (random() - 0.5) * 1.5, 0.04, c.wz + 0.6, 0.8, 0.08, 1.6, 0, (random() - 0.5) * 0.2);
+      pick(c => c.sides.length >= 1, 8, c => lamp(c, c.sides[0]));
+      for (const c of cells) for (const side of c.sides) if (random() < 0.4) for (let i = 0; i < 2; i++) { const [x, z] = against(c, side, 0.2 + random() * 0.2, (random() - 0.5) * (s - 0.6)); kit.tuft(x, z, 1 + random() * 0.7, random() < 0.7 ? p.dry : p.leaf2); }
+    }
+    const bell = g.userData.bell;
+    if (bell) g.remove(bell);
+    flattenStatic(THREE, g);
+    batch(THREE, g, { boxUV: 1 });
+    // Low clutter receives light without casting; trees, statues and stones cast the torch's shadows.
+    if (bell) g.add(bell);
+    g.userData.colliders = colliders;
+    return g;
+  }
+
+  // Beyond the walls: a ring of tall tree silhouettes against the night sky (S1 full canopies, S2 bare trees and yews).
+  function decorateHorizon(THREE, options) {
+    const opts = options || {}, size = opts.size || 105, kind = opts.kind === 'graveyard' ? 'graveyard' : 'garden';
+    const g = new THREE.Group(); g.name = 'Above ground / horizon';
+    const p = outdoorPalette(THREE), random = seeded(((opts.seed | 0) ^ 0x51ed270b) >>> 0), kit = outdoorKit(THREE, g, p, random);
+    for (let i = 0; i < 70; i++) {
+      const side = i % 4, t = random() * (size + 40) - 20, out = 4 + random() * 34;
+      const x = side === 0 ? -out : side === 1 ? size + out : t, z = side === 2 ? -out : side === 3 ? size + out : t;
+      const h = 9 + random() * 9;
+      if (kind === 'garden' && random() < 0.3) twig(THREE, g, p.leaf, [x, h * 0.05, z], [x, h * 1.05, z], 2 + random(), 0.2, 7);
+      else if (kind === 'graveyard' && random() < 0.35) kit.yew(x, z, h * 0.7, true);
+      else kit.tree(x, z, h, kind === 'graveyard' || random() < 0.15, true);
+    }
+    flattenStatic(THREE, g);
+    batch(THREE, g);
+    g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+    g.userData.decoration = true;
+    return g;
+  }
+
   function createEnvironment(THREE, renderer) {
     const res = store(THREE);
     if (res.environments.has(renderer)) return res.environments.get(renderer).texture;
@@ -2739,5 +3540,6 @@
     if (group.parent) group.parent.remove(group);
   }
 
-  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, makeSurvivor, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, adoptSurface, settleSurfaces, whenPainted, surfacePlan, deriveMaps });
+  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, makeSurvivor, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, adoptSurface, settleSurfaces, whenPainted, surfacePlan, deriveMaps,
+    decorateOutdoorRoom, decorateGrounds, decorateHorizon, OUTDOOR_LOOKS, LATE_SURFACES });
 })(window);

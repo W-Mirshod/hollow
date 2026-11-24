@@ -35,26 +35,34 @@
   const quality = startingQuality();
   const workers = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
   const queue = [], takers = [], waiting = new Set(STARTUP);
+  // finished: every worker has painted what the ward uses (it says `settled`, or ends); the surfaces only the floors
+  // above ground use (visuals.js LATE_SURFACES) are painted after that and never hold anything up.
   let running = workers, finished = false, settle;
   const ready = new Promise(resolve => { settle = resolve; });
   const arrived = kind => { if (waiting.delete(kind) && !waiting.size) settle(); };
   for (let index = 0; index < workers; index++) {
-    let worker = null, kinds = [], ended = false;
-    const end = () => {
-      if (ended) return;
-      ended = true;
-      if (worker) worker.terminate();
-      // Whatever this worker did not deliver is painted on the page when asked for.
-      kinds.forEach(arrived);
+    let worker = null, kinds = [], ended = false, settled = false;
+    const settledWorker = () => {
+      if (settled) return;
+      settled = true;
       if (--running === 0) {
         finished = true;
         try { performance.mark('hollow:prepainted'); } catch (e) {}
         settle();
       }
     };
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      if (worker) worker.terminate();
+      // Whatever this worker did not deliver is painted on the page when asked for.
+      kinds.forEach(arrived);
+      settledWorker();
+    };
     try { worker = new Worker('texture-worker.js' + version); } catch (e) { end(); continue; }
     worker.onmessage = ({ data }) => {
       if (data.done) return end();
+      if (data.settled) return settledWorker();
       if (data.kinds) { kinds = data.kinds; return; }
       if (data.painted) {
         const item = { kind: data.kind, painted: data.painted };
