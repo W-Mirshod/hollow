@@ -111,7 +111,8 @@ function noiseFill(ctx,w,h,amt){
   for(let i=0;i<d.length;i+=4){const n=(Math.random()-.5)*amt;d[i]+=n;d[i+1]+=n;d[i+2]+=n;}
   ctx.putImageData(img,0,0);
 }
-function cv(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;return [c,c.getContext('2d')];}
+// noiseFill and deriveMaps read these canvases back: keep them in CPU memory instead of stalling on GPU readbacks.
+function cv(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;return [c,c.getContext('2d',{willReadFrequently:true})];}
 function blot(x,cx,cy,r,col){const g=x.createRadialGradient(cx,cy,0,cx,cy,r);g.addColorStop(0,col);g.addColorStop(1,'rgba(0,0,0,0)');x.fillStyle=g;x.fillRect(cx-r,cy-r,r*2,r*2);}
 function tex(c,rep,srgb){
   const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;
@@ -123,7 +124,9 @@ function tex(c,rep,srgb){
 // The Blackwater ward is a set of coherent procedural PBR surfaces from visuals.js (albedo + height-derived normal +
 // roughness: grout, cracks, peeling paint and puddles light correctly under the torch). Sizes follow the boot quality.
 HollowVisuals.configure({quality:qualityLevel});
-const wardWallS=HollowVisuals.surface('ward-wall'),wardFloorS=HollowVisuals.surface('ward-floor'),wardCeilS=HollowVisuals.surface('ward-ceiling');
+// The shell's maps are the largest: prepaint.js's workers may still be painting them, so these can be blank placeholders
+// that fill in place (wardMat refreshes its textures then). Nothing draws them before settleSurfaces() (see loop).
+const wardWallS=HollowVisuals.surface('ward-wall',{pending:true}),wardFloorS=HollowVisuals.surface('ward-floor',{pending:true}),wardCeilS=HollowVisuals.surface('ward-ceiling',{pending:true});
 function hellPedC(){const [c,x]=cv(256,256);x.fillStyle='#22150f';x.fillRect(0,0,256,256);for(let i=0;i<24;i++)blot(x,rnd(0,256),rnd(0,256),rnd(10,70),'rgba(0,0,0,.55)');noiseFill(x,256,256,26);return c;}
 function hellRunnerC(){const [c,x]=cv(256,128);x.fillStyle='#2a0a08';x.fillRect(0,0,256,128);for(let i=0;i<16;i++)blot(x,rnd(0,256),rnd(0,128),rnd(10,40),Math.random()<.5?'rgba(0,0,0,.7)':'rgba(90,10,6,.6)');noiseFill(x,256,128,30);return c;}
 function hellDoorC(){
@@ -236,6 +239,7 @@ function gridAO(kind){
 // Every material carries real roughness maps, and on medium/high normal maps.
 function wardMat(set,rep,params,opts){
   const o=opts||{},b=tex(set.albedo,rep),hn=tex(set.normal,rep,false),hr=tex(set.roughness,rep,false);
+  HollowVisuals.whenPainted(set,()=>{b.needsUpdate=true;hn.needsUpdate=true;hr.needsUpdate=true;});
   const m=new THREE.MeshStandardNodeMaterial(Object.assign({map:b,normalMap:wardLow?null:hn,roughnessMap:hr,roughness:1,metalness:0},params||{}));
   m.userData.hollowSurface='ward';
   const flat=vec3(.5,.5,1);
@@ -1819,9 +1823,13 @@ async function warmPlayPipelines(){
   warming=warmed=true;
   const views=[[PED.x-.85,PED.z],[W*S/2,W*S/2]],yaws=[0,Math.PI/2,Math.PI,-Math.PI/2];
   try{
-    // Build the next dark run's world now (Play then skips the ~1-2 s build) and compile it in its play lighting.
-    // Play always starts on B1, whichever floor the last run ended on.
-    floor=0;const seed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(seed);prebuiltSeed=seed;
+    // Build the next dark run's B1 world now, unless one is already waiting (Play then skips the ~1-2 s build), and
+    // compile it in its play lighting. Play always starts on B1, whichever floor the last run ended on.
+    HollowVisuals.settleSurfaces();
+    floor=0;if(!prebuiltSeed){const seed=1+Math.floor(Math.random()*2e9);buildMazeSeeded(seed);prebuiltSeed=seed;}
+    // Let the title breathe between the build and the rest: a Play click made meanwhile enters this ward at once.
+    await new Promise(resolve=>setTimeout(resolve,0));
+    if(state!=='menu')return;
     setHell();weaponModels.forEach(g=>g.visible=true);
     // Fill the navigator's per-radius clearance caches, which the first monster paths would otherwise build mid-play.
     if(mazeNavigator)for(const kind in RULES.MONSTERS)for(const [cx,cz] of [[W-2,W-2],[W-2,3],[3,W-2],[N,N]])if(openCell(cx,cz))mazeNavigator.path(PED.x+1,PED.z,cx*S+S/2,cz*S+S/2,RULES.MONSTERS[kind].radius);
@@ -1990,10 +1998,15 @@ function loop(){
   }
   updateAtmosphere(sdt);updatePostFX(dt);
   renderer.info.reset();
-  if(warming&&state==='menu')return;
-  if(state==='menu'&&!warmed&&renderedFrames>0&&frame>20)warmPlayPipelines();
+  // The ward's decor surfaces may still be coming from prepaint.js's workers: wait for them (up to ~10 s) rather than
+  // paint them again here.
+  if(state==='menu'&&!warmed&&frame>20&&(frame>600||!window.HollowPrepaint||HollowPrepaint.finished))warmPlayPipelines();
+  // The title screens are opaque. Nothing is drawn behind them until the warm-up has compiled the play pipelines
+  // without blocking (it then asks for one frame); an earlier frame would compile them all while the menu froze.
+  if(state==='menu'&&(warming||!warmed))return;
   if(['menu','pause','dead','win','coopEnd'].includes(state)&&!renderRequested&&lastRenderedState===state)return;
   renderRequested=false;lastRenderedState=state;
+  HollowVisuals.settleSurfaces();
   if(fx){fx.render(dt);renderCalls=renderer.info.render.drawCalls;renderedFrames++;return;}
   // clear -> world -> clear depth -> viewmodel, expressed with auto-clear flags: an explicit clear()/clearDepth()
   // would add a full-screen output (tone-mapping) pass each. The world renders straight into the renderer's own HDR
@@ -2980,14 +2993,18 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
   });
 }
 
-// build everything, then idle behind the title
+// Build the hall, put the survivor at the pedestal and idle behind the title. The title screens hide the world, so the
+// B1 ward is built after the menu is up (warmPlayPipelines), or by Play if the player is quicker.
 buildStatic();
 hall.traverse(o=>{if(o.isMesh){o.updateMatrix();o.matrixAutoUpdate=false;}});hall.updateMatrix();hall.matrixAutoUpdate=false;
-newGame();hideMonsters();state='menu';$('msg').style.opacity=0;msgTimer=0;
+floor=0;resetSurvivor(freshKit());setHell();P.pos.set(PED.x-.85,0,PED.z);P.yaw=Math.PI/2;P.pitch=0;
+hideMonsters();state='menu';$('msg').style.opacity=0;msgTimer=0;
 applyQuality(qualityLevel);if(autoStart)applyQuality(autoStart[0],autoStart[1]);
 if(playerName){$('whoName').textContent=playerName;openMenu();}else openNameScreen();
 initBoard();initNet();renderBoards();
 loop();
+// menu.js lights the title and replays a Play/Multiplay click made while the game was loading.
+window.HollowReady=true;try{performance.mark('hollow:ready');}catch(e){}window.dispatchEvent(new Event('hollow:ready'));
 } catch(error) {
   console.error('[The Hollow] Startup failed:',error);
   document.querySelectorAll('.screen').forEach(screen=>screen.hidden=true);

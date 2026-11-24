@@ -4,14 +4,29 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const zlib = require('node:zlib');
+const { promisify } = require('node:util');
 const { isIP } = require('node:net');
-const { randomBytes } = require('node:crypto');
+const { randomBytes, createHash } = require('node:crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const ROOM_RE = /^[a-z0-9][a-z0-9_.-]{0,47}$/;
 const UID_RE = /^[A-Za-z0-9_-]{8,40}$/;
 const THREE_BUILD = new Set(['three.webgpu.js', 'three.tsl.js', 'three.core.js']);
 const THREE_ADDON_RE = /^\/vendor\/three\/addons\/((?:[A-Za-z0-9_-]+\/){0,8}[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.js)$/;
+// /vendor/three@<version>/... is the cache-forever spelling of /vendor/three/...; index.html is served with it.
+const THREE_VERSIONED_RE = /^\/vendor\/three@([0-9A-Za-z.+-]{1,32})(\/.*)$/;
+const IMMUTABLE = 'public, max-age=31536000, immutable';
+const COMPRESSIBLE = new Set(['.html', '.css', '.js', '.mjs', '.json', '.svg', '.txt']);
+// Files above this size are streamed from disk as before, uncompressed and uncached.
+const MAX_CACHED_FILE = 8 * 1024 * 1024;
+const brotli = promisify(zlib.brotliCompress);
+const gzip = promisify(zlib.gzip);
+const brotliParams = (quality, size) => ({ params: {
+  [zlib.constants.BROTLI_PARAM_MODE]: zlib.constants.BROTLI_MODE_TEXT,
+  [zlib.constants.BROTLI_PARAM_QUALITY]: quality, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: size
+} });
+const hashOf = body => createHash('sha1').update(body).digest('base64url').slice(0, 20);
 const MAX_KILLS = 12;
 const MAX_SCORE = 1000000;
 const MODES = new Set(['solo', 'coop']);
@@ -107,6 +122,29 @@ function json(req, res, status, body, headers) {
   send(req, res, status, 'application/json; charset=utf-8', JSON.stringify(body), headers);
 }
 
+// Picks br, then gzip, from an Accept-Encoding header; q=0 refuses an encoding.
+function acceptedEncodings(req) {
+  const accepted = new Set();
+  for (const part of String(req.headers['accept-encoding'] || '').split(',')) {
+    const [token, ...params] = part.trim().toLowerCase().split(';');
+    const q = params.map(p => p.trim()).find(p => p.startsWith('q='));
+    if (token && !(q && Number(q.slice(2)) === 0)) accepted.add(token);
+  }
+  return accepted;
+}
+
+function etagMatches(req, tags) {
+  const header = String(req.headers['if-none-match'] || '');
+  if (!header) return false;
+  return header.split(/\s*,\s*/).some(tag => tag === '*' || tags.includes(tag.replace(/^W\//, '')));
+}
+
+function requestQuery(req) {
+  const raw = String(req.url || '').split('#', 1)[0];
+  const at = raw.indexOf('?');
+  return new URLSearchParams(at < 0 ? '' : raw.slice(at + 1));
+}
+
 function requestPath(req) {
   // Check the original path before URL normalization can conceal ../ segments.
   const raw = String(req.url || '');
@@ -125,6 +163,11 @@ function createGameServer(options = {}) {
   const scoresFile = path.join(dataDir, 'scores.json');
   const threeBuildDir = path.dirname(require.resolve('three/webgpu'));
   const threeAddonDir = path.join(threeBuildDir, '..', 'examples', 'jsm');
+  const threeVersion = JSON.parse(fs.readFileSync(path.join(threeBuildDir, '..', 'package.json'), 'utf8')).version;
+  const indexFile = path.join(publicDir, 'index.html');
+  // precompress: compress every public file and the three.js builds at start-up, then upgrade each to maximum brotli
+  // one file at a time in the background. Without it files are compressed (fast settings) on first request.
+  const precompress = options.precompress ?? false;
   const scoreCooldownMs = options.scoreCooldownMs ?? 3000;
   const trustProxy = options.trustProxy ?? process.env.TRUST_PROXY === '1';
   const maxRoomsPerConnection = options.maxRoomsPerConnection ?? 2;
@@ -188,6 +231,26 @@ function createGameServer(options = {}) {
     return Object.values(scores).sort(compareRuns).slice(0, 100);
   }
 
+  // Every open menu polls the board: sort and serialize once per change, and answer unchanged polls with 304.
+  let board = null;
+  function boardResponse() {
+    if (!board) {
+      const body = Buffer.from(JSON.stringify(topScores()));
+      board = { body, etag: '"' + hashOf(body) + '"', gz: body.length >= 1024 ? zlib.gzipSync(body, { level: 6 }) : null };
+    }
+    return board;
+  }
+  function serveBoard(req, res) {
+    const current = boardResponse(), gz = !!current.gz && acceptedEncodings(req).has('gzip');
+    const headers = { 'Cache-Control': 'no-cache', 'ETag': gz ? current.etag.slice(0, -1) + '-gz"' : current.etag };
+    if (current.gz) headers['Vary'] = 'Accept-Encoding';
+    if (etagMatches(req, [current.etag, current.etag.slice(0, -1) + '-gz"'])) {
+      res.writeHead(304, { ...headers, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin' });
+      return res.end();
+    }
+    send(req, res, 200, 'application/json; charset=utf-8', gz ? current.gz : current.body, gz ? { ...headers, 'Content-Encoding': 'gzip' } : headers);
+  }
+
   function requestIP(req) {
     const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
     return trustProxy && isIP(forwarded) ? forwarded : (req.socket.remoteAddress || 'unknown');
@@ -195,16 +258,117 @@ function createGameServer(options = {}) {
 
   // Only the pinned Three.js ES module build and its addons are exposed from node_modules.
   function vendorAsset(pathname) {
+    const versioned = THREE_VERSIONED_RE.exec(pathname);
+    if (versioned) pathname = '/vendor/three' + versioned[2];
+    const tag = { versioned: !!versioned, current: !!versioned && versioned[1] === threeVersion };
     if (pathname.startsWith('/vendor/three/build/')) {
       const name = pathname.slice('/vendor/three/build/'.length);
-      return THREE_BUILD.has(name) ? { file: path.join(threeBuildDir, name), root: threeBuildDir } : null;
+      return THREE_BUILD.has(name) ? { file: path.join(threeBuildDir, name), root: threeBuildDir, ...tag } : null;
     }
     const addon = THREE_ADDON_RE.exec(pathname);
-    return addon ? { file: path.join(threeAddonDir, addon[1]), root: threeAddonDir } : null;
+    return addon ? { file: path.join(threeAddonDir, addon[1]), root: threeAddonDir, ...tag } : null;
+  }
+
+  /* Asset cache: each file is read and compressed once per version (size + mtime), then served from memory. */
+  const assets = new Map();
+  let upgrades = Promise.resolve();
+  let closing = false;
+
+  // A representation is one body with its brotli/gzip variants and validators.
+  async function represent(body, compressible) {
+    const rep = { body, etag: '"' + hashOf(body) + '"', br: null, gz: null };
+    if (compressible && body.length >= 1024) {
+      const [br, gz] = await Promise.all([brotli(body, brotliParams(5, body.length)), gzip(body, { level: 6 })]);
+      if (br.length < body.length) rep.br = br;
+      if (gz.length < body.length) rep.gz = gz;
+      // Maximum brotli is ~50x slower: one file at a time on one libuv thread, so requests never queue behind it.
+      if (precompress && rep.br) upgrades = upgrades.then(async () => {
+        if (closing) return;
+        const best = await brotli(body, brotliParams(11, body.length));
+        if (best.length < rep.br.length) rep.br = best;
+      }).catch(() => {});
+    }
+    return rep;
+  }
+
+  function loadAsset(filename, stats) {
+    const stamp = stats.size + ':' + stats.mtimeMs;
+    const cached = assets.get(filename);
+    if (cached && cached.stamp === stamp) return cached.ready;
+    const entry = { stamp, derived: new Map() };
+    entry.ready = fs.promises.readFile(filename)
+      .then(body => represent(body, COMPRESSIBLE.has(path.extname(filename).toLowerCase())))
+      .then(rep => Object.assign(entry, { rep }));
+    entry.ready.catch(() => { if (assets.get(filename) === entry) assets.delete(filename); });
+    assets.set(filename, entry);
+    return entry.ready;
+  }
+
+  // A cached transformation of a file (the versioned index.html, a versioned stylesheet).
+  function derive(entry, key, transform) {
+    if (!entry.derived.has(key)) {
+      if (entry.derived.size >= 4) entry.derived.clear();
+      const ready = represent(Buffer.from(transform(entry.rep.body.toString('utf8'))), true);
+      ready.catch(() => entry.derived.delete(key));
+      entry.derived.set(key, ready);
+    }
+    return entry.derived.get(key);
+  }
+
+  // One version for every public file: a hash of their contents, rechecked (sizes and mtimes) at most once a second.
+  let version = null;
+  async function publicFiles(dir = publicDir, prefix = '', out = []) {
+    for (const item of await fs.promises.readdir(dir, { withFileTypes: true })) {
+      if (item.name.startsWith('.')) continue;
+      const filename = path.join(dir, item.name), rel = prefix + item.name;
+      if (item.isDirectory()) await publicFiles(filename, rel + '/', out);
+      else if (item.isFile()) out.push({ rel, filename, stats: await fs.promises.stat(filename) });
+    }
+    return out;
+  }
+  function assetVersion() {
+    const now = Date.now();
+    if (version && now - version.checkedAt < 1000) return version.value;
+    const previous = version, state = { checkedAt: now, signature: null, value: null };
+    state.value = publicFiles().then(async files => {
+      files.sort((a, b) => a.rel < b.rel ? -1 : 1);
+      const signature = state.signature = files.map(f => f.rel + ':' + f.stats.size + ':' + f.stats.mtimeMs).join('|');
+      if (previous && previous.signature === signature) return previous.value;
+      const hash = createHash('sha1');
+      for (const f of files) {
+        const id = f.stats.size <= MAX_CACHED_FILE ? (await loadAsset(f.filename, f.stats)).rep.etag : f.stats.size + ':' + f.stats.mtimeMs;
+        hash.update(f.rel + '\0' + id + '\0');
+      }
+      return hash.digest('base64url').slice(0, 12);
+    });
+    state.value.catch(() => { if (version === state) version = null; });
+    version = state;
+    return state.value;
+  }
+
+  // index.html: point the import map and preloads at the cache-forever three.js path and stamp every local script,
+  // stylesheet and font with ?v=<version>. boot.mjs carries its own ?v= onto everything it loads.
+  const LOCAL_REF_RE = /\b(src|href)="(?![a-z][\w+.-]*:|\/\/|#)([^"?#]+\.(?:m?js|css|woff2))"/gi;
+  function renderIndex(html, assetsVersion) {
+    return html.replace(/\bvendor\/three\//g, 'vendor/three@' + threeVersion + '/')
+      .replace(LOCAL_REF_RE, (match, attribute, ref) => ref.startsWith('vendor/') ? match : `${attribute}="${ref}?v=${assetsVersion}"`);
+  }
+  // A versioned stylesheet stamps its fonts the same way, so they match the preloads in index.html.
+  const CSS_URL_RE = /url\((["']?)(?![a-z][\w+.-]*:|\/\/|#)([^"')?#]+)\1\)/gi;
+  function renderStylesheet(css, assetsVersion) {
+    return css.replace(CSS_URL_RE, (match, quote, ref) => `url(${quote}${ref}?v=${assetsVersion}${quote})`);
+  }
+
+  function warmAssets() {
+    const vendor = [...THREE_BUILD].map(name => path.join(threeBuildDir, name));
+    return Promise.all([
+      assetVersion(),
+      ...vendor.map(file => fs.promises.stat(file).then(stats => loadAsset(file, stats)))
+    ]).catch(logError);
   }
 
   async function serveAsset(req, res, pathname) {
-    const isVendor = pathname.startsWith('/vendor/three/');
+    const isVendor = pathname.startsWith('/vendor/three/') || pathname.startsWith('/vendor/three@');
     const vendor = isVendor ? vendorAsset(pathname) : null;
     if (isVendor && !vendor) throw new RequestError(404, 'not found');
     const relative = pathname === '/' ? '/index.html' : pathname;
@@ -226,34 +390,57 @@ function createGameServer(options = {}) {
       if (error.code === 'ENOENT' || error.code === 'ENOTDIR') throw new RequestError(404, 'not found');
       throw error;
     }
-    const etag = `"${stats.size.toString(16)}-${Math.trunc(stats.mtimeMs).toString(16)}"`;
+    const extension = path.extname(filename).toLowerCase();
     const headers = {
-      'Content-Type': MIME[path.extname(filename).toLowerCase()] || 'application/octet-stream',
-      'Cache-Control': isVendor ? 'public, max-age=86400' : 'no-cache',
-      'ETag': etag,
-      'Last-Modified': stats.mtime.toUTCString(),
+      'Content-Type': MIME[extension] || 'application/octet-stream',
+      'Cache-Control': 'no-cache',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin'
     };
-    const ifNoneMatch = String(req.headers['if-none-match'] || '');
-    if (ifNoneMatch.split(/\s*,\s*/).some(tag => tag === etag || tag === '*' || tag === 'W/' + etag)) {
-      res.writeHead(304, headers);
-      res.end();
+    // Unversioned URLs keep their old policies; a URL carrying the current version is cached forever, so a returning
+    // player's browser loads the game without asking the server again. index.html is always revalidated.
+    const isIndex = !isVendor && filename === indexFile;
+    const requested = isVendor ? null : requestQuery(req).get('v');
+    const currentVersion = isIndex || requested ? await assetVersion() : null;
+    if (isVendor) headers['Cache-Control'] = vendor.versioned ? (vendor.current ? IMMUTABLE : 'no-cache') : 'public, max-age=86400';
+    else if (!isIndex && requested && requested === currentVersion) headers['Cache-Control'] = IMMUTABLE;
+
+    if (stats.size > MAX_CACHED_FILE) {
+      const etag = `"${stats.size.toString(16)}-${Math.trunc(stats.mtimeMs).toString(16)}"`;
+      Object.assign(headers, { 'ETag': etag, 'Last-Modified': stats.mtime.toUTCString() });
+      if (etagMatches(req, [etag])) { res.writeHead(304, headers); res.end(); return; }
+      res.writeHead(200, { ...headers, 'Content-Length': stats.size });
+      if (req.method === 'HEAD') return res.end();
+      const stream = fs.createReadStream(filename);
+      stream.on('error', () => res.destroy());
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
       return;
     }
-    res.writeHead(200, { ...headers, 'Content-Length': stats.size });
-    if (req.method === 'HEAD') return res.end();
-    const stream = fs.createReadStream(filename);
-    stream.on('error', () => res.destroy());
-    res.on('close', () => stream.destroy());
-    stream.pipe(res);
+
+    const entry = await loadAsset(filename, stats);
+    let rep = entry.rep;
+    if (isIndex) rep = await derive(entry, 'index:' + currentVersion, html => renderIndex(html, currentVersion));
+    else if (extension === '.css' && headers['Cache-Control'] === IMMUTABLE) rep = await derive(entry, 'css:' + currentVersion, css => renderStylesheet(css, currentVersion));
+    else headers['Last-Modified'] = stats.mtime.toUTCString();
+
+    const accepted = acceptedEncodings(req);
+    const encoding = rep.br && accepted.has('br') ? 'br' : rep.gz && accepted.has('gzip') ? 'gzip' : null;
+    const body = encoding === 'br' ? rep.br : encoding === 'gzip' ? rep.gz : rep.body;
+    headers['ETag'] = encoding ? rep.etag.slice(0, -1) + '-' + (encoding === 'br' ? 'br' : 'gz') + '"' : rep.etag;
+    if (rep.br || rep.gz) headers['Vary'] = 'Accept-Encoding';
+    if (encoding) headers['Content-Encoding'] = encoding;
+    const tags = [rep.etag, rep.etag.slice(0, -1) + '-br"', rep.etag.slice(0, -1) + '-gz"'];
+    if (etagMatches(req, tags)) { delete headers['Content-Encoding']; res.writeHead(304, headers); res.end(); return; }
+    res.writeHead(200, { ...headers, 'Content-Length': body.length });
+    res.end(req.method === 'HEAD' ? undefined : body);
   }
 
   const server = http.createServer(async (req, res) => {
     try {
       const pathname = requestPath(req);
       if (pathname === '/api/scores') {
-        if (req.method === 'GET' || req.method === 'HEAD') return json(req, res, 200, topScores());
+        if (req.method === 'GET' || req.method === 'HEAD') return serveBoard(req, res);
         if (req.method !== 'POST') return json(req, res, 405, { error: 'method not allowed' }, { Allow: 'GET, HEAD, POST' });
         const ip = requestIP(req);
         const now = Date.now();
@@ -274,6 +461,7 @@ function createGameServer(options = {}) {
         const improved = !current || compareRuns(run, current) < 0;
         if (improved) scores[id] = run;
         else if (current.name !== run.name) current.name = run.name;
+        board = null;
         scheduleSave();
         const best = scores[id];
         return json(req, res, 200, { ok: true, improved, best: { escaped: best.escaped, time: best.time, score: best.score, kills: best.kills } });
@@ -378,11 +566,13 @@ function createGameServer(options = {}) {
       server.once('error', onError);
       server.once('listening', onListening);
       server.listen(port, host);
+      if (precompress) warmAssets();
     });
   }
 
   function close() {
     if (closePromise) return closePromise;
+    closing = true;
     clearInterval(heartbeat);
     clearInterval(sweep);
     clearTimeout(saveTimer);
@@ -410,7 +600,7 @@ function createGameServer(options = {}) {
 }
 
 if (require.main === module) {
-  const app = createGameServer();
+  const app = createGameServer({ precompress: process.env.PRECOMPRESS !== '0' });
   app.listen().then(address => {
     console.log(`The Hollow is running on http://${address.address}:${address.port}`);
   }).catch(async error => {

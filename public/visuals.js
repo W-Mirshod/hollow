@@ -11,7 +11,7 @@
 
   function store(THREE) {
     if (!stores.has(THREE)) stores.set(THREE, {
-      geometries: new Map(), materials: new Map(), maps: new Map(),
+      geometries: new Map(), materials: new Map(), maps: new Map(), monsters: new Map(),
       environments: new WeakMap(), environmentTargets: new Set()
     });
     return stores.get(THREE);
@@ -22,8 +22,9 @@
     return () => { v = (Math.imul(v, 1664525) + 1013904223) >>> 0; return v / 4294967296; };
   }
 
+  // A texture worker has no DOM: it draws on an OffscreenCanvas.
   function canvas(w, h) {
-    const c = document.createElement('canvas');
+    const c = typeof document === 'undefined' ? new OffscreenCanvas(w, h) : document.createElement('canvas');
     c.width = w; c.height = h;
     return [c, c.getContext('2d', { willReadFrequently: true })];
   }
@@ -159,10 +160,16 @@
     return data;
   }
 
-  function pixelCanvas(n, data) {
-    const [c, x] = canvas(n, n), img = x.createImageData(n, n);
+  // In a texture worker (no DOM), or while settleSurfaces() paints a placeholder, a painted map stays raw RGBA pixels;
+  // adoptSurface draws them on the page.
+  let rawPixels = false;
+  function pixelImage(w, h, data) {
+    if (rawPixels || typeof document === 'undefined') return { width: w, height: h, data };
+    const [c, x] = canvas(w, h), img = x.createImageData(w, h);
     img.data.set(data); x.putImageData(img, 0, 0); return c;
   }
+
+  function pixelCanvas(n, data) { return pixelImage(n, n, data); }
 
   // rgb: 0..1 sRGB triplets; rough: 0..1; height: mm. Returns the canvas triplet the materials consume.
   function surfaceCanvases(n, rgb, rough, height, px, py, strength) {
@@ -603,7 +610,7 @@
         normal[p] = (dx * inv * 0.5 + 0.5) * 255; normal[p + 1] = (dy * inv * 0.5 + 0.5) * 255; normal[p + 2] = (inv * 0.5 + 0.5) * 255; normal[p + 3] = 255;
       }
     }
-    const make = data => { const [c, x] = canvas(w, h), img = x.createImageData(w, h); img.data.set(data); x.putImageData(img, 0, 0); return c; };
+    const make = data => pixelImage(w, h, data);
     return { albedo: make(albedo), normal: make(normal), roughness: make(rough), size: t };
   }
 
@@ -684,14 +691,89 @@
     'gun-metal': [gunMetal, [256, 256, 256]], 'gun-polymer': [gunPolymer, [256, 256, 256]], 'gun-wood': [gunWood, [256, 256, 256]],
     'gun-rubber': [gunRubber, [128, 128, 128]], 'gun-fabric': [gunFabric, [256, 256, 256]]
   };
+  // standard()'s shared material maps are surfaces too ('material-skin', ...), so texture workers can paint them.
+  const MATERIAL_KINDS = ['wall', 'floor', 'metal', 'skin', 'fabric', 'concrete', 'wood'];
+  for (const kind of MATERIAL_KINDS) SURFACES['material-' + kind] = [() => materialSurface(kind), [256, 256, 256]];
 
   // Cached canvases {albedo, normal, roughness, size} for a ward surface, sized by the configured detail tier.
+  // options.pending: a surface not painted yet (a texture worker is on it) comes back as blank canvases instead, which
+  // adoptSurface() fills in place; settleSurfaces() paints any still blank on the page before they are first drawn.
+  const placeholders = new Map();
   function surface(kind, options) {
     const opts = options || {}, spec = SURFACES[kind];
     if (!spec) throw new Error('Unknown surface ' + kind);
     const size = opts.size || spec[1][detail], seed = Number.isFinite(opts.seed) ? opts.seed : 7, key = kind + ':' + size + ':' + seed;
-    if (!surfaces.has(key)) surfaces.set(key, spec[0](size, seed));
+    if (!surfaces.has(key)) {
+      if (opts.pending && typeof document !== 'undefined') {
+        const set = { size };
+        for (const name of kind === 'ward-macro' ? ['map'] : ['albedo', 'normal', 'roughness']) set[name] = canvas(size, size)[0];
+        placeholders.set(key, { kind, size, seed, set, listeners: [] });
+        surfaces.set(key, set);
+      } else surfaces.set(key, spec[0](size, seed));
+    }
     return surfaces.get(key);
+  }
+
+  // Draws painted raw pixels into a placeholder's canvases, then tells whoever waits on it (see whenPainted).
+  function fillPlaceholder(key, painted) {
+    const job = placeholders.get(key);
+    placeholders.delete(key);
+    for (const name of Object.keys(job.set)) {
+      const value = painted[name];
+      if (!value || !value.data) continue;
+      const c = job.set[name];
+      if (c.width !== value.width || c.height !== value.height) { c.width = value.width; c.height = value.height; }
+      const x = c.getContext('2d', { willReadFrequently: true }), img = x.createImageData(value.width, value.height);
+      img.data.set(value.data); x.putImageData(img, 0, 0);
+    }
+    for (const fn of job.listeners) fn(job.set);
+  }
+
+  // Paints every placeholder still blank (its worker failed, or painted another quality tier) on this thread.
+  function settleSurfaces() {
+    let painted = 0;
+    for (const [key, job] of placeholders) {
+      let pixels;
+      rawPixels = true;
+      try { pixels = SURFACES[job.kind][0](job.size, job.seed); } finally { rawPixels = false; }
+      fillPlaceholder(key, pixels); painted++;
+    }
+    return painted;
+  }
+
+  // fn(set) once a surface's pixels are in: now if they are, otherwise when its placeholder is filled.
+  function whenPainted(set, fn) {
+    for (const job of placeholders.values()) if (job.set === set) { job.listeners.push(fn); return; }
+    fn(set);
+  }
+
+  // A surface painted by surface() in a texture worker (raw pixels) joins the cache surface() reads from.
+  function adoptSurface(kind, painted, options) {
+    const opts = options || {}, seed = Number.isFinite(opts.seed) ? opts.seed : 7;
+    if (!SURFACES[kind] || !painted || !Number.isFinite(painted.size)) return false;
+    const key = kind + ':' + painted.size + ':' + seed;
+    if (placeholders.has(key)) { fillPlaceholder(key, painted); return true; }
+    if (surfaces.has(key)) return false;
+    const adopted = {};
+    for (const [name, value] of Object.entries(painted)) adopted[name] = value && value.data ? pixelImage(value.width, value.height, value.data) : value;
+    surfaces.set(key, adopted);
+    return true;
+  }
+
+  // Every surface at a quality tier split into `workers` lists of similar pixel counts. `order` is a list of kind lists:
+  // the first group leads every list, then the next, then the kinds in none; each group largest first.
+  function surfacePlan(quality, workers, order) {
+    const tier = Object.prototype.hasOwnProperty.call(DETAIL, quality) ? DETAIL[quality] : detail, groups = order || [], rank = new Map();
+    groups.forEach((kinds, i) => kinds.forEach(kind => { if (!rank.has(kind)) rank.set(kind, i); }));
+    const lists = Array.from({ length: Math.max(1, Math.floor(workers) || 1) }, () => ({ cost: 0, kinds: [] }));
+    Object.keys(SURFACES).map(kind => {
+      const n = SURFACES[kind][1][tier];
+      return { kind, rank: rank.has(kind) ? rank.get(kind) : groups.length, cost: kind === 'ward-decals' ? n * n * 8 : n * n };
+    }).sort((a, b) => a.rank - b.rank || b.cost - a.cost).forEach(job => {
+      const target = lists.reduce((best, list) => list.cost < best.cost ? list : best);
+      target.kinds.push(job.kind); target.cost += job.cost;
+    });
+    return lists.map(list => list.kinds);
   }
 
   // Normal and roughness canvases for an existing painted albedo (the manor's wallpaper, carpet, gilt and marble):
@@ -729,11 +811,19 @@
   }
 
   function materialMaps(THREE, requestedKind) {
-    const allowed = ['wall', 'floor', 'metal', 'skin', 'fabric', 'concrete', 'wood'];
-    const kind = allowed.includes(requestedKind) ? requestedKind : 'concrete';
+    const kind = MATERIAL_KINDS.includes(requestedKind) ? requestedKind : 'concrete';
     const cache = store(THREE).maps;
     if (cache.has(kind)) return cache.get(kind);
-    const n = 256, random = seeded(811 + allowed.indexOf(kind) * 731), f = field(n, 197 + allowed.indexOf(kind));
+    const s = surface('material-' + kind);
+    const maps = { normal: texture(THREE, s.normal, false), roughness: texture(THREE, s.roughness, false), albedo: texture(THREE, s.albedo, true) };
+    cache.set(kind, maps);
+    return maps;
+  }
+
+  // A 256 px tiling height field with a few drawn scratches, cracks, grout or creases, and the normal, roughness and
+  // albedo derived from it.
+  function materialSurface(kind) {
+    const n = 256, random = seeded(811 + MATERIAL_KINDS.indexOf(kind) * 731), f = field(n, 197 + MATERIAL_KINDS.indexOf(kind));
     const [hc, hctx] = canvas(n, n), hdata = hctx.createImageData(n, n);
     for (let i = 0; i < f.length; i++) {
       let v = 115 + f[i] * (kind === 'metal' ? 18 : 58) + (random() - 0.5) * 10;
@@ -778,33 +868,29 @@
       }
     }
     const height = hctx.getImageData(0, 0, n, n).data;
-    const [nc, nx] = canvas(n, n), [rc, rx] = canvas(n, n), [ac, ax] = canvas(n, n);
-    const normal = nx.createImageData(n, n), rough = rx.createImageData(n, n), albedo = ax.createImageData(n, n);
+    const normal = new Uint8ClampedArray(n * n * 4), rough = new Uint8ClampedArray(n * n * 4), albedo = new Uint8ClampedArray(n * n * 4);
     const roughBase = { metal: 182, skin: 235, wall: 245, concrete: 244, floor: 208, fabric: 250, wood: 224 }[kind];
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
       const i = y * n + x, p = i * 4;
       const hx = height[(y * n + (x + 1) % n) * 4] - height[(y * n + (x + n - 1) % n) * 4];
       const hy = height[(((y + 1) % n) * n + x) * 4] - height[(((y + n - 1) % n) * n + x) * 4];
       const dx = -hx * 0.021, dy = hy * 0.021, inv = 1 / Math.hypot(dx, dy, 1);
-      normal.data[p] = (dx * inv * 0.5 + 0.5) * 255;
-      normal.data[p + 1] = (dy * inv * 0.5 + 0.5) * 255;
-      normal.data[p + 2] = (inv * 0.5 + 0.5) * 255; normal.data[p + 3] = 255;
+      normal[p] = (dx * inv * 0.5 + 0.5) * 255;
+      normal[p + 1] = (dy * inv * 0.5 + 0.5) * 255;
+      normal[p + 2] = (inv * 0.5 + 0.5) * 255; normal[p + 3] = 255;
       const damp = clamp((f[i] - 0.47) / 0.24, 0, 1);
       const wet = kind === 'floor' ? damp : kind === 'wall' ? damp * 0.35 : 0;
       const rv = clamp(roughBase + (f[i] - 0.5) * 70 + (random() - 0.5) * 9
         - wet * wet * (3 - wet * 2) * 166 + (kind === 'metal' ? Math.abs(height[p] - 123) * 0.28 : 0), 46, 255);
-      rough.data[p] = rough.data[p + 1] = rough.data[p + 2] = rv; rough.data[p + 3] = 255;
+      rough[p] = rough[p + 1] = rough[p + 2] = rv; rough[p + 3] = 255;
       const stain = kind === 'fabric' ? damp * 69 : kind === 'wall' || kind === 'floor' ? damp * 48 : kind === 'metal' ? damp * 32 : 0;
       const av = clamp((kind === 'skin' ? 215 : 239) + (f[i] - 0.5) * (kind === 'skin' ? 95 : 43) + (height[p] - 140) * 0.18 - stain, 105, 254);
-      albedo.data[p] = av;
-      albedo.data[p + 1] = kind === 'skin' ? av * 0.97 : av - stain * 0.09;
-      albedo.data[p + 2] = kind === 'skin' ? av * (0.96 + damp * 0.035) : av - stain * 0.23;
-      albedo.data[p + 3] = 255;
+      albedo[p] = av;
+      albedo[p + 1] = kind === 'skin' ? av * 0.97 : av - stain * 0.09;
+      albedo[p + 2] = kind === 'skin' ? av * (0.96 + damp * 0.035) : av - stain * 0.23;
+      albedo[p + 3] = 255;
     }
-    nx.putImageData(normal, 0, 0); rx.putImageData(rough, 0, 0); ax.putImageData(albedo, 0, 0);
-    const maps = { normal: texture(THREE, nc, false), roughness: texture(THREE, rc, false), albedo: texture(THREE, ac, true) };
-    cache.set(kind, maps);
-    return maps;
+    return { normal: pixelCanvas(n, normal), roughness: pixelCanvas(n, rough), albedo: pixelCanvas(n, albedo), size: n };
   }
 
   // Surface maps follow the albedo's UV transform (r128 shared one uvTransform; newer Three
@@ -1080,8 +1166,15 @@
       const m = new THREE.Mesh(merged, material);
       m.castShadow = meshes.some(o => o.castShadow); m.receiveShadow = meshes.some(o => o.receiveShadow);
       root.add(m);
+      // Object3D.remove() per mesh (indexOf + splice) is quadratic in a furnished corridor: drop them in one pass.
+      const gone = new Set(meshes);
+      let kept = 0;
+      for (const child of root.children) if (!gone.has(child)) root.children[kept++] = child;
+      root.children.length = kept;
       for (const mesh of meshes) {
-        root.remove(mesh);
+        mesh.parent = null;
+        mesh.dispatchEvent({ type: 'removed' });
+        root.dispatchEvent({ type: 'childremoved', child: mesh });
         if (!mesh.geometry.userData.hollowShared) mesh.geometry.dispose();
       }
       for (const g of chunks) g.dispose();
@@ -1313,8 +1406,49 @@
     return distal;
   }
 
+  // Every creature of a kind is the same model (fixed seeds), so each kind is built once per THREE and then cloned.
+  // A clone owns copies of its geometry and its eye material: disposing it, or a death/respawn write to its eyes,
+  // never reaches the template or a sibling.
   function makeMonster(THREE, requestedKind) {
     const kind = ['warden', 'stalker', 'crawler', 'shrieker'].includes(requestedKind) ? requestedKind : 'stalker';
+    const templates = store(THREE).monsters;
+    if (!templates.has(kind)) templates.set(kind, buildMonster(THREE, kind));
+    return cloneMonster(templates.get(kind));
+  }
+
+  function cloneMonster(template) {
+    const source = template.userData, eye = source.eyeMat.clone(), nodes = new Map();
+    // Object3D.clone() copies userData through JSON, which cannot carry the joint references: they are remapped below.
+    template.userData = {};
+    let g;
+    try { g = template.clone(); } finally { template.userData = source; }
+    // clone() copies quaternions and re-derives the Euler angles (so -0 becomes 0), but joints are posed by Euler angles
+    // against their restPose. Copying the angles reproduces the quaternion of a part posed by angles; one oriented by
+    // its quaternion (a sinew) gets that back, with the template's own derived angles.
+    const pair = (from, to) => {
+      nodes.set(from, to);
+      to.rotation.copy(from.rotation);
+      if (!to.quaternion.equals(from.quaternion)) to.quaternion.copy(from.quaternion);
+      from.children.forEach((child, i) => pair(child, to.children[i]));
+    };
+    pair(template, g);
+    g.traverse(o => {
+      if (!o.isMesh) return;
+      if (o.material === source.eyeMat) o.material = eye;
+      if (!o.geometry.userData.hollowShared) {
+        const geom = o.geometry.clone();
+        geom.userData = Object.assign({}, geom.userData);
+        o.geometry = geom;
+      }
+    });
+    const remap = value => value && value.isObject3D ? nodes.get(value) : Array.isArray(value) ? value.map(remap) : value;
+    const data = {};
+    for (const key of Object.keys(source)) data[key] = remap(source[key]);
+    g.userData = Object.assign(data, { eyeMat: eye, glow: { intensity: 0 }, resources: { uniqueMaterials: [eye] } });
+    return g;
+  }
+
+  function buildMonster(THREE, kind) {
     const g = new THREE.Group(), p = monsterPalette(THREE, kind);
     g.name = 'Blackwater Ward / ' + kind;
     if (!THREE.ColorManagement || !THREE.ColorManagement.enabled) p.eye.color.convertSRGBToLinear();
@@ -2605,5 +2739,5 @@
     if (group.parent) group.parent.remove(group);
   }
 
-  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, makeSurvivor, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, deriveMaps });
+  global.HollowVisuals = Object.freeze({ makeMonster, makeWeapon, makeFlashlight, makeSurvivor, decorateRoom, decorateWard, enhanceMaterial, createEnvironment, disposeEnvironment, disposeGroup, configure, surface, adoptSurface, settleSurfaces, whenPainted, surfacePlan, deriveMaps });
 })(window);

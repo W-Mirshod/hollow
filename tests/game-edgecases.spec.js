@@ -122,7 +122,8 @@ test('pausing freezes movement and an in-flight reload while settings remain usa
     const s=await snapshot(page);return s.reloadT===0&&s.mag===full.mag;
   },{timeout:90000}).toBe(true);
   const reloaded=await snapshot(page);
-  expect(reloaded.reserve).toBeLessThan(full.reserve);
+  // The resumed reload completed; the M9 sidearm's reserve is never spent.
+  expect(reloaded.weapon).toBe('pistol');expect(reloaded.reserve).toBe(full.reserve);
   await page.keyboard.down('w');
   try{
     await expect.poll(async()=>(await snapshot(page)).position.x,{timeout:90000}).toBeLessThan(reloaded.position.x-.15);

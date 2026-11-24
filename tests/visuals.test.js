@@ -538,6 +538,59 @@ test('ward surfaces are coherent, tileable, deterministic PBR sets sized by the 
   }
 });
 
+test('worker-painted surfaces fill page placeholders with exactly the pixels the page would paint', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../public/visuals.js'), 'utf8');
+  const load = withDocument => {
+    const sandbox = { ...context, window: {} };
+    if (!withDocument) delete sandbox.document;
+    vm.runInNewContext(source, sandbox);
+    return { V: sandbox.window.HollowVisuals, sandbox };
+  };
+  // A texture worker has no DOM: maps stay raw pixels (transferable buffers).
+  const worker = load(false).V, page = load(true).V, reference = load(true).V, n = 32;
+  const raw = worker.surface('ward-floor', { size: n });
+  for (const map of ['albedo', 'normal', 'roughness']) {
+    assert.equal(raw[map].width, n); assert.equal(raw[map].height, n);
+    assert.ok(raw[map].data instanceof Uint8ClampedArray && raw[map].data.length === n * n * 4);
+  }
+  // The page's placeholder is blank until the worker's pixels arrive, then holds what the page would have painted.
+  const set = page.surface('ward-floor', { size: n, pending: true });
+  assert.equal(page.surface('ward-floor', { size: n }), set, 'a placeholder is the cached surface, not painted again');
+  let filled = 0;
+  page.whenPainted(set, got => { assert.equal(got, set); filled++; });
+  assert.equal(filled, 0);
+  assert.equal(page.adoptSurface('ward-floor', raw), true);
+  assert.equal(filled, 1);
+  const painted = reference.surface('ward-floor', { size: n });
+  for (const map of ['albedo', 'normal', 'roughness']) assert.deepEqual(canvasPixels(set[map]), canvasPixels(painted[map]), `adopted ${map} differs`);
+  assert.equal(page.adoptSurface('ward-floor', raw), false, 'a painted surface is never replaced');
+  page.whenPainted(set, () => filled++);
+  assert.equal(filled, 2, 'a painted surface answers at once');
+  // A placeholder no worker fills is painted on the page by settleSurfaces(), once.
+  const ceiling = page.surface('ward-ceiling', { size: n, pending: true });
+  assert.equal(page.settleSurfaces(), 1);
+  assert.equal(page.settleSurfaces(), 0);
+  const ceilingRef = reference.surface('ward-ceiling', { size: n });
+  for (const map of ['albedo', 'normal', 'roughness']) assert.deepEqual(canvasPixels(ceiling[map]), canvasPixels(ceilingRef[map]), `settled ${map} differs`);
+  // A surface adopted before anyone asks is served from the cache.
+  assert.equal(page.adoptSurface('gun-wood', worker.surface('gun-wood', { size: n })), true);
+  const wood = page.surface('gun-wood', { size: n });
+  assert.deepEqual(canvasPixels(wood.albedo), canvasPixels(reference.surface('gun-wood', { size: n }).albedo));
+  assert.equal(page.adoptSurface('ward-nothing', raw), false);
+  // The plan hands every surface to exactly one worker, each group (then the rest) ahead of the next.
+  const all = worker.surfacePlan('high', 1)[0];
+  assert.ok(all.includes('ward-wall') && all.includes('ward-decals') && all.includes('material-skin'));
+  const order = [['gun-metal', 'material-skin'], ['ward-wall', 'ward-floor']];
+  const plan = worker.surfacePlan('high', 3, order);
+  assert.equal(plan.length, 3);
+  assert.deepEqual([...plan.flat()].sort(), [...all].sort());
+  const group = kind => order.findIndex(kinds => kinds.includes(kind));
+  for (const kinds of plan) {
+    const ranks = [...kinds].map(kind => group(kind) < 0 ? order.length : group(kind));
+    assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b), 'a worker paints its groups in order');
+  }
+});
+
 test('painted canvases derive matching relief and paint-driven roughness maps', () => {
   const [w, h] = [64, 32], source = context.document.createElement('canvas'), x = source.getContext('2d');
   source.width = w; source.height = h;

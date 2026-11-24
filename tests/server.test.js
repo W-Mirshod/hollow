@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const zlib = require('node:zlib');
 const { once } = require('node:events');
 const { WebSocket } = require('ws');
 const { createGameServer } = require('../server');
@@ -161,6 +162,113 @@ test('unversioned assets revalidate with ETag and HEAD requests contain no body'
   const health = await f.request('/health');
   assert.equal(health.body, 'ok');
   assert.equal(health.headers['cache-control'], 'no-store');
+});
+
+// Raw bytes and headers (the fixture's request() decodes text).
+function fetchRaw(f, pathname, headers = {}) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: new URL(f.wsURL).port, path: pathname, headers, agent: false }, res => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+const decode = response => response.headers['content-encoding'] === 'br' ? zlib.brotliDecompressSync(response.body)
+  : response.headers['content-encoding'] === 'gzip' ? zlib.gunzipSync(response.body) : response.body;
+const threeVersion = JSON.parse(require('node:fs').readFileSync(path.join(path.dirname(require.resolve('three/webgpu')), '..', 'package.json'), 'utf8')).version;
+
+test('index.html stamps local assets with one content version; versioned URLs are compressed and cached forever', async t => {
+  const f = await fixture(t);
+  const publicDir = f.configuration.publicDir, script = 'window.fixture = true;\n'.repeat(200);
+  await Promise.all([
+    fs.writeFile(path.join(publicDir, 'index.html'), '<!doctype html><title>Hollow fixture</title><link rel="stylesheet" href="styles.css">' +
+      '<script type="importmap">{"imports":{"three/webgpu":"./vendor/three/build/three.webgpu.js"}}</script>' +
+      '<link rel="modulepreload" href="vendor/three/build/three.core.js"><script src="game.js"></script>' +
+      '<script type="module" src="boot.mjs"></script><script src="https://cdn.example/x.js"></script><a href="#top">top</a>' +
+      '<!-- bodies under 1 KB are sent uncompressed -->'.repeat(30)),
+    fs.writeFile(path.join(publicDir, 'boot.mjs'), 'export {};'),
+    fs.writeFile(path.join(publicDir, 'game.js'), script),
+    fs.writeFile(path.join(publicDir, 'styles.css'), '@font-face { src: url("fonts/a.woff2") format("woff2"); } body { background: url(data:image/png;base64,AAAA); }')
+  ]);
+
+  const index = await fetchRaw(f, '/', { 'Accept-Encoding': 'gzip, deflate, br' });
+  assert.equal(index.status, 200);
+  assert.equal(index.headers['content-encoding'], 'br');
+  assert.equal(index.headers['cache-control'], 'no-cache', 'index.html always revalidates');
+  const html = decode(index).toString();
+  const version = (html.match(/game\.js\?v=([\w-]+)"/) || [])[1];
+  assert.ok(version, html);
+  for (const ref of [`href="styles.css?v=${version}"`, `src="boot.mjs?v=${version}"`, `"./vendor/three@${threeVersion}/build/three.webgpu.js"`,
+    `href="vendor/three@${threeVersion}/build/three.core.js"`, 'src="https://cdn.example/x.js"', 'href="#top"']) assert.ok(html.includes(ref), ref);
+
+  // The current version is cached forever, compressed by the client's preference; any other spelling revalidates.
+  const forever = await fetchRaw(f, `/game.js?v=${version}`, { 'Accept-Encoding': 'gzip, br' });
+  assert.equal(forever.headers['cache-control'], 'public, max-age=31536000, immutable');
+  assert.equal(forever.headers['content-encoding'], 'br');
+  assert.equal(forever.headers.vary, 'Accept-Encoding');
+  assert.match(forever.headers.etag, /-br"$/);
+  assert.ok(forever.body.length < script.length / 10);
+  assert.equal(decode(forever).toString(), script);
+  for (const [accept, encoding] of [['gzip', 'gzip'], ['br;q=0, gzip', 'gzip'], ['identity', undefined], [undefined, undefined]]) {
+    const response = await fetchRaw(f, `/game.js?v=${version}`, accept ? { 'Accept-Encoding': accept } : {});
+    assert.equal(response.headers['content-encoding'], encoding, String(accept));
+    assert.equal(Number(response.headers['content-length']), response.body.length);
+    assert.equal(decode(response).toString(), script, String(accept));
+  }
+  const revalidated = await fetchRaw(f, `/game.js?v=${version}`, { 'Accept-Encoding': 'gzip', 'If-None-Match': forever.headers.etag });
+  assert.equal(revalidated.status, 304, 'one validator covers every encoding of a body');
+  assert.equal(revalidated.body.length, 0);
+  assert.equal((await fetchRaw(f, '/game.js?v=stale')).headers['cache-control'], 'no-cache');
+
+  // A versioned stylesheet stamps its fonts to match; data URLs and the unversioned file are left alone.
+  const css = decode(await fetchRaw(f, `/styles.css?v=${version}`)).toString();
+  assert.ok(css.includes(`url("fonts/a.woff2?v=${version}")`) && css.includes('url(data:image/png;base64,AAAA)'), css);
+  assert.ok(decode(await fetchRaw(f, '/styles.css')).toString().includes('url("fonts/a.woff2")'));
+
+  // three.js is versioned by its package: the pinned version is immutable, another one revalidates.
+  const vendor = await fetchRaw(f, `/vendor/three@${threeVersion}/build/three.core.js`, { 'Accept-Encoding': 'br' });
+  assert.equal(vendor.status, 200);
+  assert.equal(vendor.headers['cache-control'], 'public, max-age=31536000, immutable');
+  assert.ok(decode(vendor).toString().includes("const REVISION = '187'"));
+  assert.equal((await fetchRaw(f, '/vendor/three@0.0.1/build/three.core.js')).headers['cache-control'], 'no-cache');
+  assert.equal((await fetchRaw(f, `/vendor/three@${threeVersion}/build/three.module.js`)).status, 404);
+
+  // Changing any public file changes the version (rechecked at most once a second), and the old one stops being cached.
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  await fs.writeFile(path.join(publicDir, 'game.js'), script + '// changed\n');
+  const next = (decode(await fetchRaw(f, '/')).toString().match(/game\.js\?v=([\w-]+)"/) || [])[1];
+  assert.ok(next && next !== version);
+  assert.equal((await fetchRaw(f, `/game.js?v=${version}`)).headers['cache-control'], 'no-cache');
+  const fresh = await fetchRaw(f, `/game.js?v=${next}`);
+  assert.equal(fresh.headers['cache-control'], 'public, max-age=31536000, immutable');
+  assert.ok(decode(fresh).toString().endsWith('// changed\n'));
+  assert.deepEqual(f.errors, []);
+});
+
+test('the scoreboard answers unchanged polls with 304 and a new ETag after every change', async t => {
+  const initialScores = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`player_${String(index).padStart(3, '0')}`, { name: 'Explorer', time: 30 + index, kills: 12, at: 1 }]));
+  const f = await fixture(t, { initialScores });
+  const first = await fetchRaw(f, '/api/scores', { 'Accept-Encoding': 'gzip' });
+  assert.equal(first.status, 200);
+  assert.equal(first.headers['cache-control'], 'no-cache');
+  assert.equal(first.headers['content-encoding'], 'gzip');
+  assert.equal(JSON.parse(decode(first)).length, 30);
+  const plain = await fetchRaw(f, '/api/scores');
+  assert.equal(plain.headers['content-encoding'], undefined);
+  assert.equal(JSON.parse(plain.body).length, 30);
+  const unchanged = await fetchRaw(f, '/api/scores', { 'If-None-Match': first.headers.etag });
+  assert.equal(unchanged.status, 304);
+  assert.equal(unchanged.body.length, 0);
+  // A slower run by a listed player changes nothing: the board still answers 304.
+  assert.equal((await f.score(validScore)).status, 200);
+  assert.equal((await fetchRaw(f, '/api/scores', { 'If-None-Match': first.headers.etag })).status, 304);
+  assert.equal((await f.score({ ...validScore, uid: 'newcomer_01' })).status, 200);
+  const changed = await fetchRaw(f, '/api/scores', { 'If-None-Match': first.headers.etag });
+  assert.equal(changed.status, 200);
+  assert.notEqual(changed.headers.etag, plain.headers.etag);
+  assert.ok(JSON.parse(changed.body).some(run => run.uid === 'newcomer_01'));
 });
 
 test('rejects traversal, escaping symlinks, hidden files and malformed URLs without crashing', async t => {

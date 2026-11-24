@@ -182,8 +182,18 @@ The supplied Docker Compose file uses an existing external Docker network named 
 | `HOST` | `127.0.0.1` | Bind address; `0.0.0.0` allows LAN/container access |
 | `DATA_DIR` | `./data` | Directory containing persistent `scores.json` |
 | `TRUST_PROXY` | unset | Set to `1` only behind a trusted proxy that overwrites `X-Forwarded-For` |
+| `PRECOMPRESS` | on | `node server.js` compresses every asset at start-up and upgrades each to maximum brotli in the background (about 11 s of one core, once). `0` compresses on first request at faster settings instead |
 
-`GET /health` returns `ok`. Public application assets revalidate through ETags; the pinned local Three.js file is cached for a day. API responses are never cached. Only files inside `public/` and the explicit Three.js vendor path can be served.
+`GET /health` returns `ok`. Only files inside `public/` and the explicit Three.js vendor path can be served.
+
+Loading is built to cost the server as little as possible and to put the work on the player's machine:
+
+- Each file is read once and kept in memory with its brotli and gzip bodies, keyed by size and modification time, so edits are picked up without a restart. Text assets travel compressed (about 4.8 MB of start-up JavaScript becomes about 0.9 MB).
+- `index.html` is always revalidated. The server stamps the local scripts, stylesheets and fonts it references with `?v=<content hash>`, and three.js with `vendor/three@<version>/`. Those URLs are cached by browsers for a year (`immutable`), so a returning player starts the game without asking for a single file. Any change in `public/` changes the hash. Unversioned URLs keep revalidating through ETags, and `/vendor/three/...` is cached for a day.
+- `/api/scores` is serialized once per change and answers an unchanged poll with an empty `304`.
+- In the browser, spare CPU cores paint the procedural textures in Web Workers (`prepaint.js`, `texture-worker.js`) while the engine downloads and the GPU starts. Creatures of one kind are built once and cloned.
+
+A reverse proxy should pass `Content-Encoding` and `Cache-Control` through unchanged; nginx's defaults do. Serve players over HTTP/2 or HTTP/3 (for nginx, `listen 443 ssl http2`; Caddy does by default): start-up is about 35 requests, which HTTP/1.1 spreads over six connections and several round trips.
 
 ## Scoreboard and trust
 

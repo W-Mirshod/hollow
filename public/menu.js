@@ -27,7 +27,7 @@
   const WATCHER_SPOTS = [[74, 1], [86, 0.86], [58, 0.78], [93, 1.08]];
   const light = { x: NaN, y: NaN, aimX: 0, aimY: 0, aimedAt: -Infinity, mouseInside: false };
   const watcher = { seen: 0, goneAt: 0, spot: 0 };
-  let ready = document.readyState === 'complete', switchOn = false;
+  let ready = !!window.HollowReady, switchOn = false;
   let current = null, raf = 0, last = 0, lastPaint = 0, flicker = null, nextFalter = 0, painted = '';
 
   const visibleScreen = () => screens.find(screen => !screen.hidden) || null;
@@ -182,12 +182,35 @@
     document.addEventListener('mouseout', event => { if (!event.relatedTarget) { light.mouseInside = false; schedule(); } });
     addEventListener('blur', () => { light.mouseInside = false; });
     addEventListener('resize', schedule);
-    // The game finishes building the ward before load; the torch comes on then.
-    if (!ready) addEventListener('load', () => { ready = true; switchOn = !calm(); schedule(); }, { once: true });
+    // The torch stays dim until game.js has built the ward and wired the menu (hollow:ready), then switches on.
+    if (!ready) addEventListener('hollow:ready', () => { ready = true; switchOn = !calm(); schedule(); }, { once: true });
     if (reduceMotion.addEventListener) reduceMotion.addEventListener('change', schedule);
     const observer = new MutationObserver(schedule);
     for (const screen of screens) observer.observe(screen, { attributes: true, attributeFilter: ['hidden'] });
     schedule();
+  }
+
+  // Play and Multiplay are on screen before game.js has wired them. A click meanwhile is remembered and replayed once
+  // the game is ready (within a few seconds the browser still counts it as the player's gesture, so the pointer
+  // lock and audio start as usual); a first visit, which opens the name screen instead, drops it.
+  let queued = null;
+  if (!window.HollowReady) {
+    document.addEventListener('click', event => {
+      if (window.HollowReady) return;
+      const button = event.target instanceof Element && event.target.closest('#startDarkBtn, #coopBtn');
+      if (!button) return;
+      if (queued) queued.removeAttribute('aria-busy');
+      queued = button;
+      button.setAttribute('aria-busy', 'true');
+    }, true);
+    addEventListener('hollow:ready', () => {
+      const button = queued;
+      queued = null;
+      if (!button) return;
+      button.removeAttribute('aria-busy');
+      const menu = document.getElementById('menu');
+      if (menu && !menu.hidden && !button.hidden && !button.disabled) button.click();
+    }, { once: true });
   }
 
   const howTo = document.getElementById('howTo');

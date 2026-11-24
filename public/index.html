@@ -8,7 +8,9 @@
   <meta name="description" content="The Hollow: Blackwater Ward. Beneath the manor, an abandoned treatment wing has lost power. Scavenge supplies, evade the monsters, and restore the exit to escape.">
   <title>The Hollow: Blackwater Ward</title>
   <link rel="preload" href="fonts/cormorant.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/cormorant-italic.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="hudfx.css">
   <script type="importmap">
   {
     "imports": {
@@ -22,6 +24,25 @@
   <link rel="modulepreload" href="vendor/three/build/three.core.js">
   <link rel="modulepreload" href="vendor/three/build/three.tsl.js">
   <link rel="modulepreload" href="vendor/three/build/three.webgpu.js">
+  <!-- Everything boot.mjs loads downloads now, in parallel; boot.mjs runs it in order. -->
+  <link rel="modulepreload" href="postfx.mjs">
+  <link rel="modulepreload" href="atmosphere.mjs">
+  <link rel="modulepreload" href="vendor/three/addons/tsl/display/BloomNode.js">
+  <link rel="modulepreload" href="vendor/three/addons/tsl/display/FXAANode.js">
+  <link rel="preload" href="systems.js" as="script">
+  <link rel="preload" href="locomotion.js" as="script">
+  <link rel="preload" href="camerafx.js" as="script">
+  <link rel="preload" href="monster-anim.js" as="script">
+  <link rel="preload" href="horror.js" as="script">
+  <link rel="preload" href="audio.js" as="script">
+  <link rel="preload" href="player-audio.js" as="script">
+  <link rel="preload" href="weapon-audio.js" as="script">
+  <link rel="preload" href="navigation.js" as="script">
+  <link rel="preload" href="visuals.js" as="script">
+  <link rel="preload" href="controls.js" as="script">
+  <link rel="preload" href="chaos.js" as="script">
+  <link rel="preload" href="hudfx.js" as="script">
+  <link rel="preload" href="game.js" as="script">
 </head>
 <body>
 <canvas id="game" aria-label="The Hollow: Blackwater Ward first-person survival game"></canvas>
@@ -241,6 +262,7 @@
 </div>
 
 <noscript><div class="no-script">The Hollow needs JavaScript to run. Enable it in your browser, then reload.</div></noscript>
+<script src="prepaint.js"></script>
 <script src="menu.js"></script>
 <script src="bridge.js"></script>
 <script type="module" src="boot.mjs"></script>

@@ -109,6 +109,10 @@ kbd { font: 10px var(--font-mono); border: 1px solid var(--line); border-radius:
 .screen.descend .panel { border-top: 0; align-items: flex-start; }
 .screen.descend .title { font-size: clamp(2.4rem, 6vw, 4.4rem); }
 .menu-list button:hover::after, .menu-list button:focus-visible::after, .entry-actions button:enabled:hover::after, .entry-actions button:focus-visible::after, .howto-close:hover::after, .howto-close:focus-visible::after { transform: scaleX(1); }
+/* A Play/Multiplay click made while the game loads (menu.js): the underline runs until the ward is ready. */
+.menu-list button[aria-busy="true"] { color: var(--paper); cursor: progress; }
+.menu-list button[aria-busy="true"]::after { transform: scaleX(1); animation: entry-busy 1.1s ease-in-out infinite alternate; }
+@keyframes entry-busy { from { opacity: .25; } to { opacity: 1; } }
 .entry-actions button:disabled { color: var(--faint); cursor: default; }
 .entry button:focus-visible, .entry input:focus-visible { outline: 1px solid rgba(236, 229, 216, .5); outline-offset: 6px; }
 

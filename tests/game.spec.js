@@ -57,7 +57,8 @@ test('inertial movement, jump, crouch, slide, aiming and all three weapons work'
   await page.keyboard.press('2');await expect.poll(async()=>(await state(page)).weapon).toBe('pistol');
   await page.mouse.down({button:'right'});await expect.poll(async()=>(await state(page)).aiming).toBe(true);await page.mouse.up({button:'right'});
   await page.mouse.down();await page.waitForTimeout(650);await page.mouse.up();await expect.poll(async()=>(await state(page)).mag,{message:'the queued pistol click fires once on the next frame'}).toBe(11);
-  await page.keyboard.press('r');await expect.poll(async()=>(await state(page)).mag).toBe(12);expect((await state(page)).reserve).toBe(11);
+  // The M9 sidearm never runs dry: a reload refills it without spending its reserve.
+  await page.keyboard.press('r');await expect.poll(async()=>(await state(page)).mag).toBe(12);expect((await state(page)).reserve).toBe(12);
   await page.keyboard.press('3');await page.waitForTimeout(350);await page.mouse.down();await page.waitForTimeout(250);await page.mouse.up();await expect.poll(async()=>(await state(page)).mag).toBe(5);
   await page.keyboard.press('1');await expect.poll(async()=>(await state(page)).weapon).toBe('rifle');await page.mouse.down();
     try{await expect.poll(async()=>(await state(page)).mag).toBeLessThan(28);}finally{await page.mouse.up();}

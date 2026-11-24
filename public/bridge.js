@@ -72,7 +72,8 @@
     pollController = controller;
     var promise = (async function () {
       try {
-        var rows = await requestJSON({}, controller);
+        // Revalidated with the board's ETag: an unchanged board costs the server a bodiless 304.
+        var rows = await requestJSON({ cache: 'no-cache' }, controller);
         if (!Array.isArray(rows)) throw error('upstream_error', 'Invalid scoreboard response');
         var docs = rows.slice(0, 100).filter(object).map(function (row) {
           var data = Object.freeze(Object.assign({}, row));

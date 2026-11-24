@@ -202,11 +202,13 @@ async function main() {
       assert.equal(health.status(), 200, '/health must return 200');
       assert.equal((await health.text()).trim(), 'ok');
       const types = { '.js': /javascript/i, '.mjs': /javascript/i, '.css': /text\/css/i, '.woff2': /font\/woff2/i };
+      // The server serves index.html with ?v=<version> on local assets and vendor/three@<version>/ for three.js.
+      const bare = ref => ref.split('?')[0];
       const fetchAsset = async asset => {
         const response = await http.get(new URL(asset, baseURL).href, { headers: { 'Cache-Control': 'no-cache' } });
         assert.equal(response.status(), 200, (asset || '/') + ' must return 200');
         const contentType = response.headers()['content-type'] || '';
-        assert((types[(asset.match(/\.[a-z0-9]+$/) || [''])[0]] || /text\/html/i).test(contentType), (asset || '/') + ': unexpected content type ' + contentType);
+        assert((types[(bare(asset).match(/\.[a-z0-9]+$/) || [''])[0]] || /text\/html/i).test(contentType), (asset || '/') + ': unexpected content type ' + contentType);
         const body = await response.body();
         assert(body.length > 100, (asset || '/') + ' must not be empty');
         return body.toString('utf8');
@@ -214,10 +216,10 @@ async function main() {
       // index.html maps three/webgpu and three/tsl onto the vendor builds, loads the classic page scripts
       // (menu, bridge) and then starts the module boot.
       const html = await fetchAsset('');
-      assert(/<script type="importmap">/.test(html) && html.includes('vendor/three/build/three.webgpu.js') && html.includes('vendor/three/build/three.tsl.js'), 'index.html must carry the three import map');
-      assert(/<script type="module" src="boot\.mjs">/.test(html), 'index.html must start boot.mjs');
+      assert(/<script type="importmap">/.test(html) && /vendor\/three(@[\w.+-]+)?\/build\/three\.webgpu\.js/.test(html) && /vendor\/three(@[\w.+-]+)?\/build\/three\.tsl\.js/.test(html), 'index.html must carry the three import map');
+      assert(/<script type="module" src="boot\.mjs(\?v=[\w-]+)?">/.test(html), 'index.html must start boot.mjs');
       const pageScripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(match => match[1]);
-      assert(pageScripts.includes('bridge.js'), 'index.html must load bridge.js');
+      assert(pageScripts.map(bare).includes('bridge.js'), 'index.html must load bridge.js');
       const preloads = [...html.matchAll(/<link rel="preload" href="([^"]+)"/g)].map(match => match[1]);
       // boot.mjs loads the game scripts in order; every listed script must ship.
       const boot = await fetchAsset('boot.mjs');

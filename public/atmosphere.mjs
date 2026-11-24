@@ -57,13 +57,17 @@ function noiseTexture(THREE, size = 128) {
   const r = channel([4, 8, 16, 32]), g = channel([8, 16, 32, 64]), b = channel([16, 32, 64]);
   const specks = new Float32Array(size * size), cells = 12, pts = [], reach = size / cells * 0.5;
   for (let i = 0; i < cells * cells; i++) pts.push([(i % cells + rand()) / cells * size, (Math.floor(i / cells) + rand()) / cells * size, 0.2 + 0.8 * rand() ** 1.5]);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    let best = 0;
-    for (const [px, py, amp] of pts) {
-      let dx = Math.abs(px - x), dy = Math.abs(py - y); dx = Math.min(dx, size - dx); dy = Math.min(dy, size - dy);
-      best = Math.max(best, Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy) / reach) * amp);
+  // Each speck lights only the texels within `reach` of it (wrapping): visit those instead of every speck per texel.
+  for (const [px, py, amp] of pts) {
+    for (let j = Math.ceil(py - reach); j <= Math.floor(py + reach); j++) {
+      const y = ((j % size) + size) % size;
+      for (let k = Math.ceil(px - reach); k <= Math.floor(px + reach); k++) {
+        const x = ((k % size) + size) % size;
+        let dx = Math.abs(px - x), dy = Math.abs(py - y); dx = Math.min(dx, size - dx); dy = Math.min(dy, size - dy);
+        const v = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy) / reach) * amp;
+        if (v > specks[y * size + x]) specks[y * size + x] = v;
+      }
     }
-    specks[y * size + x] = best;
   }
   const data = new Uint8Array(size * size * 4);
   for (let i = 0; i < size * size; i++) { data[i * 4] = r[i] * 255; data[i * 4 + 1] = g[i] * 255; data[i * 4 + 2] = b[i] * 255; data[i * 4 + 3] = specks[i] * 255; }
