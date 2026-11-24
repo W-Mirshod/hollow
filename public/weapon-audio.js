@@ -47,6 +47,9 @@
   };
   const IMPACTS = { flesh: { level: .34, send: .1 }, metal: { level: .34, send: .3 }, concrete: { level: .32, send: .2 },
     wood: { level: .6, send: .15 } };
+  // Flesh impacts by where the round went (impact('flesh', { variant, weight })): the default wet thwack, a skull or
+  // spine cracking, a heavy round thumping into a torso, and a wet squelch through a gut or a limb.
+  const FLESH = Object.freeze(['thwack', 'bone', 'meaty', 'squelch']);
   // Spent brass: partials [Hz, second partial ratio, its level], ring decay s, bounces; the shotgun hull is a dull plastic tok.
   const CASINGS = {
     rifle: { level: .045, delay: [.42, .75], partials: [4300, 2.32, .5], ring: .08, bounces: 3, click: 5200 },
@@ -150,7 +153,7 @@
       empty: [[.88, 'b', 3000, .0006, .03, .9], [.881, 'a', 600, .002, .06, .65], [.885, 'c', 1200, .001, .06, .22]],
       full: [[.86, 'a', 700, .01, .05, .25]] }
   };
-  const MARKER = { level: .31, headshot: .8, armored: .92 };
+  const MARKER = { level: .31, headshot: .8, armored: .92, heavy: 1.12 };
   const DRY_LEVEL = .3, EQUIP_LEVEL = .3;
   // The shared corridor: a ~1.45 s stereo impulse with sparse early reflections and a darkening diffuse tail, plus a slapback.
   const ROOM = { length: 1.45, rt60: 1.25, early: 2.6, wet: .9, slap: .092, slapLevel: .2, slapTone: 2300, lowCut: 160 };
@@ -647,13 +650,14 @@
     function hitMarker(options) {
       const input = settings(options);
       if (!input) return null;
-      const headshot = !!input.headshot, armored = !!input.armored, now = context.currentTime;
-      // Hits reported within a few milliseconds share one tick (a headshot still upgrades a body hit).
-      if (marker && !marker.closed && !inactive() && now - marker.called < MERGE && (marker.headshot || !headshot)) return marker.id;
+      const headshot = !!input.headshot, armored = !!input.armored, heavy = !!input.heavy, now = context.currentTime;
+      // Hits reported within a few milliseconds share one tick (a headshot or a heavy hit still upgrades a body hit).
+      if (marker && !marker.closed && !inactive() && now - marker.called < MERGE && (marker.headshot || !headshot) &&
+        (marker.heavy || marker.headshot || !heavy)) return marker.id;
       const voice = oneShot('hitMarker', (voice, soon) => {
         // A hit landed by this frame's shot ticks just after its crack instead of under it.
         const start = Math.max(soon, lastShot + UNMASK), pitch = 1 + rand(-.025, .025), dull = armored ? .52 : 1;
-        voice.out.gain.value = MARKER.level * (headshot ? MARKER.headshot : armored ? MARKER.armored : 1) * decibels(rand(-1, 1));
+        voice.out.gain.value = MARKER.level * (headshot ? MARKER.headshot : armored ? MARKER.armored : 1) * (heavy ? MARKER.heavy : 1) * decibels(rand(-1, 1));
         // Dry, and after the glue compressor so sustained fire never ducks it.
         voice.out.connect(voice.bus.post);
         const tick = gainNode(voice, 0, voice.out), band = filterNode(voice, 'bandpass', 4300 * dull * pitch, armored ? 1.1 : 1.6, tick);
@@ -674,30 +678,49 @@
           const tink = 3520 * dull * pitch;
           tone(voice, voice.out, 'sine', start + .002, [[0, tink], [.045, tink * .99]], [{ at: start + .002, attack: .0006, decay: .042, peak: .45 }]);
         }
-        // Armour: a duller thud under the tick.
-        if (armored) tone(voice, voice.out, 'sine', start, [[0, 175], [.022, 118]], [{ at: start, attack: .001, decay: .022, peak: .75 }]);
+        // Armour: a duller thud under the tick. A heavy hit (a magnum, a point-blank blast, a gib) punches under it.
+        if (armored) tone(voice, voice.out, 'sine', start, [[0, 175], [.022, 118]], [{ at: start, attack: .001, decay: .022, peak: heavy ? 1.1 : .75 }]);
+        else if (heavy) tone(voice, voice.out, 'sine', start, [[0, 230], [.03, 92]], [{ at: start, attack: .0008, decay: .03, peak: .95 }]);
       });
       if (!voice) return null;
-      voice.called = now; voice.headshot = headshot; marker = voice;
+      voice.called = now; voice.headshot = headshot; voice.heavy = heavy; marker = voice;
       return voice.id;
     }
 
     /* ---------- impacts and brass ---------- */
     const HITS = {
-      // Wet thwack: a slap sweeping down, a squelchy resonant sweep and a body thump.
-      flesh(voice, start, out) {
-        const p = rand(.94, 1.06);
-        const slap = gainNode(voice, 0, out), band = filterNode(voice, 'bandpass', 950 * p, .9, slap);
-        band.frequency.setValueAtTime(hz(950 * p), start);
-        band.frequency.exponentialRampToValueAtTime(hz(360 * p), start + .055);
-        let end = strike(slap.gain, start, .0015, .06 * rand(.9, 1.1), 2.6);
-        const wet = gainNode(voice, 0, out), squelch = filterNode(voice, 'bandpass', 2300 * p, 4.5, wet), at = start + rand(.006, .011);
+      // Wet thwack: a slap sweeping down, a squelchy resonant sweep and a body thump. `bone` adds a skull or spine
+      // cracking (a bright snap and a falling knock), `meaty` a deeper slap and a heavier, longer thump, `squelch` a
+      // narrower, double wet suck. weight (.3-2, 1 = a rifle round) leans on the slap and the thump.
+      flesh(voice, start, out, variant, weight) {
+        const p = rand(.94, 1.06), w = .8 + .2 * weight, meaty = variant === 'meaty', bone = variant === 'bone', wetter = variant === 'squelch';
+        const top = (meaty ? 700 : 950) * p;
+        const slap = gainNode(voice, 0, out), band = filterNode(voice, 'bandpass', top, meaty ? .8 : .9, slap);
+        band.frequency.setValueAtTime(hz(top), start);
+        band.frequency.exponentialRampToValueAtTime(hz((meaty ? 210 : 360) * p), start + (meaty ? .08 : .055));
+        let end = strike(slap.gain, start, .0015, (meaty ? .085 : .06) * rand(.9, 1.1), (wetter ? 1.6 : 2.6) * (.85 + .15 * weight));
+        const wet = gainNode(voice, 0, out), squelch = filterNode(voice, 'bandpass', 2300 * p, wetter ? 6 : 4.5, wet), at = start + rand(.006, .011);
         squelch.frequency.setValueAtTime(hz(2300 * p), at);
-        squelch.frequency.exponentialRampToValueAtTime(hz(820 * p), at + .045);
-        end = Math.max(end, strike(wet.gain, at, .004, .04, 2.2));
+        squelch.frequency.exponentialRampToValueAtTime(hz((wetter ? 600 : 820) * p), at + (wetter ? .065 : .045));
+        if (wetter) {
+          const again = at + rand(.075, .09);
+          squelch.frequency.setValueAtTime(hz(1700 * p), again);
+          squelch.frequency.exponentialRampToValueAtTime(hz(480 * p), again + .06);
+          end = Math.max(end, strikes(wet.gain, [{ at, attack: .004, decay: .06, peak: 2.6 }, { at: again, attack: .007, decay: .06, peak: 1.5 }]));
+        } else end = Math.max(end, strike(wet.gain, at, .004, .04, 2.2));
+        let crack = null;
+        if (bone) {
+          const snap = gainNode(voice, 0, out);
+          crack = filterNode(voice, 'highpass', 2400, .7, snap);
+          end = Math.max(end, strikes(snap.gain, [{ at: start + .001, attack: .0003, decay: .01, peak: 2.4 },
+            { at: start + rand(.012, .018), attack: .0003, decay: .008, peak: 1.3 }]));
+          tone(voice, out, 'triangle', start, [[0, 1650 * p], [.03, 820 * p]], [{ at: start, attack: .0005, decay: .03, peak: .5 }]);
+        }
         const source = noiseSource(voice, start, end + .004, rand(.9, 1.05));
         source.connect(band); source.connect(squelch);
-        tone(voice, out, 'sine', start, [[0, 150 * p], [.05, 68 * p]], [{ at: start, attack: .001, decay: .06, peak: .7 }]);
+        if (crack) source.connect(crack);
+        tone(voice, out, 'sine', start, meaty ? [[0, 120 * p], [.09, 46 * p]] : [[0, 150 * p], [.05, 68 * p]],
+          [{ at: start, attack: .001, decay: (meaty ? .11 : .06) * w, peak: (meaty ? 1.05 : .7) * w }]);
       },
       // Ricochet: a bright tick, a ringing ping and, usually, a short falling whine.
       metal(voice, start, out) {
@@ -750,16 +773,18 @@
     function impact(surface, options) {
       const place = position(options);
       if (!owns(IMPACTS, surface) || !place || inactive()) return null;
+      const input = settings(options), variant = FLESH.includes(input.variant) ? input.variant : 'thwack';
+      const weight = numeric(input.weight) > 0 ? clamp(Number(input.weight), .3, 2) : 1;
       const now = context.currentTime, thin = cluster(surface, now);
       if (!thin) return null;
       const voice = oneShot('impact', (voice, start) => {
         const distance = range(place), setting = IMPACTS[surface];
         const wall = filterNode(voice, 'lowpass', muffle(distance, place.occluded), .7, null);
         const panner = spatial(voice, place, 'equalpower', 'inverse', 2, 1.1);
-        voice.out.gain.value = setting.level * thin * decibels(rand(-1.5, 1.5)) * (1 - .5 * place.occluded);
+        voice.out.gain.value = setting.level * thin * decibels(rand(-1.5, 1.5)) * (1 - .5 * place.occluded) * (.75 + .25 * weight);
         voice.out.connect(wall); wall.connect(panner); panner.connect(voice.bus.mix);
         wall.connect(gainNode(voice, setting.send / (1 + distance / 30), voice.bus.verb));
-        HITS[surface](voice, start, voice.out);
+        HITS[surface](voice, start, voice.out, variant, weight);
       });
       if (voice) recent.push({ at: now, surface });
       return voice ? voice.id : null;

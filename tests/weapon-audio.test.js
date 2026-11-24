@@ -643,6 +643,59 @@ test('impacts: four surfaces with their own character, spatial, occludable, and 
   settle(setup);
 });
 
+test('flesh impacts follow the wound: a cracking skull, a heavy torso thump, a double wet squelch, weighted by the round', () => {
+  const setup = fixture({ random: () => .5 }), { context } = setup, place = { x: 2, y: 1.2, z: -3 };
+  // Measured as soon as it is scheduled: a finished voice disconnects its graph.
+  const play = options => {
+    const played = setup.play(api => api.impact('flesh', { ...place, ...options }));
+    inspect(setup, played, { length: .8, nodes: 16 });
+    const thump = played.sources.find(source => source.type === 'sine'), slap = played.nodes.find(node => node.type === 'bandpass' && node.Q.value < 2);
+    const squelch = played.nodes.find(node => node.type === 'bandpass' && node.Q.value >= 4), crack = played.nodes.find(node => node.type === 'highpass');
+    const result = {
+      shape: played.nodes.map(node => node.kind + ':' + (node.type || '')), level: played.out.gain.value,
+      thumpHz: thump.frequency.events[0].value, thumpDecay: decayOf(thump.connections[0]), thumpPeak: peak(thump.connections[0]),
+      slapEnd: slap.frequency.events.at(-1).value, slapPeak: peak(slap.connections[0]),
+      squelchQ: squelch.Q.value, squelches: strikes(squelch.connections[0]).length,
+      cracks: crack ? strikes(crack.connections[0]).length : 0,
+      knock: played.sources.some(source => source.type === 'triangle' && source.frequency.events[0].value > 1200)
+    };
+    context.advance(.05);
+    return result;
+  };
+  const plain = play({}), named = play({ variant: 'thwack', weight: 1 }), junk = play({ variant: 'glass', weight: NaN });
+  for (const other of [named, junk]) { assert.deepEqual(other.shape, plain.shape); near(other.level, plain.level); }
+  assert.deepEqual([plain.cracks, plain.knock, plain.squelches], [0, false, 1]);
+  const bone = play({ variant: 'bone' }), meaty = play({ variant: 'meaty' }), wet = play({ variant: 'squelch' });
+  assert.ok(bone.cracks === 2 && bone.knock, 'A skull snaps: two bright cracks and a falling bony knock');
+  assert.ok(meaty.thumpHz < plain.thumpHz && meaty.thumpDecay > 1.5 * plain.thumpDecay && meaty.thumpPeak > plain.thumpPeak, 'A torso thump: lower, longer, harder');
+  assert.ok(meaty.slapEnd < plain.slapEnd, 'with a darker slap');
+  assert.ok(wet.squelchQ > plain.squelchQ && wet.squelches === 2 && wet.slapPeak < plain.slapPeak, 'A gut shot sucks twice, more squelch than slap');
+  const heavy = play({ weight: 2 }), light = play({ weight: .4 });
+  assert.ok(heavy.level > 1.2 * plain.level && light.level < .9 * plain.level, 'Weighted by the round');
+  assert.ok(heavy.thumpPeak > plain.thumpPeak && heavy.slapPeak > plain.slapPeak);
+  settle(setup);
+});
+
+test('a heavy hit marker punches a low thud under the tick and upgrades a merged body tick', () => {
+  const setup = fixture({ random: () => .5 }), { context, instance } = setup;
+  const body = setup.play(api => api.hitMarker()), bodyLevel = body.out.gain.value, heavy = setup.play(api => api.hitMarker({ heavy: true }));
+  assert.ok(typeof heavy.id === 'number' && heavy.id !== body.id, 'A heavy hit is not swallowed by a body tick');
+  inspect(setup, heavy, { length: .06, nodes: 8 });
+  assert.ok(heavy.sources.some(source => source.type === 'sine' && source.frequency.events[0].value < 250), 'A low punch');
+  assert.ok(heavy.out.gain.value > 1.1 * bodyLevel);
+  assert.deepEqual(heavy.out.connections, [heavy.bus.post]);
+  assert.equal(instance.hitMarker(), heavy.id, 'The rest of the volley merges into it');
+  assert.equal(instance.hitMarker({ heavy: true }), heavy.id);
+  context.advance(.05);
+  const both = setup.play(api => api.hitMarker({ headshot: true, heavy: true }));
+  inspect(setup, both, { length: .06, nodes: 14 });
+  assert.equal(instance.hitMarker({ heavy: true }), both.id, 'A headshot absorbs heavy hits');
+  context.advance(.05);
+  const armored = setup.play(api => api.hitMarker({ armored: true, heavy: true }));
+  inspect(setup, armored, { length: .06, nodes: 10 });
+  settle(setup);
+});
+
 test('hit markers are dry, centred, under 60 ms, merged per volley and tucked just after the crack', () => {
   const setup = fixture(), { context, instance } = setup;
   const body = setup.play(api => api.hitMarker());
