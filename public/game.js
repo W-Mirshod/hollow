@@ -1619,7 +1619,9 @@ function animateMonster(m,dt){
   animIn.lunge=m.lungeBoost>0?1:(m.lungeT||0);animIn.stagger=m.stagger||0;animIn.turn=dt>0?dy/dt:0;
   animIn.watched=m.watched===true;animIn.time=t;animIn.effects=preferences.effects===true;animIn.dead=m.dead===true||m.dormant===true;
   const pose=m.anim.update(dt,animIn);
+  if(close&&kill.on)killJoints(pose);
   HollowMonsterAnim.apply(m.g,pose,m.pos.x,m.pos.z,m.yaw,close);
+  if(close&&kill.on)killPlace(m);
   if(pose.footstep&&!m.dead)onMonsterFootstep(m,pose.stepIntensity);
 }
 
@@ -1866,28 +1868,136 @@ function updateTorch(dt){
 }
 
 /* ---------- caught ---------- */
+// The kill: HollowKillCam plays the creature's own choreography (camera, body, joints, timed blows), HollowKillFX
+// paints the lens and HollowKillAudio the gore. The kill frame is fixed when it starts: the survivor's feet and the
+// bearing to the creature (body frame: x right, y up, f forward).
+const killCam=HollowKillCam.create(),killFX=window.HollowKillFX?HollowKillFX.create():null;
+let killAudio=null,killKind=null;
+const kill={on:false,hold:false,m:null,x:0,y:0,z:0,yaw:0,fx:0,fz:-1,rx:1,rz:0,face:{x:0,y:0,f:1},faceSeen:false,faceAt:new THREE.Vector3(),
+  local:new THREE.Vector3(),off:new THREE.Vector3(),eye:new THREE.Vector3(),view:new THREE.Vector3(),dir:new THREE.Vector3(),voice:'stalker',shadows:[]};
+const KILL_JOINTS=HollowKillCam.JOINTS;
 function caught(m){
   if(!localInDanger())return;
   if(state==='pause'){showScreen(null);}
   state='caught';caughtT=0;caughtBy=m;torchOn=true;mouseDown=false;
-  stopAudio();sCreature(m,'attack');m.anim.scream(1.5);$('hud').hidden=true;
+  stopAudio();$('hud').hidden=true;$('msg').style.opacity=0;msgTimer=0;
   audioOnCaught(m);
+  startKill(m,killKind||m.kind);
 }
-function updateCaught(dt){
-  caughtT+=dt;const g=caughtBy.g;
-  const fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw),camY=P.pos.y+EYE;
-  g.position.set(P.pos.x+fx*0.72,camY-caughtBy.g.userData.headHeight,P.pos.z+fz*0.72);g.rotation.set(0,Math.atan2(-fx,-fz),0);
-  P.pitch+=(0-P.pitch)*Math.min(1,dt*12);
-  setLight(spot,preferences.effects?3.2*(1-ease(.3,1.6,caughtT)):2.6);
-  $('flash').style.opacity=0;danger=1;
-  if(caughtT>1.6&&NET.inGame){coopLocalDone('dead');return;}
-  if(caughtT>1.6){
-    state='dead';hideMonsters();setLight(spot,0);$('flash').style.opacity=0;gun.visible=false;
-    const lasted=Math.round(elapsed*10)/10,m=Math.floor(lasted/60),s=Math.floor(lasted%60),own=runScore();
-    $('deadText').textContent=`You lasted ${m}:${String(s).padStart(2,'0')} in the dark${floor?`, down to ${FLOOR().code} · ${FLOOR().name}`:''}. The corridors are quiet again.`;
-    $('retryDark').textContent=checkpoint&&checkpoint.floor?`Retry ${FLOOR().code} · ${FLOOR().name}`:'Re-enter the ward';
-    showScreen('dead');recordRun({mode:'solo',escaped:false,time:elapsed,kills:own.kills,score:own.points},'deadRank');try{document.exitPointerLock();}catch(e){}
+// Free space from the survivor along (dx, dz), at knee and chest height, up to `max` metres.
+function killClear(dx,dz,max){for(let d=.1;d<max;d+=.1)if(blocksRay(P.pos.x+dx*d,.3,P.pos.z+dz*d)||blocksRay(P.pos.x+dx*d,1.1,P.pos.z+dz*d))return d;return max;}
+function startKill(m,kind){
+  const dx=m.pos.x-P.pos.x,dz=m.pos.z-P.pos.z,d=Math.hypot(dx,dz),yaw=d>.05?Math.atan2(-dx,-dz):P.yaw;
+  kill.on=true;kill.m=m;kill.x=P.pos.x;kill.y=P.pos.y;kill.z=P.pos.z;kill.yaw=yaw;kill.faceSeen=false;
+  kill.fx=-Math.sin(yaw);kill.fz=-Math.cos(yaw);kill.rx=Math.cos(yaw);kill.rz=-Math.sin(yaw);
+  const f=HollowKillCam.FACE[m.kind]||HollowKillCam.FACE[kind]||HollowKillCam.FACE.stalker;kill.local.set(f[0],f[1],f[2]);
+  kill.voice=HollowAudio.KIND_NAMES.includes(m.kind)?m.kind:kind==='gravekeeper'?'warden':'stalker';
+  let yaw0=P.yaw-yaw;yaw0-=Math.round(yaw0/(2*Math.PI))*2*Math.PI;
+  killCam.start(kind,{motion:preferences.motion,effects:preferences.effects,yaw0,pitch0:P.pitch,eye0:P.eye,dist0:d,ceiling:H,seed:monsters.indexOf(m)+1,
+    back:killClear(-kill.fx,-kill.fz,4),left:killClear(-kill.rx,-kill.rz,3),right:killClear(kill.rx,kill.rz,3)});
+  if(killFX)killFX.start({effects:preferences.effects,seed:(Math.random()*1e9)|0});
+  if(AC&&!killAudio&&window.HollowKillAudio){try{killAudio=HollowKillAudio.create({context:AC,output:master,noiseBuffer:noiseBuf});}catch(e){killAudio=null;}}
+  m.g.rotation.order='YXZ';
+  // At arm's length the creature's body would shadow the whole torch beam: it stops casting for the kill.
+  for(const o of kill.shadows)o.castShadow=true;kill.shadows.length=0;m.g.traverse(o=>{if(o.isMesh&&o.castShadow){o.castShadow=false;kill.shadows.push(o);}});
+  killEvents(killCam.pose);
+}
+// World eye position and view direction of the current kill camera.
+function killEye(){
+  const c=killCam.pose.cam,Y=kill.yaw+c.yaw,cp=Math.cos(c.pitch);
+  kill.eye.set(kill.x+kill.rx*c.x+kill.fx*c.f,kill.y+c.y,kill.z+kill.rz*c.x+kill.fz*c.f);
+  kill.view.set(-Math.sin(Y)*cp,Math.sin(c.pitch),-Math.cos(Y)*cp);
+}
+function killEvents(p){
+  if(!p.eventCount)return;
+  const fxOn=preferences.effects,gore=fxOn?1:.35;killEye();
+  for(let i=0;i<p.eventCount;i++){const e=p.events[i];
+    if(e.type==='sfx'){if(killAudio&&killAudio.play(e.cue,{level:e.a,effects:fxOn,kind:p.track})!=null)logCue('kill',e.cue,p.track);}
+    else if(e.type==='voice'){const w=kill.faceSeen?kill.faceAt:kill.eye;sVoice(kill.voice,e.cue,w.x,w.y,w.z,1);}
+    else if(e.type==='heart'){if(killAudio)killAudio.heart(e.a,e.b);}
+    else if(e.type==='flat'||e.type==='skip'){if(killAudio){killAudio.heart(0);if(e.type==='flat')killAudio.play('flat',{effects:fxOn});}}
+    else if(e.type==='blood'){if(killFX)killFX.blood(e.b,e.c,e.a*(fxOn?1:.6));}
+    else if(e.type==='spray'){
+      // Lens blood is the overlay's: the world spray bursts off to one side of the view (its mist would fill the
+      // screen in front of the lens) and rains onto the floor.
+      if(atm){const s=Math.random()<.5?-1:1,h=Math.hypot(kill.view.x,kill.view.z)||1;
+        kill.dir.set(kill.eye.x+kill.view.x*.9-s*kill.view.z/h*.6,Math.max(.25,kill.eye.y+kill.view.y*.9-.25),kill.eye.z+kill.view.z*.9+s*kill.view.x/h*.6);
+        _atmNd.set(-s*kill.view.z/h,.8,s*kill.view.x/h);atm.blood(kill.dir.x,kill.dir.y,kill.dir.z,{dir:_atmNd,amount:Math.min(3,e.a*1.5*gore)});}
+    }else if(e.type==='crack'){if(killFX)killFX.crack(e.a,e.b,e.c);}
+    else if(e.type==='dirt'){if(killFX)killFX.dirt(e.b,e.c,e.a);if(atm)atm.debris(kill.eye.x,kill.eye.y+1.4,kill.eye.z,{dir:_atmNd.set(0,-1,0),color:0x3a2a1c,sparks:0});}
   }
+}
+function updateCaught(dt,force){
+  caughtT+=dt;
+  const p=killCam.update(kill.hold&&!force?0:dt,kill.faceSeen?kill.face:null),f=p.fx;
+  killEvents(p);
+  if(killAudio)killAudio.update(dt);
+  setLight(spot,(preferences.effects?3.2:2.6)*f.light);setLight(bounce,.55*f.light);
+  if(killFX)killFX.update(dt,f);
+  if(!(fx&&fx.enabled))killCss(f);
+  $('flash').style.opacity=0;danger=1;
+  if(!p.done)return;
+  if(NET.inGame){killEnd();coopLocalDone('dead');return;}
+  state='dead';hideMonsters();setLight(spot,0);$('flash').style.opacity=0;gun.visible=false;
+  const lasted=Math.round(elapsed*10)/10,m=Math.floor(lasted/60),s=Math.floor(lasted%60),own=runScore();
+  $('deadText').textContent=`${p.line} You lasted ${m}:${String(s).padStart(2,'0')} in the dark${floor?`, down to ${FLOOR().code} · ${FLOOR().name}`:''}. The corridors are quiet again.`;
+  $('retryDark').textContent=checkpoint&&checkpoint.floor?`Retry ${FLOOR().code} · ${FLOOR().name}`:'Re-enter the ward';
+  showScreen('dead');recordRun({mode:'solo',escaped:false,time:elapsed,kills:own.kills,score:own.points},'deadRank');try{document.exitPointerLock();}catch(e){}
+}
+// The kill pose on the creature's joints (the rest of the live pose stays: legs keep their stance).
+function killJoints(pose){
+  const k=killCam.pose,J=pose.joints;
+  for(let i=0;i<KILL_JOINTS.length;i++){const j=J[KILL_JOINTS[i][0]];if(!j)continue;const a=KILL_JOINTS[i][1];if(k.jointSet[i])j[a]=k.joints[i];else j[a]+=k.joints[i];}
+}
+// Places the creature so its face lands on the track's face target (or its feet on the floor when grounded), from
+// the posed rig itself, so any model (or a stand-in) is framed the same way.
+function killPlace(m){
+  const g=m.g,u=g.userData,mo=killCam.pose.mon,c=killCam.pose.cam;
+  g.rotation.set(mo.pitch,kill.yaw+mo.yaw,mo.roll);g.position.set(0,0,0);g.visible=true;g.updateMatrixWorld(true);
+  const off=u.head?u.head.localToWorld(kill.off.copy(kill.local)):kill.off.set(0,u.headHeight||2,0);
+  const tx=mo.x+mo.follow*c.x,ty=mo.y+mo.follow*c.y,tf=mo.f+mo.follow*c.f;
+  const wx=kill.x+kill.rx*tx+kill.fx*tf,wz=kill.z+kill.rz*tx+kill.fz*tf;
+  const py=lerp(kill.y+ty-off.y,kill.y+mo.drop,clamp01(mo.ground));
+  g.position.set(wx-off.x,py,wz-off.z);
+  kill.face.x=tx;kill.face.f=tf;kill.face.y=py+off.y-kill.y;kill.faceSeen=true;kill.faceAt.set(wx,py+off.y,wz);
+}
+// The kill camera replaces the rig's view; the gun is knocked out of the hands.
+function killView(cam){
+  const c=killCam.pose.cam;killEye();
+  camera.position.copy(kill.eye);camera.rotation.set(c.pitch,kill.yaw+c.yaw,c.roll);cam.fov=c.fov;
+  const g=killCam.pose.fx.gun;
+  if(g>0){gun.position.y-=g*.6;gun.position.x+=g*.14;gun.rotation.z+=g*1.5;gun.rotation.x-=g*.9;if(g>=.999)gun.visible=false;}
+}
+function killPost(u){
+  const f=killCam.pose.fx;
+  u.danger.value=1;u.damage.value=Math.max(u.damage.value,Math.min(1,f.flash*.8+f.red*.45));u.health.value=1-.9*Math.min(1,f.tunnel);
+  u.saturation.value*=1-.85*Math.min(1,f.desat);u.killFlash.value=0;
+  if(u.aberration)u.aberration.value=Math.min(1,f.aberr+f.flash*.3);
+  if(u.slowmo)u.slowmo.value=Math.min(1,f.blur)*(preferences.motion?1:.3);
+}
+// Without the post pipeline the kill grades the canvas itself: drained, hardened, blurred, and warped by a scream.
+function killCss(f){
+  const a=preferences.effects&&preferences.motion?Math.min(1,f.aberr):0,b=Math.min(1,f.blur)*(preferences.motion?1:.3);
+  canvas.style.filter=`saturate(${(1-.8*f.desat).toFixed(3)}) contrast(${(1+.25*f.red).toFixed(3)})${b>.02?` blur(${(b*2.5).toFixed(2)}px)`:''}`;
+  canvas.style.transform=a>.02?`scale(${(1+.05*a).toFixed(3)}) skew(${(a*1.6*Math.sin(t*41)).toFixed(2)}deg,${(a*.9*Math.sin(t*33)).toFixed(2)}deg)`:'';
+}
+function killEnd(){
+  if(!kill.on)return;
+  kill.on=false;kill.hold=false;kill.faceSeen=false;killCam.stop();
+  for(const o of kill.shadows)o.castShadow=true;kill.shadows.length=0;
+  if(killFX)killFX.stop();if(killAudio)killAudio.stop(.35);
+  if(!(fx&&fx.enabled))canvas.style.filter='none';
+  canvas.style.transform='';
+}
+function killSkip(){if(state==='caught'&&kill.on&&killCam.skip())killEvents(killCam.pose);}
+addEventListener('pointerdown',()=>{if(state==='caught')killSkip();});
+addEventListener('keydown',e=>{if(state==='caught'&&!e.repeat&&['Space','Enter','Escape'].includes(e.code))killSkip();});
+function killSnapshot(){
+  const s=killCam.snapshot(),g=caughtBy&&caughtBy.g;
+  return {...s,on:kill.on,hold:kill.hold,line:killCam.pose.line,face:kill.faceSeen?{x:kill.face.x,y:kill.face.y,f:kill.face.f}:null,
+    eye:kill.on?{x:kill.eye.x,y:kill.eye.y,z:kill.eye.z}:null,
+    body:kill.on&&g?{x:g.position.x,y:g.position.y,z:g.position.z,pitch:g.rotation.x,yaw:g.rotation.y,roll:g.rotation.z,visible:g.visible}:null,
+    overlay:killFX?killFX.snapshot():null,audio:killAudio?killAudio.snapshot():null};
 }
 /* ---------- grain ---------- */
 const gc=$('grain').getContext('2d'),gimg=gc.createImageData(256,144);
@@ -1957,6 +2067,7 @@ function updatePostFX(dt){
   u.grain.value=hell?.35:.1;u.vignette.value=hell?.5:.3;
   u.saturation.value=hell?1:1.06;
   u.killFlash.value=fxKill;u.flash.value=fxFlash;
+  if(kill.on)killPost(u);
 }
 function updateHealthVignette(){
   const active=state==='play'||state==='caught'||state==='pause'&&prevState==='play';
@@ -2032,13 +2143,13 @@ function loop(){
       stopAudio();if(droneGain)fadeTo(droneGain,0,2);mouseDown=false;
     }
     if(droneGain){const target=preferences.effects?.025+fuses*.006:.014;droneGain.gain.setTargetAtTime(target,AC.currentTime,1.2);}
-  }else if(state==='caught')updateCaught(dt);
+  }else if(state==='caught')updateCaught(Math.min(.25,rawDt));
   if(NET.inGame){
     if(state!=='play'&&state!=='caught'&&state!=='coopEnd'){elapsed+=rawDt;simulationTime+=dt;updateRooms(dt);updateThreats(dt);}
     netTick(dt);
   }
   if(state==='play'||state==='caught'||(NET.inGame&&state!=='coopEnd'))monsters.forEach(m=>animateMonster(m,sdt));
-  if(state==='caught')camFX.addTrauma(1);
+  if(kill.on&&state!=='caught'&&state!=='dead')killEnd();
   if(!['menu','pause','dead','win','coopEnd'].includes(state))updateCameraRig(dt);
   updateGun(dt);updatePuffs(dt);
   if(msgTimer>0){msgTimer-=dt;if(msgTimer<=0)$('msg').style.opacity=0;}
@@ -2051,6 +2162,7 @@ function loop(){
     camera.rotation.set(P.pitch+cam.rot.pitch,P.yaw+cam.rot.yaw,cam.rot.roll);
     camera.position.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
     camera.translateX(cam.pos.x);camera.translateY(cam.pos.y);camera.translateZ(cam.pos.z);
+    if(state==='caught'&&kill.on)killView(cam);
   }
   baseFov=lerp(baseFov,aiming&&!reloadT&&!P.running?55:72,1-Math.exp(-dt*10));
   const fov=baseFov+(spectating?0:cam.fov);
@@ -2826,10 +2938,9 @@ function audioOnKill(info){
   const r=info.result;playStinger(info.headshot?'headshot':'kill',m.kind);
   if(r&&(r.count>=2||r.label==='WARDEN DOWN'))playStinger('streak',r.label);
 }
-// The killing blow: a cry under the scare hit, then a Stalker or Shrieker laughs over the body.
+// The killing blow lands under the scare hit; the kill sequence (HollowKillAudio) plays the rest.
 function audioOnCaught(m){
-  if(playerAudio){playerAudio.hurt(100);playStinger('scare','caught');}
-  if(m.kind==='stalker'||m.kind==='shrieker')audioAfter(rnd(.5,.7),()=>sCreature(m,'laugh'));
+  if(playerAudio)playStinger('scare','caught');
 }
 
 /* chaos director events (I1b calls this for every event) */
@@ -3013,6 +3124,7 @@ function snapshot(){return {
   viewmodel:{weapons:weaponModels.filter(model=>model.visible).map(model=>model.userData.kind),torch:torch.visible},
   player:{speed:Math.hypot(P.vel.x,P.vel.z),sprint:P.sprint,stamina:P.stamina,exhausted:P.exhausted,sliding:slideT>0,strafe:P.strafe},
   camera:{...camFX.snapshot(),y:camFX.pose.pos.y,x:camFX.pose.pos.x,roll:camFX.pose.rot.roll,pitch:camFX.pose.rot.pitch,fovAdd:camFX.pose.fov,fov:camera.fov,weaponZ:camFX.pose.weapon.z},
+  kill:killSnapshot(),
   injury:RULES.injuryLevel(P.health),audio:creatureAudio?creatureAudio.snapshot():null,
   playerAudio:playerAudio?playerAudio.snapshot():null,weaponAudio:weaponAudio?weaponAudio.snapshot():null,audioLog:audioLog.slice(),bodyDuck:bodyBus&&AC.currentTime<duckEnd?duckDepth:1,
     horror:{...horror.snapshot(),effects:preferences.effects,notesRead:readNotes.size},
@@ -3062,6 +3174,12 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     health:value=>{P.health=finiteNumber(value,100,0,100);damageT=0;},torch:value=>{torchOn=value;},
     advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateCameraRig(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));}updateHUD();updateHealthVignette();},
     hit:(index,damage)=>hitMonster(monsters[index],damage),
+    // Kill sequences: slot `index` (placed at x, z when given) kills the survivor with `kind`'s track (its own by
+    // default). hold freezes the kill clock for advanceCaught, which steps it exactly.
+    kill:(index,o={})=>{const m=monsters[index];if(state!=='play'||!m)return state;if(Number.isFinite(o.x))window.HollowTest.enemy(index,{x:o.x,z:o.z,state:'chase',yaw:o.yaw||0});
+      kill.hold=false;killKind=o.kind||null;P.health=0;damageT=0;grace=0;caught(m);killKind=null;kill.hold=!!o.hold;return state;},
+    killHold:value=>{kill.hold=!!value;},killSkip,
+    advanceCaught:seconds=>{let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='caught'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;updateCaught(dt,true);if(caughtBy)animateMonster(caughtBy,dt);}return killSnapshot();},
     action:inputAction,pause,quality:applyQuality,pickupReach,
     path:(index,x,z)=>{setPathTo(monsters[index],x,z);return monsters[index].path.map(cell=>cell.slice());},
     navClear:(ax,az,bx,bz,radius)=>movementClear(ax,az,bx,bz,radius),
