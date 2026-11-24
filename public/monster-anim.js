@@ -3,7 +3,11 @@
    preallocated pose of ADDITIVE joint Euler offsets (on top of userData.restPose) plus a root offset in the
    monster's local frame (+z forward, +x its left; apply with rotation order 'YXZ'). Springs and blends use exact
    closed forms and intermittent behaviour is a pure function of time, so 30/60/144 fps agree and every seed is
-   deterministic. Disturbing motion (twitches, head snaps, spasms, shudder) only runs when `effects` is true. */
+   deterministic. Disturbing motion (twitches, head snaps, spasms, shudder) only runs when `effects` is true.
+   Optional hit detail (hitzones.js): hit({ region, strength 0..2, side, kneel, kneelSide, kneelTime }) reacts where the
+   round landed (head snaps, arms fling, knees buckle into a limp or drop to one knee, gut shots double over, rapid hits
+   stack into stumbles) and die({ force 0..3, region, gib }) carries the killing blow's momentum into the fall. Calls
+   without those fields behave exactly as before. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else if (typeof define === 'function' && define.amd) define([], factory);
@@ -274,19 +278,30 @@
     RV[R_LOW] = part < lo ? part : lo;
   }
 
-  // Hit-reaction spring slots: [group, omega, zeta]; groups share coefficients.
-  const SPRINGS = [[0, 12, .45], [1, 16, .38], [2, 10, .35], [3, 14, .5], [4, 9, .7]];
-  const S_PITCH = 0, S_ROLL = 1, S_X = 2, S_Z = 3, S_NECKX = 4, S_NECKZ = 5, S_ARMX = 6, S_ARMZ = 7, S_JAW = 8, S_KNEE = 9, S_N = 10;
-  const S_GROUP = [0, 0, 4, 4, 1, 1, 2, 2, 3, 4];
+  // Hit-reaction spring slots: [group, omega, zeta]; groups share coefficients. Slots from S_YAW on only move for hits
+  // that name a body region (hit({ region })): the torso twisting off a shoulder, one arm flung, one knee buckling, the
+  // head snapping sideways, the body sagging.
+  const SPRINGS = [[0, 12, .45], [1, 16, .38], [2, 10, .35], [3, 14, .5], [4, 9, .7], [5, 7, .55], [6, 9, .28], [7, 14, .3]];
+  const S_PITCH = 0, S_ROLL = 1, S_X = 2, S_Z = 3, S_NECKX = 4, S_NECKZ = 5, S_ARMX = 6, S_ARMZ = 7, S_JAW = 8, S_KNEE = 9;
+  const S_YAW = 10, S_ALX = 11, S_ALZ = 12, S_ARX = 13, S_ARZ = 14, S_KL = 15, S_KR = 16, S_HY = 17, S_HZ = 18, S_DROP = 19, S_N = 20;
+  const S_GROUP = [0, 0, 4, 4, 1, 1, 2, 2, 3, 4, 2, 6, 6, 6, 6, 3, 3, 7, 7, 5];
+  // hit()/die() region names (hitzones.js): head, neck, chest, gut, armL, armR, legL, legR.
+  const REGION = Object.freeze({ head: 0, neck: 1, chest: 2, gut: 3, armL: 4, armR: 5, legL: 6, legR: 7 });
+  const regionIndex = r => typeof r === 'string' && Object.prototype.hasOwnProperty.call(REGION, r) ? REGION[r] : -1;
   // Per-instance float state slots: clock, gait phase/cadence, smoothed speed (+velocity) and turn, state weights,
   // event timers, mouth, step intensity and death clock. The rest are per-frame scratch values handed between update
   // stages (passing doubles as arguments would box them).
   const I_CLOCK = 0, I_PHASE = 1, I_CAD = 2, I_SPD = 3, I_SPDV = 4, I_TURN = 5, I_MOVE = 6, I_STALK = 7, I_CHASE = 8;
   const I_SEARCH = 9, I_WATCH = 10, I_LUNGE = 11, I_STAG = 12, I_ATK = 13, I_SCR = 14, I_MOUTH = 15, I_STEP = 16;
   const I_DEATH = 17, I_DT = 18, I_T = 19, I_SIN = 20, I_TURNIN = 21, I_LUNGEIN = 22, I_STAGIN = 23, I_RUN = 24;
-  const I_STRIDE = 25, I_ROFF = 26, I_FREEZE = 27, I_BANK = 28, I_TD = 29, I_RISE = 30, I_RDUR = 31, I_RLOW = 32, I_N = 33;
+  const I_STRIDE = 25, I_ROFF = 26, I_FREEZE = 27, I_BANK = 28, I_TD = 29, I_RISE = 30, I_RDUR = 31, I_RLOW = 32;
+  // Hits: stacking heat, the kneel and gut-fold clocks (-1 idle), per-leg limps, the killing blow's force.
+  const I_HEAT = 33, I_KNEEL = 34, I_KDUR = 35, I_LIMPL = 36, I_LIMPR = 37, I_FOLD = 38, I_FOLDA = 39, I_BLAST = 40, I_HITS = 41;
+  const I_KW = 42, I_FW = 43, I_N = 44;
+  // Region reactions [torso flinch scale, impulse gain]: the torso shove is smaller for limb and head hits.
+  const REGION_BODY = [.45, .65, 1.1, .85, .45, .45, .55, .55];
   const DQ_ROWS = 5, DQ_OUT = DQ_ROWS * 6;
-  const S_LIMIT = [.75, .6, .35, .35, 1.25, .8, 1.1, .9, .7, .9];
+  const S_LIMIT = [.75, .6, .35, .35, 1.25, .8, 1.1, .9, .7, .9, .7, 1.4, 1.1, 1.4, 1.1, 1, 1, .9, .7, .35];
 
   function create(kind, opts) {
     const name = Object.prototype.hasOwnProperty.call(KINDS, kind) ? kind : 'stalker', K = KINDS[name];
@@ -311,10 +326,17 @@
     const ms = new Float64Array(I_N);
     let rand, attackSide, screamDur, effectsLast, footsteps;
     let dying, settled, mode, sgn, twist, fx, fz, rollF, headTurn, headshot, Tfall, side2, limp, tilt0, keyRows = 0;
+    // Region hits: any region spring moving, the kneeling leg, the last region hit, the death's region/gib/buckling knee.
+    let wounded = false, kneelLeft = false, hitRegion = -1, deathRegion = -1, gibbed = false, buckle = -1;
+    // The rest pose's lowest point: a kneeling body is lowered until its lowest point (a knee) is back at this height.
+    RV[R_SCALE] = scale; lowestCh(rig, c, null);
+    const restLow = RV[R_LOW];
 
     function reset() {
       rand = seeded(seed);
       ms.fill(0);
+      ms[I_KNEEL] = -1; ms[I_FOLD] = -1;
+      wounded = false; kneelLeft = false; hitRegion = -1; deathRegion = -1; gibbed = false; buckle = -1;
       ms[I_PHASE] = rand(); ms[I_CAD] = K.cadence[0];
       ms[I_ATK] = -1; attackSide = rand() < .5 ? -1 : 1; ms[I_SCR] = -1; screamDur = 1.2; effectsLast = true;
       footsteps = 0;
@@ -333,9 +355,12 @@
       const pL = ms[I_PHASE], pR = ms[I_PHASE] - rOff < 0 ? ms[I_PHASE] - rOff + 1 : ms[I_PHASE] - rOff;
       // Leg cycle (p = 0 at the heel strike): linear stance sweep (planted foot), eased swing with knee lift.
       for (let side = 0; side < 2; side++) {
-        const p = side ? pR : pL, a = side ? A : A * limp;
-        if (p < sig) { const u = p / sig; c[side ? LR : LL] += -a + 2 * a * u; c[side ? KR : KL] += kLd * Math.sin(PI * u); }
-        else {
+        // A wounded leg (ms limp) takes a shorter step, and the hips drop and roll onto it while it carries the weight.
+        const hurt = ms[side ? I_LIMPR : I_LIMPL], p = side ? pR : pL, a = (side ? A : A * limp) * (1 - .45 * hurt);
+        if (p < sig) {
+          const u = p / sig; c[side ? LR : LL] += -a + 2 * a * u; c[side ? KR : KL] += kLd * Math.sin(PI * u);
+          if (hurt > .01) { const b = Math.sin(PI * u) * hurt * mv; c[RY] -= .07 * scale * b; c[RR] += (side ? -.1 : .1) * b; c[side ? KR : KL] += .25 * b; }
+        } else {
           const u = (p - sig) / (1 - sig);
           c[side ? LR : LL] += a - 2 * a * (.5 - .5 * Math.cos(PI * u)); c[side ? KR : KL] += kSw * Math.sin(PI * Math.pow(u, .78));
         }
@@ -389,10 +414,10 @@
         if (p < sig) { const u = p / sig; sweep = 1 - 2 * u; up = 0; }
         else { const u = (p - sig) / (1 - sig); sweep = -1 + 2 * (.5 - .5 * Math.cos(PI * u)); up = Math.pow(Math.sin(PI * u), .8); }
         if (pair === 0) {                                   // legL + armR
-          c[LL] -= sweep * sw * limp; c[LL + 2] -= up * lf; c[KL] -= up * tk;
+          c[LL] -= sweep * sw * limp * (1 - .45 * ms[I_LIMPL]); c[LL + 2] -= up * lf; c[KL] -= up * tk;
           c[AR] -= up * al + sweep * k.armSweep * mv; c[AR + 2] += up * lf * .5; c[ER] -= up * tk * .5;
         } else {                                            // legR + armL
-          c[LR] -= sweep * sw; c[LR + 2] += up * lf; c[KR] -= up * tk;
+          c[LR] -= sweep * sw * (1 - .45 * ms[I_LIMPR]); c[LR + 2] += up * lf; c[KR] -= up * tk;
           c[AL] -= up * al + sweep * k.armSweep * mv; c[AL + 2] -= up * lf * .5; c[EL] -= up * tk * .5;
         }
       }
@@ -593,6 +618,39 @@
           c[RY] -= .07 * scale * ms[I_STAG]; c[RR] += wob * .3 * ms[I_STAG];
         }
       }
+      // Gut shot: doubles over, hands clutching the wound, knees giving a little.
+      ms[I_FW] = 0;
+      if (ms[I_FOLD] >= 0) {
+        ms[I_FOLD] += dt;
+        const t = ms[I_FOLD], D = .9 + .4 * ms[I_FOLDA];
+        if (t >= D) ms[I_FOLD] = -1;
+        else {
+          const w = ms[I_FW] = ms[I_FOLDA] * smooth(0, .11, t) * (1 - smooth(D * .4, D, t));
+          if (quad) { c[RP] += .22 * w; c[NK] -= .3 * w; c[RY] -= .07 * scale * w; c[AL] -= .35 * w; c[AR] -= .35 * w; c[KL] += .3 * w; c[KR] += .3 * w; }
+          else {
+            c[RP] += .62 * w; c[NK] -= .3 * w; c[JW] += .3 * w; c[RY] -= .1 * scale * w;
+            c[AL] += (-.8 - c[AL]) * w * .8; c[AR] += (-.75 - c[AR]) * w * .8; c[EL] += (-1.35 - c[EL]) * w * .8; c[ER] += (-1.25 - c[ER]) * w * .8;
+            c[AL + 2] += .3 * w; c[AR + 2] -= .3 * w; c[KL] += .4 * w; c[KR] += .35 * w;
+          }
+        }
+      }
+      // Down on one knee (a leg blown out from under it): the kneeling thigh hangs straight with the shin flat behind it,
+      // the other foot stays planted in front, a hand drops to the wound. reactions() lowers the body onto the knee.
+      ms[I_KW] = 0;
+      if (ms[I_KNEEL] >= 0) {
+        ms[I_KNEEL] += dt;
+        const t = ms[I_KNEEL], D = ms[I_KDUR];
+        if (t >= D || quad) ms[I_KNEEL] = -1;
+        else {
+          const w = ms[I_KW] = smooth(0, .2, t) * (1 - smooth(D - .55, D, t)), jolt = bump(t, .12, .42);
+          const dn = kneelLeft ? LL : LR, up = kneelLeft ? LR : LL, dk = kneelLeft ? KL : KR, uk = kneelLeft ? KR : KL;
+          const ha = kneelLeft ? AL : AR, he = kneelLeft ? EL : ER, oa = kneelLeft ? AR : AL, s = kneelLeft ? -1 : 1;
+          c[dn] += (.05 - c[dn]) * w; c[dk] += (1.62 - c[dk]) * w; c[dn + 2] += (s * .08 - c[dn + 2]) * w;
+          c[up] += (-1.4 - c[up]) * w; c[uk] += (1.45 - c[uk]) * w; c[up + 2] += (-s * .12 - c[up + 2]) * w;
+          c[RP] += (.3 + .12 * jolt) * w; c[RR] += -s * .08 * w; c[NK] -= (.25 - .3 * jolt) * w; c[JW] += .25 * w;
+          c[ha] += (-.45 - c[ha]) * w; c[he] += (-.7 - c[he]) * w; c[oa + 2] += -s * .35 * w; c[oa] += (-.25 - c[oa]) * w * .6;
+        }
+      }
     }
 
     // Effects-only life: twitches, head jerks while sprinting, micro-twitches under a stare.
@@ -628,11 +686,30 @@
       c[NK] += sx[S_NECKX]; c[NK + 2] += sx[S_NECKZ]; c[HD] += sx[S_NECKX] * .35;
       c[AL] += sx[S_ARMX]; c[AR] += sx[S_ARMX] * .85; c[AL + 2] -= sx[S_ARMZ]; c[AR + 2] += sx[S_ARMZ];
       c[JW] += Math.max(0, sx[S_JAW]); c[KL] += sx[S_KNEE]; c[KR] += sx[S_KNEE] * .8;
+      if (wounded) {
+        // Region hits: the torso twists off the struck shoulder, a struck arm is flung (forearm flopping), a struck
+        // knee buckles (thigh forward so the foot stays under), the head snaps sideways, the body sags.
+        c[RW] += sx[S_YAW];
+        c[AL] += sx[S_ALX]; c[AL + 2] += sx[S_ALZ]; c[AR] += sx[S_ARX]; c[AR + 2] += sx[S_ARZ];
+        c[EL] -= .5 * Math.abs(sx[S_ALX]) + .3 * Math.abs(sx[S_ALZ]); c[ER] -= .5 * Math.abs(sx[S_ARX]) + .3 * Math.abs(sx[S_ARZ]);
+        if (quad) { c[KL] += .6 * sx[S_KL]; c[KR] += .6 * sx[S_KR]; c[LL + 2] -= .4 * sx[S_KL]; c[LR + 2] += .4 * sx[S_KR]; }
+        else { c[KL] += sx[S_KL]; c[KR] += sx[S_KR]; c[LL] -= .45 * sx[S_KL]; c[LR] -= .45 * sx[S_KR]; }
+        c[HD + 1] += sx[S_HY]; c[HD + 2] += sx[S_HZ]; c[NK + 1] += .4 * sx[S_HY];
+        c[RY] -= sx[S_DROP] * scale;
+        const l = Math.exp(-.2 * dt);
+        ms[I_LIMPL] *= l; ms[I_LIMPR] *= l;
+      }
+      ms[I_HEAT] *= Math.exp(-1.6 * dt);
       if (!quad) {
         const lp = c[RP], lr = c[RR] - ms[I_BANK];
         c[LL] -= lp; c[LR] -= lp; c[LL + 2] -= lr; c[LR + 2] -= lr;
       }
       pivot();
+      // Kneeling: rest the body on its lowest point (the knee) instead of the hips' standing height.
+      if (ms[I_KW] > 0) {
+        RV[R_SCALE] = scale; lowestCh(rig, c, null);
+        c[RY] += ms[I_KW] * (restLow - c[RY] - RV[R_LOW]);
+      }
     }
 
     // --- death ---------------------------------------------------------------------------------------------------
@@ -643,21 +720,28 @@
       let lx = dx * Math.cos(yaw) - dz * Math.sin(yaw), lz = dx * Math.sin(yaw) + dz * Math.cos(yaw);
       const len = Math.hypot(lx, lz);
       if (len < 1e-6) { lx = 0; lz = -1; } else { lx /= len; lz /= len; }
-      dying = true; ms[I_DEATH] = 0; ms[I_RDUR] = 0; settled = false; headshot = flag(o.headshot);
+      // Optional killing-blow detail (hitzones.js verdict), only used when given: force 0..3 of momentum (a blast throws
+      // the body along the shot, faster and further), the region (a leg shot pitches it forward over the buckling knee)
+      // and gib (the head destroyed: it drops like its strings were cut).
+      const force = clamp(num(o.force), 0, 3), ri = regionIndex(o.region);
+      const legs = !quad && (ri === REGION.legL || ri === REGION.legR) && force < 2.2;
+      gibbed = flag(o.gib); deathRegion = ri; ms[I_BLAST] = force; buckle = legs ? (ri === REGION.legL ? KL : KR) : -1;
+      dying = true; ms[I_DEATH] = 0; ms[I_RDUR] = 0; settled = false; headshot = flag(o.headshot) || gibbed;
       for (let i = 0; i < CH; i++) from[i] = cur[i];
       const D = K.death;
       side2 = rand() < .5 ? -1 : 1;
       if (quad) {
-        mode = MODES.roll; Tfall = headshot ? D.hsT : D.T;
+        mode = MODES.roll; Tfall = (headshot ? D.hsT : D.T) * (gibbed ? .88 : 1) / (1 + .15 * force);
         // Roll so the top moves along the bullet's sideways push (top toward +x needs negative roll).
         sgn = Math.abs(lx) > .25 ? (lx > 0 ? -1 : 1) : side2;
         fx = lx; fz = lz; twist = clamp(lx * lz, -.5, .5) * .6;
       } else {
-        const front = lz > .12 ? true : lz < -.12 ? false : side2 > 0;
+        const front = legs ? true : lz > .12 ? true : lz < -.12 ? false : force > 1 ? lz >= 0 : side2 > 0;
         mode = front ? MODES.front : MODES.back; sgn = front ? 1 : -1;
-        twist = clamp(front ? Math.atan2(lx, lz) : Math.atan2(-lx, -lz), -D.twist, D.twist);
+        twist = legs ? clamp(Math.atan2(lx, Math.abs(lz) + .3) * .6, -D.twist, D.twist)
+          : clamp(front ? Math.atan2(lx, lz) : Math.atan2(-lx, -lz), -D.twist, D.twist);
         fx = front ? Math.sin(twist) : -Math.sin(twist); fz = front ? Math.cos(twist) : -Math.cos(twist);
-        Tfall = headshot ? D.hsT : D.T;
+        Tfall = (headshot ? D.hsT : D.T) * (gibbed ? .88 : 1) / (1 + .15 * force);
       }
       rollF = (rand() - .5) * .14; headTurn = (rand() < .5 ? -1 : 1) * (.8 + .2 * rand());
       // Keyframed channels, evaluated by deathPose every frame: the crawler's neck; a biped's arms (x), elbows, neck,
@@ -695,21 +779,26 @@
     // contact in deathPose, so the body always rests on whatever touches first (toes, knees, chest).
     function bipedDeath(effects) {
       const t = ms[I_TD], D = K.death, F = sgn > 0 ? D.front : D.back, T = Tfall, hs = headshot, front = sgn > 0;
-      const tr = hs ? .2 : .14, psiR = hs ? .05 : D.recoil, tilt = F.tilt;
+      const f = ms[I_BLAST], cut = gibbed || deathRegion === REGION.head;
+      const tr = hs ? .2 : .14, psiR = (hs ? .05 : D.recoil) + .07 * f, tilt = F.tilt;
       let psi;
       if (t < tr) { const u = t / tr; psi = psiR * (hs ? u * u : 1 - (1 - u) * (1 - u)); }
       else if (t < T) psi = psiR + (tilt - psiR) * Math.pow((t - tr) / (T - tr), hs ? 2.5 : 2.2);
       else psi = tilt - D.bounce * bump(t, T, T + .3);
       const land = smooth(T - .04, T + .14, t);
-      const cr = (hs ? smooth(0, .2, t) : D.crumple * smooth(.04, .45, t)) * (1 - land);
+      const cr = (hs ? smooth(0, gibbed ? .13 : .2, t) * (gibbed ? 1.3 : 1) : D.crumple * smooth(.04, .45, t)) * (1 - land);
       c[RP] = sgn * psi; c[RW] = twist * smooth(.05, T + .05, t); c[RR] = rollF * smooth(.1, T, t);
       c[RY] = -D.sink * scale * land;
-      const slide = D.slide * scale * smooth(.05, T + .1, t);
+      // A blast lifts the body off its feet as it throws it; a destroyed head drops it almost where it stood.
+      if (f > 0) c[RY] += .05 * f * scale * bump(t, .02, T * .85);
+      const slide = D.slide * scale * smooth(.05, T + .1, t) * (1 + .45 * f) * (cut ? .3 : 1);
       c[RX] = -fx * slide; c[RZ] = -fz * slide;
       // Legs buckle, then settle into the fitted corpse pose.
       c[LL] = -.72 * cr + F.legs * land; c[LR] = -.6 * cr * limp + F.legs * .9 * land;
       c[KL] = cr + F.knees * land; c[KR] = .85 * cr + F.knees * 1.2 * land;
       c[LL + 2] = -.14 * land; c[LR + 2] = .14 * land;
+      // Shot through a leg: that knee folds first and the body pitches forward over it.
+      if (buckle >= 0) { const b = smooth(0, .1, t) * (1 - land); c[buckle] += .9 * b; c[buckle === KL ? LL : LR] -= .45 * b; }
       // Limp arms lag the toppling torso (trailing away from the floor), land just after it and bounce off it.
       const slap = bump(t, T + .06, T + .3) * (front ? .14 : -.14);
       const ax = dq[DQ_OUT], ex = dq[DQ_OUT + 1], nx = dq[DQ_OUT + 2], jw = dq[DQ_OUT + 3], az = dq[DQ_OUT + 4];
@@ -727,8 +816,9 @@
       const psi = D.roll * smooth(.06, T, t) - .06 * bump(t, T, T + .28);
       const sp = Math.sin(Math.min(Math.abs(psi), HALF));
       c[RR] = sgn * psi; c[RP] = D.pitch * smooth(0, T, t); c[RW] = twist * smooth(0, T, t);
-      c[RY] = D.hop * scale * bump(t, 0, .34) * (1 - sp);
-      c[RX] = -sgn * D.slide * scale * smooth(.05, T + .1, t); c[RZ] = fz * .08 * scale * smooth(0, T, t);
+      const f = ms[I_BLAST];
+      c[RY] = D.hop * scale * bump(t, 0, .34) * (1 - sp) * (1 + .9 * f);
+      c[RX] = -sgn * D.slide * scale * smooth(.05, T + .1, t) * (1 + .6 * f); c[RZ] = fz * .08 * scale * smooth(0, T, t) * (1 + 2 * f);
       const splay = .35 * bump(t, 0, .3), under = smooth(.04, T * .8, t), over = smooth(.2, T + .4, t);
       // sigma: -1 for L limbs, +1 for R; the underside is the R side when rolling with sgn < 0.
       for (let i = 0; i < 4; i++) {
@@ -750,7 +840,9 @@
       const env = smooth(T + .05, T + .2, t) * (1 - smooth(T + .6, T + 1.6, t));
       if (env <= 0) return;
       NZ[NZ_T] = t; twitches(6, 3, seed ^ 0x51ed27);
-      const a = NZ[0] * env, b = NZ[1] * env, d = NZ[2] * env;
+      // A destroyed head (or a killing headshot reported with its region) leaves the body jerking harder.
+      const v = gibbed ? 1.6 : deathRegion === REGION.head ? 1.3 : 1;
+      const a = NZ[0] * env * v, b = NZ[1] * env * v, d = NZ[2] * env * v;
       if (legs) {
         c[KL + 2] += .35 * a; c[KR + 2] -= .3 * b; c[EL + 2] += .3 * d; c[ER + 2] -= .35 * a;
         c[LL] += .2 * b; c[AR] += .2 * d;
@@ -811,7 +903,7 @@
         j.x = clamp(c[o], -PI, PI); j.y = clamp(c[o + 1], -PI, PI); j.z = clamp(c[o + 2], -PI, PI);
       }
       const r = pose.root;
-      r.x = clamp(c[RX], -H, H); r.z = clamp(c[RZ], -H, H); r.y = clamp(c[RY], -.2, H);
+      r.x = clamp(c[RX], -H, H); r.z = clamp(c[RZ], -H, H); r.y = clamp(c[RY], ms[I_KW] > 0 ? -.4 * H : -.2, H);
       r.pitch = clamp(c[RP], -1.7, 1.7); r.roll = clamp(c[RR], -1.7, 1.7); r.yaw = clamp(c[RW], -PI, PI);
       pose.footstep = foot; pose.stepIntensity = foot ? ms[I_STEP] : 0;
       const open = quad ? ms[I_MOUTH] : (c[JW] - K.jaw[0] * .5) / K.jawMax;
@@ -855,14 +947,55 @@
       let lx = dx * Math.cos(yaw) - dz * Math.sin(yaw), lz = dx * Math.sin(yaw) + dz * Math.cos(yaw);
       const len = Math.hypot(lx, lz);
       if (len < 1e-6) { lx = 0; lz = -1; } else { lx /= len; lz /= len; }
-      const strength = o.strength === undefined || o.strength === null ? 1 : clamp(num(o.strength), 0, 1);
-      const soft = effectsLast ? 1 : .6, hs = flag(o.headshot);
-      const k = strength * K.flinch * soft, kh = strength * (hs ? K.headFlinch : K.flinch) * (effectsLast ? 1 : .45);
+      // region (hitzones.js names) picks the reaction and allows strength up to 2 (a magnum, a point-blank blast).
+      const ri = regionIndex(o.region);
+      const strength = o.strength === undefined || o.strength === null ? 1 : clamp(num(o.strength), 0, ri < 0 ? 1 : 2);
+      const soft = effectsLast ? 1 : .6, hs = flag(o.headshot) || ri === REGION.head;
+      // Rapid hits stack: past a little heat every new one lands harder (with a seeded jitter, so no two match).
+      const heat = ms[I_HEAT];
+      ms[I_HEAT] = Math.min(6, heat + strength); ms[I_HITS] += 1;
+      const jit = ri < 0 ? 0 : hash(ms[I_HITS], 101, seed), amp = ri < 0 ? 1 : Math.min(1.8, 1 + .35 * Math.max(0, heat - 1.2)) * (1 + .15 * jit);
+      const body = ri < 0 ? 1 : REGION_BODY[ri];
+      const k = strength * K.flinch * soft * amp, kh = strength * (hs ? K.headFlinch : K.flinch) * (effectsLast ? 1 : .45) * amp, kb = k * body;
       // Pushed along the bullet: from the front the torso snaps back, from the side it rolls away.
-      sv[S_PITCH] += lz * 6.5 * k; sv[S_ROLL] -= lx * 5 * k;
-      sv[S_X] += lx * .9 * k; sv[S_Z] += lz * .9 * k;
+      sv[S_PITCH] += lz * 6.5 * kb; sv[S_ROLL] -= lx * 5 * kb;
+      sv[S_X] += lx * .9 * kb; sv[S_Z] += lz * .9 * kb;
       sv[S_NECKX] += lz * (hs ? 24 : 6) * kh; sv[S_NECKZ] -= lx * (hs ? 10 : 5) * kh;
-      sv[S_ARMX] += lz * 5.5 * k; sv[S_ARMZ] += 3 * k; sv[S_JAW] += 7 * k; sv[S_KNEE] += 3.2 * k;
+      sv[S_ARMX] += lz * 5.5 * kb; sv[S_ARMZ] += 3 * kb; sv[S_JAW] += 7 * kb; sv[S_KNEE] += 3.2 * kb;
+      if (ri >= 0) {
+        wounded = true; hitRegion = ri;
+        // side: which half of the body the round struck (-1 the armL/legL half, +1 the other), for the twist.
+        const side = ri === REGION.armL || ri === REGION.legL ? -1 : ri === REGION.armR || ri === REGION.legR ? 1 : num(o.side) < 0 ? -1 : 1;
+        if (ri === REGION.head) { sv[S_HY] += lx * 7 * kh; sv[S_HZ] -= lx * 8 * kh + side * 2 * kh; sv[S_JAW] += 5 * k; }
+        else if (ri === REGION.neck) { sv[S_NECKZ] -= lx * 6 * kh; sv[S_HZ] += side * 7 * kh; sv[S_NECKX] += lz * 8 * kh; sv[S_JAW] += 9 * k; }
+        else if (ri === REGION.chest) sv[S_YAW] -= side * lz * 4 * k;
+        else if (ri === REGION.gut) {
+          // A fold already under way deepens instead of restarting.
+          const a = clamp(.5 + .3 * strength, 0, 1.1) * (quad ? .8 : 1) * Math.min(1, K.flinch * 1.6);
+          if (ms[I_FOLD] < 0 || ms[I_FOLD] > .25) ms[I_FOLD] = 0;
+          ms[I_FOLDA] = Math.min(1.2, Math.max(ms[I_FW], a) + (ms[I_FOLD] > 0 ? .15 * a : 0));
+          sv[S_DROP] += 1.2 * k;
+        } else if (ri === REGION.armL || ri === REGION.armR) {
+          const L = ri === REGION.armL;
+          sv[L ? S_ALX : S_ARX] -= lz * 9 * k; sv[L ? S_ALZ : S_ARZ] += lx * 7 * k + side * 2.5 * k; sv[S_YAW] -= side * lz * 5 * k;
+        } else {
+          const L = ri === REGION.legL;
+          sv[L ? S_KL : S_KR] += 10 * k; sv[S_DROP] += 2.2 * k; sv[S_ROLL] += (L ? 3 : -3) * k;
+          ms[L ? I_LIMPL : I_LIMPR] = Math.min(1, ms[L ? I_LIMPL : I_LIMPR] + .4 * strength * Math.min(1, K.flinch * 1.6));
+        }
+        // Stacked hits past a threshold become a stumble: a knee goes, the body lurches along the shots.
+        const over = Math.min(1, Math.max(0, heat + strength - 2.4) / 2);
+        if (over > 0) { sv[jit < 0 ? S_KL : S_KR] += 6 * over * K.flinch; sv[S_DROP] += 1.4 * over * K.flinch; sv[S_PITCH] += lz * 3 * over * K.flinch; }
+      }
+      // Down on one knee: the caller decides when a leg shot is heavy enough (hitzones.js verdict().kneel).
+      if (!quad && flag(o.kneel)) {
+        kneelLeft = o.kneelSide === 'legL' ? true : o.kneelSide === 'legR' ? false : ri === REGION.legL ? true : ri === REGION.legR ? false : lx < 0;
+        const d = clamp(positive(o.kneelTime, 1.6), .8, 4);
+        // Already down: stay down for the new time instead of dropping again.
+        if (ms[I_KNEEL] >= .2) { ms[I_KDUR] = Math.max(ms[I_KDUR], ms[I_KNEEL] + d - .2); }
+        else { ms[I_KNEEL] = 0; ms[I_KDUR] = d; }
+        wounded = true;
+      }
       for (let i = 0; i < S_N; i++) sv[i] = out(sv[i], 40);
     }
 
@@ -900,7 +1033,11 @@
         lunge: ms[I_LUNGE], stagger: ms[I_STAG], scream: ms[I_SCR] >= 0 ? 1 : 0, attack: ms[I_ATK] >= 0 ? 1 : 0,
         dying: dying && !settled ? 1 : 0, dead: dying ? 1 : 0, deathT: dying ? ms[I_DEATH] : 0, deathMode: mode,
         fall: dying ? sgn : 0, headshot: headshot ? 1 : 0, settled: settled ? 1 : 0, time: ms[I_CLOCK], mouth: pose.mouth,
-        rising: ms[I_RDUR] > 0 ? 1 : 0, rise: ms[I_RDUR] > 0 ? ms[I_RISE] / ms[I_RDUR] : 0
+        rising: ms[I_RDUR] > 0 ? 1 : 0, rise: ms[I_RDUR] > 0 ? ms[I_RISE] / ms[I_RDUR] : 0,
+        // Region hits (hit({ region }) / die({ force, region, gib })): region is an index into REGIONS (-1 none).
+        heat: ms[I_HEAT], kneeling: ms[I_KNEEL] >= 0 ? 1 : 0, kneel: ms[I_KW], limpL: ms[I_LIMPL], limpR: ms[I_LIMPR],
+        fold: ms[I_FOLD] >= 0 ? ms[I_FW] : 0, deathForce: dying ? ms[I_BLAST] : 0, gib: dying && gibbed ? 1 : 0,
+        region: dying ? deathRegion : hitRegion
       };
     }
 
@@ -947,5 +1084,6 @@
     return num(r.y) + RV[R_LOW];
   }
 
-  return Object.freeze({ create, apply, lowest, KINDS, JOINTS, STATES, MODES });
+  const REGIONS = Object.freeze(Object.keys(REGION));
+  return Object.freeze({ create, apply, lowest, KINDS, JOINTS, STATES, MODES, REGIONS });
 });
