@@ -248,7 +248,7 @@ test('the B1 shutter leads down to B2 with everything carried; death there retri
   expect(await snapshot(page)).toMatchObject({floorCode:'B2',owned:['rifle','pistol'],weapon:'rifle',health:60,mag:30});
 });
 
-test('kills bank across floors, and getting out of B3 records the whole run and clears the saved checkpoint',async({page})=>{
+test('kills bank across floors, and B3\'s surface floodgate leads up into the S1 garden with the run and a new checkpoint',async({page})=>{
   await ready(page);await start(page);
   // A shotgun headshot on a crawler down B1's central spine (tests/dopamine.spec.js) scores before the descent.
   const kill=await page.evaluate(()=>{
@@ -282,16 +282,24 @@ test('kills bank across floors, and getting out of B3 records the whole run and 
   await expect.poll(async()=>(await snapshot(page)).exitPowered).toBe(true);
   const open=await page.evaluate(()=>{for(let i=0;i<3;i++)HollowTest.advance(10);HollowTest.pose({x:100.5,z:100.5,yaw:-Math.PI/2});return HollowGame.snapshot();});
   expect(open.exitOpen).toBe(true);expect(open.hud.banner).toBe('FLOODGATE OPEN · RUN');
+  // B3 is no longer the way out: the floodgate opens on the night air, and the run goes on above ground
+  // (tests/above-ground.spec.js plays S1 and S2 through to the win).
   await page.keyboard.down('w');
-  try{await expect.poll(async()=>(await snapshot(page)).state,{timeout:90000}).toBe('win');}finally{await page.keyboard.up('w');}
-  await expect(page.locator('#win')).toBeVisible();
-  const fmt=n=>String(n).replace(/\B(?=(\d{3})+(?!\d))/g,',');
-  await expect(page.locator('#winRank')).toHaveText(new RegExp(`^Score ${fmt(kill.points)}\\. `));
-  expect((await snapshot(page)).savedFloor).toBe(0);
-  expect(await page.evaluate(()=>localStorage.getItem('hollow.campaign'))).toBeNull();
-  await page.screenshot({path:'artifacts/campaign-win.png'});
-  await page.locator('#menuBtn').click();await expect(page.locator('#menu')).toBeVisible();
-  await expect(page.locator('#continueBtn')).toBeHidden();
+  try{await expect(page.locator('#descend')).toBeVisible({timeout:90000});}finally{await page.keyboard.up('w');}
+  await expect(page.locator('#descendWay')).toHaveText('Above ground');
+  await expect(page.locator('#descendCode')).toHaveText('S1');
+  await expect(page.locator('#descendName')).toHaveText('The Overgrown Garden');
+  await expect(page.locator('#descendNote')).toContainText('Up through the surface floodgate, into the open air.');
+  await expect.poll(async()=>{const s=await snapshot(page);return s.state==='play'&&s.floor===3;},{timeout:60000}).toBe(true);
+  // The garden is a checkpoint, and says so as the card lifts.
+  await expect.poll(async()=>(await snapshot(page)).hud.banner,{intervals:[100,250]}).toBe('CHECKPOINT REACHED');
+  const s1=await snapshot(page);
+  expect(s1).toMatchObject({floorCode:'S1',score:kill,savedFloor:3,owned:['rifle','pistol','shotgun'],fuses:0,exitOpen:false,boss:null});
+  expect(s1.checkpoint).toMatchObject({floor:3,owned:['rifle','pistol','shotgun']});
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('hollow.campaign')).floor)).toBe(3);
+  await expect(page.locator('#floorText')).toHaveText('S1 · THE OVERGROWN GARDEN');
+  await expect(page.locator('body')).toHaveAttribute('data-floor','S1');
+  await page.screenshot({path:'artifacts/campaign-s1.png'});
 });
 
 test('a hunter snarls at arm\'s length and howls across the floor when it loses the trail',async({page})=>{
