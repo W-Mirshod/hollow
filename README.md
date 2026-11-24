@@ -1,6 +1,6 @@
 # The Hollow: Blackwater Ward
 
-A self-hosted first-person survival horror game for desktop and phone browsers. Beneath the manor, an abandoned hospital treatment wing has gone dark, and it goes down three floors. Start with a sidearm, find the other guns where their owners fell, creep past the bodies that are only sleeping, and climb out through the surface floodgate at the bottom of the Hollow. The game, rendering library, co-op connection, and community scoreboard are served locally; no third-party account or asset CDN is required.
+A self-hosted first-person survival horror game for desktop and phone browsers. Beneath the manor, an abandoned hospital treatment wing has gone dark, and it goes down three floors. Start with a sidearm, find the other guns where their owners fell, creep past the bodies that are only sleeping, and climb out through the surface floodgate at the bottom of the Hollow, into an overgrown garden and then a graveyard, where the Gravekeeper guards the last gate. The game, rendering library, co-op connection, and community scoreboard are served locally; no third-party account or asset CDN is required.
 
 ## Run locally
 
@@ -13,13 +13,13 @@ npm start
 
 Open <http://127.0.0.1:3077>. To try a phone on the same Wi-Fi, run `HOST=0.0.0.0 npm start` and open `http://YOUR_COMPUTER_LAN_IP:3077` on the phone. Allow that port through your local firewall. Use HTTPS for a public deployment.
 
-Choose **Play** to enter the ward immediately, or **Multiplay** to play with a friend. Dying on B1 offers **Re-enter the ward**, a fresh run; dying deeper offers **Retry B2 · Records & Morgue** (or B3), which restarts that floor with what you carried down. Reaching B2 saves a checkpoint on the device, and the main menu then shows **Continue**. After escaping, **Play again** starts a fresh run. Both result screens also offer **Main menu**. A modern WebGL-capable browser is required.
+Choose **Play** to enter the ward immediately, or **Multiplay** to play with a friend. Dying on B1 offers **Re-enter the ward**, a fresh run; dying deeper offers **Retry B2 · Records & Morgue** (or B3, S1 · The Overgrown Garden, S2 · Blackwater Graveyard), which restarts that floor with what you carried down. Reaching each floor from B2 on saves a checkpoint on the device (the Garden and the Graveyard announce **CHECKPOINT REACHED**), and the main menu then shows **Continue** from the furthest floor reached. After escaping, **Play again** starts a fresh run. Both result screens also offer **Main menu**. A modern WebGL-capable browser is required.
 
 ## Ward navigation and escape
 
 The 35 × 35 grid (105 m × 105 m) now forms a structured hospital wing, not a winding labyrinth. A central spine, broad cross-halls, and parallel service corridors provide alternate routes around enclosed rooms. Seeds vary secondary service routes while keeping room locations and objectives stable. Circulation does not require cutting through furnished rooms or locked shelters.
 
-B1's ten labeled rooms include the infirmary, records archive, generator, armory, treatment room, supply store, and four lockable isolation shelters. Follow room labels and exit placards; press **M** to expand the floor plan. Amber diamonds mark fuses, green squares mark shelters, and red marks the exit. The HUD identifies the current room or wing and the next objective.
+B1's ten labeled rooms include the infirmary, records archive, generator, armory, treatment room, supply store, and four lockable isolation shelters. Follow room labels and exit placards; press **M** to expand the floor plan. Amber diamonds mark fuses, green squares mark shelters, gun silhouettes mark weapons still lying where they fell, and red marks the exit. The HUD identifies the current room or wing and the next objective.
 
 1. Recover the three fuses from **Records**, **Generator**, and **Treatment**. Fuse removal makes noise that attracts existing nearby monsters; do not linger after the relay clicks.
 2. Reach the **east loading shutter** and press **E** to restore power. Collecting all three fuses alone does not open it.
@@ -27,13 +27,18 @@ B1's ten labeled rooms include the infirmary, records archive, generator, armory
 
 Run/score time (`elapsed`) uses raw frame delta, separately from the capped simulation step (`simulationTime`, at most 0.05 seconds per frame). Movement, the director, and shutter release use simulation time, so the release can take longer than ten real seconds at low frame rates. Solo pause freezes gameplay; co-op continues while paused.
 
-## Three floors down
+## Three floors down, two above
 
 | Floor | Objective | Hunting / asleep | Ammo boxes | Exit opens in | Guns lying there |
 |---|---|---|---|---|---|
-| B1 · Blackwater Ward (10 rooms) | 3 power fuses | 8 / up to 5 | 16 | 10 s | AR-27 carbine (Armory) |
-| B2 · Records & Morgue (12 rooms) | 3 lift keycards | 6 / up to 12 | 18 | 15 s | SG-8 shotgun (Security); carbine (Intake) |
-| B3 · The Hollow (13 rooms) | 3 floodgate keys | 10 / up to 9 | 20 | 25 s | carbine (Guard post); shotgun (Cell block A) |
+| B1 · Blackwater Ward (10 rooms) | 3 power fuses | 8 / up to 5 | 16 | 10 s | AR-27 carbine (Armory); KV-9 SMG (Supply store) |
+| B2 · Records & Morgue (12 rooms) | 3 lift keycards | 6 / up to 12 | 18 | 15 s | SG-8 shotgun (Security); carbine (Intake); .44 revolver (Chapel of rest); KV-9 (Boiler room) |
+| B3 · The Hollow (13 rooms) | 3 floodgate keys | 10 / up to 9 | 20 | 25 s | carbine (Guard post); shotgun (Cell block A); M24 marksman rifle (Floodgate control); M249 LMG (Cistern); .44 (Flood store); KV-9 (Cell block B) |
+| S1 · The Overgrown Garden (12 rooms) | 3 gate keys | 9 / up to 11 | 22 | 30 s | M24 (Potting shed); carbine (Orangery); .44 (Rose walk) |
+| S2 · Blackwater Graveyard (13 rooms) | 3 crypt keys, then the Gravekeeper | 8 / up to 9, plus the boss | 24 | once the Gravekeeper is dead | M249 (Gravedigger's hut); shotgun (Vestry); M24 (Columbarium) |
+
+- **Above ground.** B3's floodgate opens onto S1, a hedged night garden around a fountain lawn (glasshouse, orangery, ice house, summerhouse, the folly). Its gate leads into S2, a walled churchyard of graves, chapels and crypts; the crypts are its lockable shelters. Both are lit by the moon and lanterns instead of ceiling lamps.
+- **The Gravekeeper.** Using the cemetery gate with all three crypt keys tolls the bell, and the Gravekeeper (3.6 m, 90 health) claws up out of a grave in front of the gate. The gate stays shut while it lives. It chases relentlessly, rears back before a charge, and raises its arms before a ground slam that hits everything within 4.5 m (jump it). At half health it screams, speeds up and calls three bodies up out of their graves. It shrugs off stagger and beats down crypt doors. Its health bar sits at the bottom of the screen; the gate opens within a few seconds of its death, and the run is won outside it. The M9's unlimited ammunition means it can always be killed; the M249 and the arena's supply packs make it quicker.
 
 - A run starts with the M9 sidearm alone; it has unlimited ammunition (it still needs reloading). Other guns lie on gun cases in rooms; press **E** to take one. A gun you missed turns up again on a later floor. Ammunition picked up for a gun you have not found yet is kept for it.
 - Health, guns, rounds, decoys and torch charge go down with you, and points from earlier floors stay banked. Each lower floor has a new seeded layout, its own case notes and a colder (B2) or redder (B3) light.
@@ -54,10 +59,11 @@ Models, surface textures, and atmospheric audio are generated procedurally. This
 
 - Four creature types: quiet flanking Stalkers, low ambushing Crawlers, alerting Shriekers, and the slow, durable Warden. Solo floors start with eight (B1), six (B2) or ten (B3) creatures hunting, plus the sleepers; co-op rounds are played on B1 with twelve hunting. Stalkers hesitate briefly when watched, then commit to a rush; staring never freezes them indefinitely. Breaking sight and hiding still work.
 - Body-size-aware navigation routes creatures around furniture and closed doors. Shriekers call nearby threats; breaking sight, crouching, and noise decoys create opportunities to escape.
-- Three switchable weapons with distinct ammunition, fire rate, reload, recoil, spread, and damage: carbine, sidearm, and shotgun. Runs start with the sidearm; the others must be found (empty slots are dimmed on the HUD). Only the selected gun appears in your hands; a shoulder torch provides light without a second hand-held prop.
+- Seven switchable weapons with distinct ammunition, fire rate, reload, recoil, spread, and damage: AR-27 carbine, M9 sidearm, SG-8 shotgun, KV-9 submachine gun (fast, light rounds), .44 revolver (six heavy rounds, cylinder reload), M24 marksman rifle (bolt-action, five rounds that drop a Warden in a few hits) and M249 light machine gun (100-round box, slower to walk with). Runs start with the sidearm; the others must be found (empty slots are dimmed on the HUD; keys **1**–**7** or **Q** switch). The floor plan marks every gun still lying on the floor with a small silhouette of that gun at its exact spot. Only the selected gun appears in your hands; a shoulder torch provides light without a second hand-held prop.
 - Accelerated movement, sprint stamina, jumping, low-obstacle traversal, crouching, sliding, aim-down-sights, and camera/weapon motion.
 - Walk over ammunition boxes and supply packs to collect them automatically. Supply packs also replenish the battery and a decoy. Pickups require ground-level contact and a clear path; they cannot be collected through closed doors. An empty equipped weapon starts reloading when ammunition arrives. Fuses and medical kits still require **E / USE**.
 - Monster hits reduce health without knockback, and body contact cannot shove the player through walls. Steady red screen corners intensify as health falls and recede when a medical kit heals you; the aiming area stays clear.
+- **Caught.** Every creature kills in its own first-person sequence of about 3.5 seconds, ending in black: the Warden lifts you by the skull and slams you down, a Stalker tackles you and tears at your throat, a Crawler goes for your face, a Shrieker screams point-blank and bites, and the Gravekeeper impales you and buries you in a grave. Blood and cracks build up on the screen and the heartbeat runs down to a flatline; the death screen names the killer. After the first blows, a click or key skips to the end. Reduced motion keeps the framing without the shake.
 - Directional creature audio uses irregular whispers, claw scrapes, guttural bursts, heavy creaks, and Shrieker wails. Quiet stalks avoid an immediate warning roar. Walls muffle the sounds, with a bounded, volume-limited mix rather than a continuous breathing loop for every monster.
 - Movement, gunfire, and light affect detection; the HUD reports noise and contextual interactions.
 
