@@ -808,7 +808,213 @@ const puffs=[];
 for(let i=0;i<20;i++){const blood=i%2===1;const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:blood?bloodTex:sparkTex,transparent:true,depthWrite:false,blending:blood?THREE.NormalBlending:THREE.AdditiveBlending}));
   sp.visible=false;sp.userData={blood,life:0};scene.add(sp);puffs.push(sp);}
 function puff(p,blood){const sp=puffs.find(s=>!s.visible&&s.userData.blood===blood);if(!sp)return;sp.position.copy(p);sp.visible=true;sp.userData.life=blood?0.4:0.09;sp.userData.max=sp.userData.life;sp.scale.setScalar(blood?0.25:0.18);sp.material.opacity=1;}
-function updatePuffs(dt){for(const sp of puffs){if(!sp.visible)continue;sp.userData.life-=dt;if(sp.userData.life<=0){sp.visible=false;continue;}const k=sp.userData.life/sp.userData.max;sp.material.opacity=k;if(sp.userData.blood){sp.scale.setScalar(0.25+(1-k)*0.35);sp.position.y-=dt*0.3;}}}
+// dt: real frame time; sdt: hitstop-scaled simulation time (blood hangs in the air with everything else).
+function updatePuffs(dt,sdt=dt){for(const sp of puffs){if(!sp.visible)continue;sp.userData.life-=dt;if(sp.userData.life<=0){sp.visible=false;continue;}const k=sp.userData.life/sp.userData.max;sp.material.opacity=k;if(sp.userData.blood){sp.scale.setScalar(0.25+(1-k)*0.35);sp.position.y-=dt*0.3;}}
+  gore.setQuality(qualityLevel);gore.setEffects(preferences.effects);
+  // Wounds ride their joints: wounded creatures get this frame's pose before the gore follows it.
+  for(const m of monsters)if(m.gored&&m.g.visible)m.g.updateMatrixWorld(true);
+  gore.update(sdt);
+  hurtFX.update(dt);
+}
+
+/* ---------- hits: regions, gore, getting hurt ---------- */
+// Where a round lands (hitzones.js), what it leaves on the creature and the floor (gore.js: wounds ride the joint group
+// they were shot into, everything else lives in world space), and what a creature's blow does to the survivor
+// (hurtfx.js: the camera, the legs, the ears and the blood on the screen). Every number comes from the gun's stats.
+const HZ=window.HollowHitZones;
+const gore=window.HollowGore.create({THREE,scene,quality:qualityLevel,effects:preferences.effects,blocks:blocksRay,floorY:0,ceiling:H});
+const hurtFX=window.HollowHurtFX.create({root:$('hud'),document,effects:preferences.effects,motion:preferences.motion});
+const _hitRay=new THREE.Raycaster(),_hitList=[],_hitV=new THREE.Vector3(),_hitBack=new THREE.Vector3();
+const _meshHit={object:null,point:new THREE.Vector3(),normal:new THREE.Vector3(),distance:0},_hzc={};
+let shotStamp=0,lastShot=null,hurtSlowT=0,hurtSlowDur=1,hurtSlowF=1,hurtPulse=1,hurtSeed=0,hurtLast=null;
+function shownIn(o,top){for(let p=o;p;p=p.parent){if(!p.visible)return false;if(p===top)return true;}return true;}
+// The first visible mesh of creature m along the ray (o, d) within `far`: object, point and outward face normal.
+function meshHit(m,o,d,far,out){
+  _hitRay.set(o,d);_hitRay.near=0;_hitRay.far=far;_hitRay.camera=camera;_hitList.length=0;
+  _hitRay.intersectObject(m.g,true,_hitList);
+  for(const h of _hitList){
+    if(!h.object.isMesh||!shownIn(h.object,m.g))continue;
+    out.object=h.object;out.point.copy(h.point);out.distance=h.distance;
+    if(h.face)out.normal.copy(h.face.normal).transformDirection(h.object.matrixWorld);else out.normal.copy(d).negate();
+    if(out.normal.dot(d)>0)out.normal.negate();
+    _hitList.length=0;return true;
+  }
+  _hitList.length=0;return false;
+}
+// The region of a mesh hit: the nearest named joint above it, else the torso split by height in the model's frame.
+function meshRegion(m,object,point){
+  for(let p=object;p&&p!==m.g;p=p.parent){const r=HZ.jointRegion(p.name);if(r)return r;}
+  _hitV.copy(point);m.g.worldToLocal(_hitV);
+  return HZ.torsoRegion(m.kind,m.stats,_hitV.y,_hitV.z);
+}
+// Phase 1 of fire() for one pellet on creature m (cylinder entry `distance`): region, damage, entry and exit points, and
+// the creature's running tally for this shot (its simulated health lets later pellets pass through a body this shot
+// already killed).
+function tracePellet(m,best,distance,wallDistance,w){
+  if(m.hitStamp!==shotStamp){
+    m.hitStamp=shotStamp;m.g.updateMatrixWorld(true);
+    m.shot={hp:m.hp,damage:0,force:0,strength:0,knockX:0,knockZ:0,stagger:0,maxPellet:0,head:false,heavyHead:false,distance,
+      tally:{head:0,neck:0,chest:0,gut:0,armL:0,armR:0,legL:0,legR:0},side:0,kill:null,top:null,pellets:0};
+  }
+  const s=m.shot,rec={m,dir:_d.clone(),origin:_o.clone(),point:_o.clone().addScaledVector(_d,Math.max(0,distance-.04)),normal:_d.clone().negate(),object:null,
+    region:'chest',headshot:false,distance,wallDistance,damage:0,exit:null,imp:null,y:best.y};
+  if(meshHit(m,_o,_d,wallDistance,_meshHit)){
+    rec.object=_meshHit.object;rec.point.copy(_meshHit.point);rec.normal.copy(_meshHit.normal);rec.distance=_meshHit.distance;
+    rec.region=meshRegion(m,_meshHit.object,_meshHit.point);
+  }else if(m.dormant)rec.region=HZ.layRegion(m.kind,best.lay,(_d.x*Math.cos(m.yaw)-_d.z*Math.sin(m.yaw))<0?-1:1);
+  else{
+    const g=m.g;
+    rec.region=HZ.classify({kind:m.kind,stats:m.stats,x:m.pos.x,z:m.pos.z,yaw:m.yaw,ox:_o.x,oy:_o.y,oz:_o.z,dx:_d.x,dy:_d.y,dz:_d.z,
+      pose:{x:g.position.x,y:g.position.y,z:g.position.z,pitch:g.rotation.x,yaw:g.rotation.y,roll:g.rotation.z}},_hzc);
+  }
+  // A body on the floor is never a headshot (the old rule for sleepers).
+  if(m.dormant&&(rec.region==='head'||rec.region==='neck'))rec.region='chest';
+  rec.headshot=rec.region==='head';
+  rec.damage=HZ.damage(w,rec.region,distance,m.kind,m.stats);
+  rec.imp=HZ.impact(w,{region:rec.region,dealt:rec.damage,distance,kind:m.kind,stats:m.stats},{});
+  // Exit wound: back along the shot from beyond the body, the last surface the round leaves through.
+  if(rec.imp.exit>0&&rec.object){
+    const span=m.stats.radius*2+1.4;_hitV.copy(rec.point).addScaledVector(_d,span);_hitBack.copy(_d).negate();
+    if(meshHit(m,_hitV,_hitBack,span,_meshHit)&&span-_meshHit.distance>.03)rec.exit={point:_meshHit.point.clone(),normal:_meshHit.normal.clone(),object:_meshHit.object};
+  }
+  s.hp-=rec.damage;s.damage+=rec.damage;s.tally[rec.region]+=rec.damage;s.force+=rec.imp.force;s.strength+=rec.imp.strength;s.pellets++;
+  const h=Math.hypot(_d.x,_d.z)||1;s.knockX+=_d.x/h*rec.imp.knock;s.knockZ+=_d.z/h*rec.imp.knock;
+  s.stagger=Math.max(s.stagger,rec.imp.stagger);s.maxPellet=Math.max(s.maxPellet,rec.damage);s.distance=Math.min(s.distance,distance);
+  if(rec.headshot){s.head=true;if(rec.damage>=1.5)s.heavyHead=true;}
+  s.side+=(rec.region==='armL'||rec.region==='legL'?-1:rec.region==='armR'||rec.region==='legR'?1:0);
+  if(!s.top||rec.damage>s.top.damage)s.top=rec;
+  if(s.hp<=0&&!s.kill)s.kill=rec;
+  return rec;
+}
+// Phase 2 for one pellet: the wound, its exit and spray, back-spatter, the bleed it adds, the flesh sound.
+// k: the pellet's place in the shot (a blast's pellets share their mist).
+function playPellet(rec,w,k){
+  const m=rec.m,imp=rec.imp,d=rec.dir,p=rec.point,spread=w.pellets>1;
+  if(!atm)puff(p,true);else if(!spread||k%2===0)atm.blood(p.x,p.y,p.z,{dir:d,amount:spread?.45:Math.min(1.5,.6+.35*imp.blood)});
+  if(rec.object){gore.wound(m,{root:m.g,object:rec.object,point:p,normal:rec.normal,size:imp.wound});m.gored=true;}
+  // Back-spatter toward the shooter (a blast's pellets share it).
+  if(!spread||k%3===0)gore.spray(p.x,p.y,p.z,-d.x,.25-d.y*.3,-d.z,{amount:.1+.1*imp.blood,reach:.45+.15*imp.force,cone:.55});
+  if(imp.exit>0){
+    const e=rec.exit,q=e?e.point:p;
+    if(e){gore.wound(m,{root:m.g,object:e.object,point:q,normal:e.normal,kind:'exit',size:imp.exit});m.gored=true;}
+    gore.spray(q.x,q.y,q.z,d.x,d.y+.05,d.z,{amount:Math.min(4,.6+imp.blood*1.2),reach:imp.reach,cone:.2});
+    // Where the round's path meets the wall within the spray's reach: the blowout stain, bigger and darker close up.
+    const gap=rec.wallDistance-rec.distance;
+    if(rec.wallDistance<48&&gap<imp.reach+.4){
+      const at=rec.wallDistance-.03,x=rec.origin.x+d.x*at,y=rec.origin.y+d.y*at,z=rec.origin.z+d.z*at;
+      if(y>.08&&y<H-.08){
+        const alongX=blocksRay(x+Math.sign(d.x)*.1,y,z),alongZ=blocksRay(x,y,z+Math.sign(d.z)*.1);
+        const nx=alongX&&(!alongZ||Math.abs(d.x)>=Math.abs(d.z))?-Math.sign(d.x):0,nz=nx?0:-Math.sign(d.z)||1;
+        const size=(.3+.14*Math.min(3,imp.blood))*Math.max(.5,Math.min(1.25,1.25-.6*gap/imp.reach));
+        gore.wallSplat(x+nx*.025,y,z+nz*.025,nx,nz,size);
+      }
+    }
+  }
+  gore.bleed(m,m.g,Math.min(.7,.08+imp.blood*.14));
+  dopaShotHit(m,rec.headshot,rec.distance);
+  audioBullet(rec.point,rec,rec.distance,rec.wallDistance,imp);
+}
+// What a shot did to one creature as a whole: hitMonster with the region detail, then the kill's gore.
+function strikeMonster(m,w,guest){
+  const s=m.shot,lead=s.kill||s.top,d=lead.dir,killed=s.hp<=0;
+  // Anything animated as another kind (a boss on a Warden's rig) resists flinching by its own mass.
+  const resist=m.anim.kind===m.kind?1:Math.min(1,HZ.mass(m.kind,m.stats)/HZ.mass(m.anim.kind));
+  const tally={...s.tally,force:s.force,distance:s.distance,killed,kind:m.kind,stats:m.stats,maxPellet:s.maxPellet,side:s.side};
+  let v=HZ.verdict(w,tally,{});
+  // The body reacts where the shot did the most harm (a blast to the legs buckles them even if one pellet strays higher);
+  // the direction is the killing or heaviest pellet's.
+  const legs=s.tally.legL+s.tally.legR,kneel=v.kneel&&!m.dormant,region=v.region;
+  const info={region,side:s.side<0?-1:1,dirX:d.x,dirZ:d.z,stagger:s.stagger,knockX:s.knockX,knockZ:s.knockZ,
+    kneel,kneelSide:v.kneelSide,kneelTime:Math.min(2.4,1+.4*legs),deathForce:v.deathForce,gib:v.gib};
+  const strength=Math.min(2,s.strength)*resist;
+  m.hitRegion=region;m.lastHit={damage:s.damage,region,pellets:s.pellets,strength};
+  if(guest){
+    const k=monsters.indexOf(m);NET.dm[k]=(NET.dm[k]||0)+s.damage;m.stagger=Math.max(.2,s.stagger);
+    m.anim.hit({dirX:d.x,dirZ:d.z,yaw:m.yaw,headshot:s.head,region,strength,side:info.side,kneel,kneelSide:v.kneelSide,kneelTime:info.kneelTime});
+    return {v,killed:false};
+  }
+  hitMonster(m,s.damage,null,s.head,strength,info);
+  if(m.dead!==killed){tally.killed=m.dead;v=HZ.verdict(w,tally,{});}
+  if(m.dead)goreKill(m,v,lead);
+  return {v,killed:m.dead};
+}
+function goreKill(m,v,lead){
+  const u=m.g.userData,d=lead.dir,p=lead.point,f=v.deathForce,prof=HZ.profile(m.kind,m.stats);
+  m.gored=true;
+  if(v.gib&&u.head)gore.decapitate(m,m.g,u.head,{dir:d,force:1+f*.6,chunks:Math.max(6,v.chunks)});
+  else if(v.jaw&&u.jaw)gore.sever(m,m.g,u.jaw,{dir:d,force:.5+f*.4});
+  if(v.sever&&u[v.sever])gore.sever(m,m.g,u[v.sever],{dir:d,force:1+f});
+  if(v.chunks>0&&!v.gib)gore.chunks(p.x,p.y,p.z,d.x,d.y+.25,d.z,{count:v.chunks,speed:1.6+f,bone:.15});
+  gore.bleed(m,m.g,1.2);
+  gore.pool(m,m.g,{local:{x:0,y:prof.quad?prof.hip*.8:prof.hip,z:0},size:Math.min(1.4,.55+prof.radius*1.1),delay:m.dormant?.2:1.1,grow:6+3*Math.min(1,f)});
+}
+// Knockback and kneeling between frames (host and solo: guests take positions from the host).
+function hitsStep(dt){
+  if(NET.inGame&&NET.role!=='host')return;
+  for(const m of monsters){
+    if(m.dead||m.dormant){m.knockVX=m.knockVZ=0;m.kneelT=0;continue;}
+    m.hitHeat=Math.max(0,(m.hitHeat||0)-dt*1.5);
+    if(m.kneelT>0){
+      // Down on one knee: it stays where it dropped, cannot strike or lunge until it is up.
+      m.kneelT=Math.max(0,m.kneelT-dt);m.pos.x=m.kneelX;m.pos.z=m.kneelZ;m.g.userData.speed=0;
+      m.lungeBoost=0;m.attackT=Math.max(m.attackT,.15);m.stagger=Math.max(m.stagger,.1);
+    }
+    const vx=m.knockVX||0,vz=m.knockVZ||0;
+    if(vx*vx+vz*vz<1e-4){m.knockVX=m.knockVZ=0;continue;}
+    m.pos.x+=vx*dt;m.pos.z+=vz*dt;resolve(m.pos,m.stats.radius);
+    if(m.kneelT>0){m.kneelX=m.pos.x;m.kneelZ=m.pos.z;}
+    const k=Math.exp(-dt*5);m.knockVX=vx*k;m.knockVZ=vz*k;
+  }
+}
+function clearHits(m){gore.clear(m);m.gored=false;m.knockVX=m.knockVZ=0;m.kneelT=0;m.hitHeat=0;m.hitRegion=null;m.lastHit=null;}
+// A new run, floor or co-op round: every creature's gore and the floors' blood go, and the survivor's hurt wears off.
+function hitsReset(){gore.clear();for(const m of monsters)clearHits(m);hurtFX.clear();hurtSlowT=0;hurtPulse=1;hurtLast=null;lastShot=null;}
+function hitsSummary(m){const a=m.anim.snapshot();return {region:m.hitRegion||null,heat:m.hitHeat||0,kneeling:(m.kneelT||0)>0,knock:Math.hypot(m.knockVX||0,m.knockVZ||0),
+  last:m.lastHit||null,wounds:gore.woundsOf(m),gibbed:gore.headless(m),severed:gore.severed(m),
+  anim:{heat:a.heat,kneeling:a.kneeling,kneel:a.kneel,limpL:a.limpL,limpR:a.limpR,fold:a.fold,deathForce:a.deathForce,gib:a.gib,region:a.region}};}
+// QA: turns the survivor (where they stand) toward a visible point of creature m's `part` (a hitzones.js region, or
+// 'torso' / 'leg' / 'arm' for either), one the shot's own tests would score as that part. Returns the point or null.
+function aimAtPart(m,part){
+  const u=m.g.userData,zone=r=>part==='torso'?r==='chest'||r==='gut':part==='leg'?r==='legL'||r==='legR':part==='arm'?r==='armL'||r==='armR':r===part;
+  m.g.updateMatrixWorld(true);
+  const eye=new THREE.Vector3(P.pos.x,P.pos.y+P.eye,P.pos.z),pts=[],dir=new THREE.Vector3(),v=new THREE.Vector3();
+  const joints=part==='head'?[u.head]:part==='neck'?[u.neck]:part==='leg'?[u.legL,u.legR]:part==='arm'?[u.armL,u.armR]:u[part]&&part!=='torso'?[u[part]]:[m.g];
+  for(const j of joints)if(j)j.traverse(o=>{if(!o.isMesh||!shownIn(o,m.g)||!o.geometry.attributes.position)return;const pos=o.geometry.attributes.position,step=Math.max(1,Math.floor(pos.count/60));
+    for(let i=0;i<pos.count;i+=step){v.fromBufferAttribute(pos,i).applyMatrix4(o.matrixWorld);pts.push(v.clone());}});
+  if(!pts.length)return null;
+  const c=pts.reduce((a,b)=>a.add(b),new THREE.Vector3()).multiplyScalar(1/pts.length);
+  // Central points first, nudged toward the middle of the part so the round lands inside it rather than grazing it.
+  pts.sort((a,b)=>a.distanceToSquared(c)-b.distanceToSquared(c));
+  for(const q of pts){
+    const target=q.clone().lerp(c,.35);dir.copy(target).sub(eye).normalize();
+    const ox=eye.x-m.pos.x,oz=eye.z-m.pos.z,a=dir.x*dir.x+dir.z*dir.z,b=2*(ox*dir.x+oz*dir.z),cc=ox*ox+oz*oz-m.stats.radius*m.stats.radius,disc=b*b-4*a*cc;
+    if(a<1e-5||disc<0)continue;
+    const at=(-b-Math.sqrt(disc))/(2*a),y=eye.y+dir.y*at;
+    if(at<0||y<.06||y>m.stats.height)continue;
+    if(!meshHit(m,eye,dir,60,_meshHit)||!zone(meshRegion(m,_meshHit.object,_meshHit.point)))continue;
+    P.yaw=Math.atan2(-dir.x,-dir.z);P.pitch=Math.asin(Math.max(-1,Math.min(1,dir.y)));
+    return {x:_meshHit.point.x,y:_meshHit.point.y,z:_meshHit.point.z,region:meshRegion(m,_meshHit.object,_meshHit.point)};
+  }
+  return null;
+}
+
+// A creature's blow that leaves the survivor standing: the view punched away from it and dropping as the legs buckle,
+// the legs dragging, the ears ringing and dulled, blood thrown across the screen.
+function hurtHit(m){
+  const bearing=HollowHUDFX.bearing(P.pos.x,P.pos.z,P.yaw,m.pos.x,m.pos.z);
+  const p=HollowHurtFX.plan({damage:m.stats.damage,health:P.health,max:100,bearing,kind:m.kind,effects:preferences.effects,motion:preferences.motion,seed:++hurtSeed});
+  camFX.punch(p.jolt.x,p.jolt.y);camFX.addTrauma(p.jolt.trauma);camFX.land(p.jolt.stagger);
+  hurtSlowT=hurtSlowDur=p.slow.time;hurtSlowF=p.slow.factor;hurtPulse=.7+.45*p.severity;
+  hurtFX.setOptions({effects:preferences.effects,motion:preferences.motion});hurtFX.hit(p);
+  audioHurt(p);
+  hurtLast={kind:m.kind,style:p.style,severity:p.severity,heavy:p.heavy,jolt:p.jolt,slow:p.slow,ring:p.ring,muffle:p.muffle,splats:p.blood.splats.length,at:simulationTime};
+}
+// The survivor's speed multiplier while a blow still drags at the legs (held at its worst, then easing back).
+function hurtSlow(dt){
+  if(hurtSlowT<=0)return 1;
+  hurtSlowT=Math.max(0,hurtSlowT-dt);
+  return 1-(1-hurtSlowF)*Math.min(1,hurtSlowT/hurtSlowDur*1.5);
+}
 
 /* ---------- monster ---------- */
 function makeMonster(kind){return HollowVisuals.makeMonster(THREE,kind);}
@@ -857,7 +1063,7 @@ function spawnMonsters(count,sleepers=0){
 function resetMonster(m,x,z,yaw){
   m.spawned=true;m.pos.set(x,0,z);m.yaw=yaw;m.state='wander';m.path=[];m.repath=0;m.lost=0;m.spotCD=0;m.hp=m.stats.hp;m.dead=false;m.deadT=0;m.stagger=0;m.attackT=0;m.screamT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;
   m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.stalkT=0;m.watchT=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;
-  m.dormant=false;m.sleep=0;m.rate=0;m.rouser=null;m.wakeIn=-1;m.riseT=0;m.shotDmg=0;
+  m.dormant=false;m.sleep=0;m.rate=0;m.rouser=null;m.wakeIn=-1;m.riseT=0;m.shotDmg=0;clearHits(m);
   m.g.position.copy(m.pos);m.g.rotation.set(0,m.yaw,0);m.g.visible=true;m.g.userData.speed=0;m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);
 }
 // Sleepers lie along corridor walls and between the furniture, mostly well away from the lobby, never in a refuge and
@@ -956,7 +1162,7 @@ function newGame(){
 // Everything after a floor's world is built: the kit, the survivor at the lobby pedestal, the creatures, a checkpoint.
 function startFloor(kit){
   resetSurvivor(kit);
-  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
+  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();hitsReset();
   danger=0;ambientT=14;$('flash').style.opacity=0;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
   visited=new Uint8Array(W*W);
   setHell();P.pos.set(PED.x-.85,0,PED.z);P.yaw=Math.PI/2;P.pitch=0;spawnMonsters(FLOOR().active,FLOOR().sleepers);grace=10;state='play';
@@ -1028,11 +1234,11 @@ function updateContinue(){
 }
 
 /* ---------- audio ---------- */
-let AC=null,master,noiseBuf,creatureAudio=null,playerAudio=null,weaponAudio=null,droneFilter,droneGain=null;
+let AC=null,master,hurtLP=null,hurtOut=null,noiseBuf,creatureAudio=null,playerAudio=null,weaponAudio=null,droneFilter,droneGain=null;
 function initAudio(){
   if(AC){if(AC.state==='suspended')AC.resume();return;}
   try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){AC=null;return;}
-  master=AC.createGain();master.gain.value=preferences.volume;master.connect(masterOut());
+  master=AC.createGain();master.gain.value=preferences.volume;hurtOut=masterOut();hurtLP=AC.createBiquadFilter();hurtLP.type='lowpass';hurtLP.frequency.value=22000;hurtLP.Q.value=.5;master.connect(hurtLP);hurtLP.connect(hurtOut);
   noiseBuf=AC.createBuffer(1,AC.sampleRate*2,AC.sampleRate);const d=noiseBuf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
   // horror drone
   droneFilter=AC.createBiquadFilter();droneFilter.type='lowpass';droneFilter.frequency.value=110;
@@ -1295,7 +1501,7 @@ function updatePlayer(dt){
         const vault=roomProps.some(p=>p.h>.8&&p.h<=1.1&&Math.abs(P.pos.x-p.x)<p.w/2+PR+.18&&Math.abs(P.pos.z-p.z)<p.d/2+PR+.18);
         P.velY=vault?5.65:5.15;P.onGround=false;P.coyote=0;P.jumpBuffer=0;P.stamina=mv.stamina;sStep(.1,stepKind());
   }
-  const speed=mv.speed;
+  const speed=mv.speed*hurtSlow(dt);
   const fx=-Math.sin(P.yaw),fz=-Math.cos(P.yaw),rx=Math.cos(P.yaw),rz=-Math.sin(P.yaw);
   if(slideT>0&&inputLength<.1)iz=1;
   const tx=(fx*iz+rx*ix)*speed,tz=(fz*iz+rz*ix)*speed;
@@ -1458,7 +1664,8 @@ function sleepSound(m,cue,volume){if(sVoice(m.kind,cue,m.pos.x,.35,m.pos.z,volum
 function damagePlayer(m){
   if(!localInDanger()||damageT>0||grace>0||P.hidden)return;
   P.health=Math.max(0,P.health-m.stats.damage);damageT=1.05;m.lungeT=.3;m.anim.attack();
-  {const dx=m.pos.x-P.pos.x,dz=m.pos.z-P.pos.z,dist=Math.max(.01,Math.hypot(dx,dz));camFX.punch((dx*Math.cos(P.yaw)-dz*Math.sin(P.yaw))/dist,.5);camFX.addTrauma(.45);}
+  if(P.health>0)hurtHit(m);
+  else{const dx=m.pos.x-P.pos.x,dz=m.pos.z-P.pos.z,dist=Math.max(.01,Math.hypot(dx,dz));camFX.punch((dx*Math.cos(P.yaw)-dz*Math.sin(P.yaw))/dist,.5);camFX.addTrauma(.45);}
   sCreature(m,'attack');sThud(P.pos.x,1,P.pos.z,.16,90);
   dopaHurt(m);
   if(P.health<=0){caught(m);return;}
@@ -1642,8 +1849,10 @@ function fire(){
   _o.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
   _shotQuat.setFromEuler(_shotEuler.set(P.pitch,P.yaw,0,'YXZ'));_shotDir.set(0,0,-1).applyQuaternion(_shotQuat);
   const spread=w.spread*(aiming?.4:1)*(P.crouching?.65:1)+(P.moving?.008:0);
-  dopaShotBegin();shotWakes=[];
+  dopaShotBegin();shotWakes=[];shotStamp++;
   let didHit=false,hitPartner=false;
+  // Phase 1 traces every pellet (regions, damage, a running tally per creature); phase 2 plays what they did.
+  const struck=[],targets=[];
   if(atm&&gun.userData.muzzlePosition)_atmMz.copy(gun.userData.muzzlePosition).applyEuler(gun.rotation).add(gun.position);
   if(w.pellets>1)fxFlash=.55;
   for(let pellet=0;pellet<w.pellets;pellet++){
@@ -1651,9 +1860,9 @@ function fire(){
     let wallDistance=48;
     for(let st=.1;st<48;st+=.13){if(blocksRay(_o.x+_d.x*st,_o.y+_d.y*st,_o.z+_d.z*st)){wallDistance=st;break;}}
     let best=null,distance=wallDistance;
-    for(const m of monsters){if(m.dead)continue;
+    for(const m of monsters){if(m.dead||m.hitStamp===shotStamp&&m.shot.hp<=0)continue;
       // A body on the floor is three low cylinders along it; a hit there is never a headshot.
-      if(m.dormant){for(let k=0;k<6;k+=2){const at=rayCircle(m.lay[k],m.lay[k+1],m.layR);if(at<0||at>=distance)continue;const y=_o.y+_d.y*at;if(y<.02||y>.6)continue;distance=at;best={m,y:Math.min(y,m.stats.head-.01)};}continue;}
+      if(m.dormant){for(let k=0;k<6;k+=2){const at=rayCircle(m.lay[k],m.lay[k+1],m.layR);if(at<0||at>=distance)continue;const y=_o.y+_d.y*at;if(y<.02||y>.6)continue;distance=at;best={m,y:Math.min(y,m.stats.head-.01),lay:k/2};}continue;}
       const ox=_o.x-m.pos.x,oz=_o.z-m.pos.z,a=_d.x*_d.x+_d.z*_d.z;if(a<.00001)continue;
       const radius=m.stats.radius,b=2*(ox*_d.x+oz*_d.z),c=ox*ox+oz*oz-radius*radius,disc=b*b-4*a*c;if(disc<0)continue;
       const sq=Math.sqrt(disc);let at=(-b-sq)/(2*a);if(at<0)at=(-b+sq)/(2*a);if(at<0||at>=distance)continue;
@@ -1674,11 +1883,10 @@ function fire(){
       R.rig.avatar.userData.flinch(_d.x*Math.cos(R.yaw)-_d.z*Math.sin(R.yaw));
       if(!hitPartner)showMsg(`You hit ${R.nm}! Friendly fire is on.`,1.6);hitPartner=true;
     }else if(best){
-      didHit=true;if(atm)atm.blood(hit.x,hit.y,hit.z,{dir:_d,amount:w.pellets>1?.4:1});else puff(hit,true);
-      const damage=RULES.weaponDamage(w.id,best.y>best.m.stats.head,distance,best.m.kind);
-      dopaShotHit(best.m,best.y>best.m.stats.head,distance);
-      if(NET.inGame&&NET.role==='guest'){const k=monsters.indexOf(best.m);NET.dm[k]=(NET.dm[k]||0)+damage;best.m.stagger=.2;best.m.anim.hit({dirX:_d.x,dirZ:_d.z,yaw:best.m.yaw,headshot:best.y>best.m.stats.head});}
-      else hitMonster(best.m,damage,null,best.y>best.m.stats.head,w.pellets>1?.35:1);
+      didHit=true;
+      if(best.m.hitStamp!==shotStamp)targets.push(best.m);
+      struck.push(tracePellet(best.m,best,distance,wallDistance,w));
+      continue;
     }else if(wallDistance<48&&atm){
       if(streak){const k=.12;_atmNd.copy(_d).negate();
         if(metalAt(hit.x,hit.z))atm.sparks(hit.x-_d.x*k,hit.y-_d.y*k,hit.z-_d.z*k,{dir:_atmNd,count:16});
@@ -1686,22 +1894,50 @@ function fire(){
     }else if(wallDistance<48)puff(hit,false);
     audioBullet(hit,best,distance,wallDistance);
   }
+  // Phase 2: each pellet's wound and spray, then each creature takes the whole shot at once.
+  const guest=NET.inGame&&NET.role==='guest';
+  let gib=false,heavy=false,killedAny=false,heavyHead=false;
+  const shotLog={weapon:w.id,pellets:w.pellets,hits:[],targets:[]};
+  for(let k=0;k<struck.length;k++){const rec=struck[k];playPellet(rec,w,k);if(shotLog.hits.length<16)shotLog.hits.push({index:monsters.indexOf(rec.m),region:rec.region,damage:rec.damage,mesh:!!rec.object,exit:!!rec.exit});}
+  for(const m of targets){
+    const s=m.shot,r=strikeMonster(m,w,guest),v=r.v;
+    gib=gib||(r.killed&&v.gib);killedAny=killedAny||r.killed;heavyHead=heavyHead||s.heavyHead;
+    heavy=heavy||s.maxPellet>=2||s.damage>=3.5||(r.killed&&(v.gib||!!v.sever));
+    shotLog.targets.push({index:monsters.indexOf(m),kind:m.kind,damage:s.damage,pellets:s.pellets,region:v.region,head:s.head,killed:r.killed,
+      gib:r.killed&&v.gib,jaw:r.killed&&v.jaw,sever:r.killed?v.sever:'',chunks:v.chunks,kneel:!r.killed&&v.kneel&&!m.dormant,deathForce:v.deathForce,
+      knock:Math.hypot(s.knockX,s.knockZ),strength:Math.min(2,s.strength)});
+  }
+  if(struck.length)lastShot=shotLog;
+  shotHit.heavy=heavy;
   const woken=shotWakes;shotWakes=null;
   for(const [m,src] of woken)if(!m.dead&&m.dormant)wakeMonster(m,src);
   dopaShotEnd();
+  // A head coming apart freezes the moment a little longer; so does a heavy round to the head that does not kill.
+  if(gib&&hitstopT<.07)dopaHitstop(.07);else if(heavyHead&&!killedAny&&hitstopT<.03)dopaHitstop(.03);
   if(didHit){hitMarkerT=.16;audioHitTick();}
   if(hitPartner)sendNet(true);
   const recoil=w.recoil*(aiming?.65:1);camFX.kick(recoil,rnd(-1,1)*w.recoil*.25);
   P.pitch=Math.min(1.35,P.pitch+recoil*.35);P.yaw+=rnd(-.001,.001);
   if(w.id==='shotgun')camFX.addTrauma(.2);
 }
-function hitMonster(m,dmg,from,headshot,strength){
+// info (fire(), hitzones.js): { region, side, dirX, dirZ (the shot's direction), stagger, knockX, knockZ (m/s),
+// kneel, kneelSide, kneelTime, deathForce, gib }. Without it a hit reacts as it always has.
+function hitMonster(m,dmg,from,headshot,strength,info){
   if(m.dead)return;
   const src=from||P.pos,shot={dirX:m.pos.x-src.x,dirZ:m.pos.z-src.z,yaw:m.yaw,headshot:!!headshot,strength:strength??1};
+  if(info){
+    shot.dirX=info.dirX;shot.dirZ=info.dirZ;shot.region=info.region;shot.side=info.side;
+    if(info.kneel){shot.kneel=true;shot.kneelSide=info.kneelSide;shot.kneelTime=info.kneelTime;}
+  }
   // A shot that does not finish a sleeper wakes it at once (a killing shot leaves it where it lies). Inside fire() the
   // wake waits for the last pellet, so a blast that kills it does not get it up roaring first.
   if(m.dormant&&m.hp-dmg>0){if(shotWakes)shotWakes.push([m,{x:src.x,z:src.z}]);else wakeMonster(m,src);}
-  m.hp-=dmg;m.stagger=m.kind==='warden'?.07:.25;m.state='chase';
+  m.hp-=dmg;m.stagger=info?Math.max(m.stagger,info.stagger):m.kind==='warden'?.07:.25;m.state='chase';
+  if(info&&m.hp>0&&!m.dormant){
+    m.knockVX=(m.knockVX||0)+info.knockX;m.knockVZ=(m.knockVZ||0)+info.knockZ;m.hitHeat=Math.min(6,(m.hitHeat||0)+shot.strength);
+    if(info.kneel){if(!(m.kneelT>0)){m.kneelX=m.pos.x;m.kneelZ=m.pos.z;}m.kneelT=Math.max(m.kneelT||0,info.kneelTime);}
+  }
+  if(info&&m.hp<=0){shot.force=info.deathForce;shot.region=info.region;shot.gib=!!info.gib;}
   if(m.hp>0)m.anim.hit(shot);
   if(from)m.lastSeen.set(from.x,0,from.z);else m.lastSeen.copy(P.pos);m.lost=0;
   if(m.hp<=0){
@@ -1872,7 +2108,7 @@ function updatePostFX(dt){
   const u=fx.uniforms,hell=state!=='menu';
   fxKill=Math.max(0,fxKill-dt/.35);fxFlash=Math.max(0,fxFlash-dt*6);
   u.danger.value=state==='play'||state==='caught'?Math.min(1,danger+(state==='caught'?.3:0)):0;
-  u.damage.value=state==='play'||state==='caught'?Math.min(1,damageT/1.05):0;
+  u.damage.value=state==='play'||state==='caught'?Math.min(1,damageT/1.05*hurtPulse):0;
   u.health.value=1;
   u.grain.value=hell?.35:.1;u.vignette.value=hell?.5:.3;
   u.saturation.value=hell?1:1.06;
@@ -1928,7 +2164,7 @@ function updateHUD(){
     simulationTime<20?'WASD move · SHIFT sprint · C crouch · E use · F torch · M floor plan':'';
 }
 function stepSurvival(dt){
-  simulationTime+=dt;updatePlayer(dt);updateRooms(dt);updateHorror(dt);updateThreats(dt);
+  simulationTime+=dt;updatePlayer(dt);updateRooms(dt);updateHorror(dt);updateThreats(dt);hitsStep(dt);
   updateTorch(dt);updatePickups();markVisited();
   chaosStep(dt);
 }
@@ -1960,7 +2196,7 @@ function loop(){
   if(state==='play'||state==='caught'||(NET.inGame&&state!=='coopEnd'))monsters.forEach(m=>animateMonster(m,sdt));
   if(state==='caught')camFX.addTrauma(1);
   if(!['menu','pause','dead','win','coopEnd'].includes(state))updateCameraRig(dt);
-  updateGun(dt);updatePuffs(dt);
+  updateGun(dt);updatePuffs(dt,sdt);
   if(msgTimer>0){msgTimer-=dt;if(msgTimer<=0)$('msg').style.opacity=0;}
 
   // camera
@@ -2197,7 +2433,7 @@ function startCoopRound(seed,gen){
   // Co-op rounds are played on B1.
   floor=0;scoreBase={points:0,kills:0};checkpoint=null;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
   buildMazeSeeded(seed);resetSurvivor();
-  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();
+  P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();hitsReset();
   battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   // Survivors start around the pedestal: the host, then each guest in the order the host admitted them.
@@ -2275,7 +2511,7 @@ function guestMonsters(dt){
   for(let i=0;i<MAX_MON;i++){const m=monsters[i],d=R.mon[i];
     if(!d||i>=monCount){m.g.visible=false;m.dead=true;m.dormant=false;continue;}
     const [x,z,yaw,fl,hp]=d;const dead=!!(fl&2),chase=!!(fl&1),stalk=!!(fl&8),asleep=!!(fl&16);m.hp=Number(hp)||0;m.attackT=Math.max(0,m.attackT-dt);m.lungeT=Math.max(0,m.lungeT-dt);
-    if(m.dead&&!dead){m.spawned=true;m.g.visible=true;m.dead=false;m.deadT=0;m.pos.set(x,0,z);m.yaw=yaw;m.g.rotation.set(0,yaw,0);m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);m.state='wander';m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.spotCD=0;m.stagger=0;m.anim.reset();m.animYaw=m.yaw;
+    if(m.dead&&!dead){clearHits(m);m.spawned=true;m.g.visible=true;m.dead=false;m.deadT=0;m.pos.set(x,0,z);m.yaw=yaw;m.g.rotation.set(0,yaw,0);m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);m.state='wander';m.voiceT=rnd(2,6);m.stepT=rnd(.2,.8);m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.spotCD=0;m.stagger=0;m.anim.reset();m.animYaw=m.yaw;
       m.dormant=false;m.riseT=0;m.wakeIn=-1;if(asleep&&!dead)layDown(m,i);}
     if(dead&&!m.dead){m.dead=true;m.dormant=false;m.riseT=0;m.deadT=0;m.g.userData.eyeMat.color.set(0x120000);m.g.userData.glow.intensity=0;sCreature(m,'death');
       m.anim.die({dirX:m.pos.x-P.pos.x,dirZ:m.pos.z-P.pos.z,yaw:m.yaw});
@@ -2633,7 +2869,7 @@ if(!window.HollowPlayerAudio||!window.HollowWeaponAudio)throw new Error('A local
 const VOICE_PRIORITY={breath:0,step:1,whisper:2,moan:2,chatter:2,notice:3,laugh:3,growl:3,howl:3,snarl:3,attack:4,death:4,scream:4,wake:4};
 // Footsteps by weight: the Warden's tread carries, the others creep about 3-4.5 dB under it.
 const STEP_LEVEL={warden:1,stalker:.85,crawler:.85,shrieker:.85};
-const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false};
+const audioLater=[],audioLog=[],shotHit={headshot:false,armored:false,heavy:false};
 const bodyIn={active:false,stamina:1,exhausted:false,running:false,moving:false,danger:0,chase:false,health:100,effects:true,hidden:false};
 // A threat call ducks the player's body bus (heartbeat, grunts, chase music): [max distance m, gain, hold s].
 const DUCK={scream:[30,.4,1.4],wake:[30,.45,1.4],notice:[20,.65,.9],howl:[45,.7,1.2],snarl:[10,.6,.8],laugh:[12,.7,1],whisper:[10,.7,1.2]};
@@ -2747,6 +2983,25 @@ function audioOnKill(info){
   if(r&&(r.count>=2||r.label==='WARDEN DOWN'))playStinger('streak',r.label);
 }
 // The killing blow: a cry under the scare hit, then a Stalker or Shrieker laughs over the body.
+// A blow that leaves the survivor standing (hurtfx.js plan): the world goes dull through the master low-pass and creeps
+// back; a heavy one rings in the ears, straight into the output past the muffle.
+function audioHurt(p){
+  if(!AC||!hurtLP||!p)return;
+  const now=AC.currentTime,f=hurtLP.frequency,mu=p.muffle;
+  if(mu&&mu.amount>.02){
+    const from=Math.min(22000,Math.max(100,f.value||22000)),to=Math.max(120,Math.min(from,mu.hz));
+    f.cancelScheduledValues(now);f.setValueAtTime(from,now);f.exponentialRampToValueAtTime(to,now+.03);
+    f.setTargetAtTime(22000,now+.03+mu.time*.35,mu.time*.3);
+    logCue('player','muffle',p.kind||'blow');
+  }
+  const r=p.ring;
+  if(r&&preferences.effects&&preferences.volume>0){
+    const peak=.05*r.gain*preferences.volume,g=AC.createGain();g.gain.value=0;g.connect(hurtOut);
+    g.gain.setValueAtTime(0,now);g.gain.linearRampToValueAtTime(peak,now+.06);g.gain.setTargetAtTime(0,now+.06+r.time*.15,r.time*.3);
+    for(const hz of [r.hz,r.hz*1.006]){const o=AC.createOscillator();o.type='sine';o.frequency.value=hz;o.connect(g);o.start(now);o.stop(now+.1+r.time*1.6);}
+    logCue('player','ring',p.kind||'blow');
+  }
+}
 function audioOnCaught(m){
   if(playerAudio){playerAudio.hurt(100);playStinger('scare','caught');}
   if(m.kind==='stalker'||m.kind==='shrieker')audioAfter(rnd(.5,.7),()=>sCreature(m,'laugh'));
@@ -2793,11 +3048,12 @@ function sDry(){if(weaponAudio&&weaponAudio.dry(weaponDefs[weaponIndex].id)!=nul
 function sReload(){const w=weaponDefs[weaponIndex];reloadEmpty=mag===0;if(weaponAudio&&weaponAudio.reload(w.id,w.reload,{empty:reloadEmpty})!=null)logCue('weapon','reload',w.id);}
 function sPickup(type){playStinger(type==='fuse'?'fuse':'pickup',type);}
 // Per pellet, once fire() has resolved it: flesh on monsters, the struck material on walls, doors and props.
-function audioBullet(hit,best,distance,wallDistance){
+// imp (hitzones.js impact()): where the round went picks the flesh sound (a cracking skull, a heavy torso thump...).
+function audioBullet(hit,best,distance,wallDistance,imp){
   if(best){
     const m=best.m;
-    if(m){if(best.y>m.stats.head)shotHit.headshot=true;if(m.kind==='warden')shotHit.armored=true;}
-    if(weaponAudio&&weaponAudio.impact('flesh',{x:hit.x,y:hit.y,z:hit.z,distance})!=null)logCue('weapon','impact','flesh');
+    if(m){if(best.headshot??best.y>m.stats.head)shotHit.headshot=true;if(m.kind==='warden')shotHit.armored=true;}
+    if(weaponAudio&&weaponAudio.impact('flesh',{x:hit.x,y:hit.y,z:hit.z,distance,variant:imp?.variant,weight:imp?.weight})!=null)logCue('weapon','impact','flesh');
   }else if(wallDistance<48&&weaponAudio){
     const surface=surfaceAt(hit.x+_d.x*.08,hit.y+_d.y*.08,hit.z+_d.z*.08);
     if(weaponAudio.impact(surface,{x:hit.x,y:hit.y,z:hit.z,distance:wallDistance})!=null)logCue('weapon','impact',surface);
@@ -2811,8 +3067,8 @@ function surfaceAt(x,y,z){
 }
 // One tick per volley, on the same event as the visual hit marker.
 function audioHitTick(){
-  if(weaponAudio&&weaponAudio.hitMarker({headshot:shotHit.headshot,armored:shotHit.armored})!=null)logCue('weapon','hitMarker',shotHit.headshot?'headshot':shotHit.armored?'armored':'body');
-  shotHit.headshot=shotHit.armored=false;
+  if(weaponAudio&&weaponAudio.hitMarker({headshot:shotHit.headshot,armored:shotHit.armored,heavy:!!shotHit.heavy})!=null)logCue('weapon','hitMarker',shotHit.headshot?'headshot':shotHit.armored?'armored':'body');
+  shotHit.headshot=shotHit.armored=shotHit.heavy=false;
 }
 
 /* per frame, stopping and resuming */
@@ -2949,7 +3205,10 @@ function snapshot(){return {
   loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending,...(l.type==='weapon'?{weapon:weaponDefs[l.weapon].id,visible:l.g.visible}:{})})),
   ammoPickups:ammoBoxes.map((b,i)=>({id:i,x:b.x,z:b.z,taken:b.taken,pending:!!b.pending})),
   enemies:monsters.slice(0,monCount).map((m,i)=>({index:i,kind:m.kind,x:m.pos.x,z:m.pos.z,hp:m.hp,dead:m.dead,state:m.state,speed:m.stats.chase,moveSpeed:m.g.userData.speed,stalkTime:m.stalkT,watchTime:m.watchT,lunge:m.lungeBoost>0,lungeCooldown:m.lungeCD,anim:animSummary(m),
-    dormant:!!m.dormant,sleep:m.sleep||0,wakeIn:m.wakeIn,rising:m.riseT>0,visible:m.g.visible,body:m.dormant?m.lay.slice():null})),
+    dormant:!!m.dormant,sleep:m.sleep||0,wakeIn:m.wakeIn,rising:m.riseT>0,visible:m.g.visible,body:m.dormant?m.lay.slice():null,hits:hitsSummary(m)})),
+  // Hits (hitzones.js, gore.js, hurtfx.js): the last shot that struck a creature, the gore pools, the survivor's hurt.
+  shot:lastShot,gore:gore.snapshot(),
+  hurt:{last:hurtLast,slow:hurtSlowT>0?1-(1-hurtSlowF)*Math.min(1,hurtSlowT/hurtSlowDur*1.5):1,slowTime:hurtSlowT,pulse:hurtPulse,muffle:hurtLP?hurtLP.frequency.value:null,fx:hurtFX.snapshot()},
   network:(()=>{const list=partners(),R=list.find(r=>r.role==='guest')||list[0]||NOBODY;return{role:NET.role,inGame:NET.inGame,generation:NET.gen,partner:list.length>0,code:NET.code,partnerY:R.raw.y||0,partnerCrouching:!!R.raw.crouch,
     partners:list.map(r=>({name:r.nm,role:r.role,present:r.present,alive:!!r.al&&!r.out,inRound:r.gn===NET.gen,avatar:!!r.rig&&r.rig.avatar.visible})),avatars:RIGS.filter(o=>o.owner&&o.avatar.visible).length,spectating:NET.spect&&REMOTES.get(NET.spect)?.nm||null};})(),
   input:{mouseDown,touchX:touchMove.x,touchY:touchMove.y}
@@ -2962,7 +3221,7 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     pose:({x,z,y=0,yaw=0,pitch=0})=>{P.pos.set(x,y,z);P.vel.set(0,0,0);P.velY=0;P.yaw=yaw;P.pitch=pitch;P.onGround=y===0;},
     silence:()=>{hideMonsters();grace=100000;},
     enemy:(index,pose)=>{const m=monsters[index];m.pos.set(pose.x,0,pose.z);m.g.position.copy(m.pos);m.hp=m.stats.hp;m.dead=false;m.spawned=true;m.g.visible=true;m.state=pose.state||'wander';m.path=[];m.yaw=pose.yaw||0;m.g.rotation.set(0,m.yaw,0);m.lastSeen.copy(P.pos);m.attackT=0;m.senseT=0;m.seenTarget=null;m.heardTarget=null;m.stalkT=0;m.watchT=0;m.lost=0;m.spotCD=0;m.repath=0;m.lungeT=0;m.lungeCD=0;m.lungeBoost=0;m.watched=false;m.anim.reset();m.animYaw=m.yaw;m.voiceT=3;grace=0;
-      m.dormant=false;m.riseT=0;m.wakeIn=-1;m.sleep=0;m.rate=0;m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);monCount=Math.max(monCount,index+1);},
+      m.dormant=false;m.riseT=0;m.wakeIn=-1;m.sleep=0;m.rate=0;m.g.userData.eyeMat.color.setHex(m.g.userData.eyeColor||0xff2a14);monCount=Math.max(monCount,index+1);clearHits(m);},
     // A sleeping body in slot `index`, lying at (x, z) along `yaw`. Returns its three body points.
     sleeper:(index,{x,z,yaw=0})=>{const m=monsters[index];resetMonster(m,x,z,yaw);layDown(m,index);monCount=Math.max(monCount,index+1);return m.lay.slice();},
     wake:index=>wakeMonster(monsters[index],{x:P.pos.x,z:P.pos.z}),
@@ -2979,8 +3238,9 @@ if(['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&new URLSearchP
     // Feed the auto-quality governor `count` frames of `ms` each, starting a fresh window with no settle time.
     autoQualityFrames:(ms,count)=>{const n=finiteNumber(count,0,0,2000),dt=finiteNumber(ms,16,1,1000)/1000;autoMs=autoFrames=autoSettle=0;for(let i=0;i<n;i++)autoQuality(dt);return {quality:qualityLevel,renderScale,wardDetail:wardDetail.value,autoBest};},
     health:value=>{P.health=finiteNumber(value,100,0,100);damageT=0;},torch:value=>{torchOn=value;},
-    advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateCameraRig(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));}updateHUD();updateHealthVignette();},
+    advance:seconds=>{if(NET.inGame)return;let remaining=finiteNumber(seconds,0,0,10);while(remaining>0&&state==='play'){const dt=Math.min(.05,remaining);remaining-=dt;t+=dt;elapsed+=dt;stepSurvival(dt);updateCameraRig(dt);updateGun(dt);monsters.forEach(m=>animateMonster(m,dt));updatePuffs(dt);}updateHUD();updateHealthVignette();},
     hit:(index,damage)=>hitMonster(monsters[index],damage),
+    aim:(index,part)=>aimAtPart(monsters[index],part),
     action:inputAction,pause,quality:applyQuality,pickupReach,
     path:(index,x,z)=>{setPathTo(monsters[index],x,z);return monsters[index].path.map(cell=>cell.slice());},
     navClear:(ax,az,bx,bz,radius)=>movementClear(ax,az,bx,bz,radius),
