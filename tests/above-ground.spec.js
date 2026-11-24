@@ -181,7 +181,22 @@ test('death in the Gravekeeper\'s fight retries S2 from the start, and Continue 
     return HollowGame.snapshot().state;
   });
   expect(caught).toBe('caught');
+  // The Gravekeeper itself (its own model, not a stand-in) plays its kill: impaled, lifted, thrown into the grave.
+  let k=await page.evaluate(()=>{HollowTest.killHold(true);return HollowGame.snapshot().kill;});
+  expect(k).toMatchObject({active:true,on:true,track:'gravekeeper'});
+  let clock=k.t;const seen=[];
+  for(const [i,at] of [.4,1.0,1.7,2.6,3.2].entries()){
+    k=await page.evaluate(dt=>HollowTest.advanceCaught(dt),Math.max(0,at-clock));clock=at;
+    await frames(page,2);await page.screenshot({path:`artifacts/levels-boss-kill-${i+1}.png`});seen.push(k);
+    for(const v of [k.camera.x,k.camera.y,k.camera.pitch,k.camera.yaw,k.camera.roll,k.camera.fov])expect(Number.isFinite(v)).toBe(true);
+    expect(k.body.visible).toBe(true);
+  }
+  expect(Math.min(...seen.map(q=>q.camera.y))<.5||Math.max(...seen.map(q=>q.camera.y))>2,'lifted overhead or down in the grave').toBe(true);
+  expect(seen.at(-1).overlay.splats+seen.at(-1).overlay.dirt).toBeGreaterThan(0);
+  await page.evaluate(()=>HollowTest.killHold(false));
   await expect.poll(async()=>(await snapshot(page)).state,{timeout:180000}).toBe('dead');
+  await expect(page.locator('#deadText')).toContainText('The Gravekeeper buried you alive.');
+  await expect(page.locator('#deadText')).toContainText('out in S2 · Blackwater Graveyard');
   await expect(page.locator('#retryDark')).toHaveText('Retry S2 · Blackwater Graveyard');
   await expect(page.locator('#bossBar')).toBeHidden();
   await page.locator('#retryDark').click();
