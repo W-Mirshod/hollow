@@ -1896,13 +1896,7 @@ const BOSS_NAV=.58,BOSS_UP=new THREE.Vector3(0,1,0);
 let boss=null,bossBell=null,bellSwing=0,bellT=0,bellNext=0,checkpointBanner=false;
 function bossBody(){
   if(boss)return boss;
-  const kind='gravekeeper',stats=RULES.MONSTERS[kind];let g,anim,voiceKind=kind;
-  if(HollowMonsterAnim.KINDS[kind]){g=HollowVisuals.makeMonster(THREE,kind);anim=HollowMonsterAnim.create(kind,{seed:MAX_MON});}
-  else{
-    // placeholder until the gravekeeper model lands
-    const k=stats.height/RULES.MONSTERS.warden.height;g=makeMonster('warden');g.scale.setScalar(k);g.userData.headHeight*=k;g.userData.eyeColor=0x8dffb0;
-    anim=HollowMonsterAnim.create('warden',{height:stats.height,seed:MAX_MON});voiceKind='warden';
-  }
+  const kind='gravekeeper',stats=RULES.MONSTERS[kind],voiceKind=kind,g=HollowVisuals.makeMonster(THREE,kind),anim=HollowMonsterAnim.create(kind,{seed:MAX_MON});
   g.visible=false;scene.add(g);
   boss={g,kind,stats,boss:true,voiceKind,pos:new THREE.Vector3(),yaw:0,state:'wander',path:[],repath:0,lastSeen:new THREE.Vector3(),lost:0,searchT:0,stepT:0,spotCD:0,hp:stats.hp,dead:true,deadT:0,stagger:0,voiceT:3,stalkT:0,watchT:0,flank:1,
     lungeT:0,lungeCD:0,lungeBoost:0,attackT:0,screamT:0,senseT:0,seenTarget:null,heardTarget:null,anim,animYaw:0,watched:false,spawned:false,dormant:false,sleep:0,rate:0,rouser:null,wakeIn:-1,riseT:0,stirred:false,lay:[0,0,0,0,0,0],layR:.5,
@@ -2097,7 +2091,7 @@ function aboveGroundHUD(){
 function bossSnapshot(){
   const b=boss;if(!b||!FLOOR().boss)return null;
   return {kind:b.kind,act:b.act,hp:b.hp,maxHp:b.stats.hp,phase:b.phase,x:b.pos.x,z:b.pos.z,dead:b.dead,visible:b.g.visible,holding:bossHolds(),summoned:b.summoned,sink:b.sink,
-    placeholder:!HollowMonsterAnim.KINDS.gravekeeper,bell:bossBell?bossBell.rotation.z:null};
+    bell:bossBell?bossBell.rotation.z:null};
 }
 function sBell(volume){
   if(!AC||!bossBell)return;const n=AC.currentTime,p=makePanner(8,.6);setPos(p,bossBell.position.x,bossBell.position.y,bossBell.position.z);
@@ -2285,7 +2279,7 @@ function startKill(m,kind){
   kill.on=true;kill.m=m;kill.x=P.pos.x;kill.y=P.pos.y;kill.z=P.pos.z;kill.yaw=yaw;kill.faceSeen=false;
   kill.fx=-Math.sin(yaw);kill.fz=-Math.cos(yaw);kill.rx=Math.cos(yaw);kill.rz=-Math.sin(yaw);
   const f=HollowKillCam.FACE[m.kind]||HollowKillCam.FACE[kind]||HollowKillCam.FACE.stalker;kill.local.set(f[0],f[1],f[2]);
-  kill.voice=HollowAudio.KIND_NAMES.includes(m.kind)?m.kind:kind==='gravekeeper'?'warden':'stalker';
+  kill.voice=HollowAudio.KIND_NAMES.includes(m.kind)?m.kind:'stalker';
   let yaw0=P.yaw-yaw;yaw0-=Math.round(yaw0/(2*Math.PI))*2*Math.PI;
   killCam.start(kind,{motion:preferences.motion,effects:preferences.effects,yaw0,pitch0:P.pitch,eye0:P.eye,dist0:d,ceiling:H,seed:monsters.indexOf(m)+1,
     back:killClear(-kill.fx,-kill.fz,4),left:killClear(-kill.rx,-kill.rz,3),right:killClear(kill.rx,kill.rz,3)});
