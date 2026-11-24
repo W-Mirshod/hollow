@@ -167,7 +167,7 @@ test('CommonJS, browser global and AMD load without audio hardware, DOM or timer
   assert.deepEqual(Object.keys(audio), ['create', 'CUE_NAMES', 'KIND_NAMES']);
   assert.ok(Object.isFrozen(audio));
   assert.deepEqual(audio.CUE_NAMES, [...CUES.slice(0, 1), 'step', 'notice', 'attack', 'death', ...VOCALS, ...HUNTS]);
-  assert.deepEqual(audio.KIND_NAMES, KINDS);
+  assert.deepEqual(audio.KIND_NAMES, [...KINDS, 'gravekeeper']);
   assert.ok(Object.isFrozen(audio.CUE_NAMES) && Object.isFrozen(audio.KIND_NAMES));
   assert.throws(() => { 'use strict'; audio.CUE_NAMES.push('loop'); }, TypeError);
   const globalAPI = browserAPI();
@@ -201,7 +201,7 @@ test('dependencies are validated without touching the supplied output or noise',
   assertReleased(setup);
 });
 
-for (const kind of KINDS) for (const cue of CUES) {
+for (const kind of [...KINDS, 'gravekeeper']) for (const cue of CUES) {
   test(`${kind} ${cue}: layered one-shots have finite starts, stops, envelopes and cleanup`, () => {
     const setup = fixture(), { context, instance, noiseBuffer } = setup;
     const id = instance.play(kind, cue, { x: 7, y: .8, z: -11 });
@@ -935,6 +935,24 @@ test('laughs are 4–8 staccato bursts on descending pitch steps with breath bet
   assert.ok(spacing.warden > spacing.shrieker * 1.8, 'A slow, deep chuckle against a rapid giggle');
 });
 const KINDS_PITCH = { warden: 48, stalker: 94, crawler: 132, shrieker: 285 };
+
+test('the Gravekeeper performs the Warden\'s cues through a deeper, larger throat', () => {
+  for (const cue of ['moan', 'growl', 'scream', 'wake', 'howl']) for (const seed of [5, 23]) {
+    const voiced = kind => {
+      const { context, instance } = fixture({ api: browserAPI(seed) });
+      instance.play(kind, cue);
+      const voice = instance.snapshot().voices[0];
+      const flutter = modulators(context);
+      const first = context.sources.filter(source => source.type === 'custom' && !flutter.includes(source)).map(source => source.frequency.events[0].value);
+      instance.stop();
+      return { voice, main: Math.max(...first), layers: context.sources.length };
+    };
+    const warden = voiced('warden'), boss = voiced('gravekeeper');
+    assert.equal(boss.voice.kind, 'gravekeeper', 'its cues report their own kind');
+    assert.equal(boss.layers, warden.layers, `${cue}: the same script as the Warden`);
+    assert.ok(boss.main < warden.main * .8, `${cue}: pitched well below the Warden (${boss.main.toFixed(1)} vs ${warden.main.toFixed(1)} Hz)`);
+  }
+});
 
 test('screams stack detuned voices and noise, distorted, with formants sweeping up then down', () => {
   for (const kind of KINDS) for (const seed of [9, 31]) {

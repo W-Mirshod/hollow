@@ -13,8 +13,12 @@
     warden: { pitch: 48, formants: [190, 510], air: 620, claw: 1250, breath: 1.65, balance: 1, tract: .7 },
     stalker: { pitch: 94, formants: [430, 1380], air: 1850, claw: 2900, breath: 1.2, balance: .7, tract: .96 },
     crawler: { pitch: 132, formants: [680, 1950], air: 2600, claw: 4200, breath: .85, balance: .8, tract: 1.16 },
-    shrieker: { pitch: 285, formants: [1080, 2920], air: 3200, claw: 2150, breath: 1.4, balance: .85, tract: 1.3 }
+    shrieker: { pitch: 285, formants: [1080, 2920], air: 3200, claw: 2150, breath: 1.4, balance: .85, tract: 1.3 },
+    // S2's boss: the Warden's cues from a far longer, deeper throat.
+    gravekeeper: { pitch: 33, formants: [140, 400], air: 470, claw: 880, breath: 2.2, balance: 1.15, tract: .56 }
   };
+  // style: whose cue scripts a kind performs (its own throat above still shapes them).
+  const STYLE = { gravekeeper: 'warden' };
   // Priority tiers: breath < steps < ambient voices < engagement < violence. Ties retire the oldest.
   // `ref`/`rolloff` shape distance: whispers stay intimate, moans and screams carry down corridors.
   const CUES = {
@@ -229,7 +233,7 @@
       // Static makeup levels each synthesized vocal so the CUES table alone sets relative loudness.
       const vocal = { whisper: WHISPERS, moan: MOANS, growl: GROWLS, laugh: LAUGHS, scream: SCREAMS,
         wake: WAKES, howl: HOWLS, snarl: SNARLS, chatter: CHATTERS }[voice.cue];
-      const mixdown = vocal ? vca(vocal[voice.kind].trim, gain) : gain;
+      const mixdown = vocal ? vca(vocal[voice.style].trim, gain) : gain;
 
       // One automated gain per source; `shape` is a named or generated [phase, amount] list.
       function envelope(start, duration, level, shape, bands = 1, destination = gain) {
@@ -297,8 +301,8 @@
       function throat(delay, duration, level, shape = 'throat', end = .74) {
         noise(delay, duration, level, profile.formants, shape, 1.5, end);
         tone(delay + .012, duration * .94, level * .55, profile.pitch, profile.formants, shape, end,
-          voice.kind === 'shrieker' ? 1.48 : 1.12);
-        if (voice.kind === 'shrieker') {
+          voice.style === 'shrieker' ? 1.48 : 1.12);
+        if (voice.style === 'shrieker') {
           tone(delay + .047, duration * .9, level * .28, profile.pitch * 1.067,
             profile.formants.map(value => value * 1.17), shape, end * .93, 1.36);
           tone(delay + .083, duration * .82, level * .16, profile.pitch * 1.414,
@@ -314,7 +318,7 @@
         noise(delay + .03, count * .08 + .12, level * .42, [profile.claw * .55, profile.claw], 'scrape', .9, .6);
       }
       function thump(delay, level) {
-        const heavy = voice.kind === 'warden';
+        const heavy = voice.style === 'warden';
         noise(delay, heavy ? .35 : .21, level, [heavy ? 110 : 240, heavy ? 280 : 560], 'hit', .75, .62);
         tone(delay, heavy ? .4 : .23, level * .7, heavy ? 58 : 83, [], 'hit', .66, .92);
       }
@@ -453,7 +457,7 @@
 
       // Breathy, unintelligible syllables: noise through moving vowel formants plus fricative bursts.
       function whisper() {
-        const kind = voice.kind, setting = WHISPERS[kind], lead = .15, span = random(...setting.span);
+        const kind = voice.style, setting = WHISPERS[kind], lead = .15, span = random(...setting.span);
         const items = syllables(integer(setting.count), lead, span), last = items[items.length - 1];
         let vowel = Math.floor(random(0, setting.vowels.length));
         for (const item of items) {
@@ -526,7 +530,7 @@
       }
       // A long voiced vowel glide sinking in pitch, doubled an octave down and ring-modulated.
       function moan() {
-        const setting = MOANS[voice.kind], span = random(...setting.span), pitch = profile.pitch;
+        const setting = MOANS[voice.style], span = random(...setting.span), pitch = profile.pitch;
         const contour = setting.contour.map((value, index) => [[0, .2, .55, 1][index], pitch * value]);
         const mouth = tract(span, setting.path, [6, 10, 12], [1, .55, .3]);
         const ring = vca(0, mouth), body = voiced(0, span, .85, contour, mouth, 'moan', 8, .03);
@@ -535,17 +539,17 @@
         modulator(0, span, setting.depth, [[0, rate], [.5, rate * random(.9, 1.1)], [1, rate * random(.85, 1)]], ring.gain, 'roughen');
         voiced(.05, span - .05, setting.sub, contour.map(([phase, value]) => [phase, value * .498]), mouth, 'moan', 5, .015);
         air(0, span, setting.breath, mouth, 'exhale');
-        if (voice.kind === 'shrieker') voiced(.08, span - .1, .25, contour.map(([phase, value]) => [phase, value * 1.067]), mouth, 'wail', 9, .02);
+        if (voice.style === 'shrieker') voiced(.08, span - .1, .25, contour.map(([phase, value]) => [phase, value * 1.067]), mouth, 'wail', 9, .02);
       }
       // Chase rumble: flutter-modulated voice and rasp driven into a waveshaper, then the throat.
       function growl() {
-        const setting = GROWLS[voice.kind], span = random(...setting.span), pitch = profile.pitch * setting.pitch;
+        const setting = GROWLS[voice.style], span = random(...setting.span), pitch = profile.pitch * setting.pitch;
         const contour = [[0, pitch * .8], [.15, pitch], [.6, pitch * .96], [1, pitch * .82]];
         const mouth = tract(span, [[0, 'o'], [.4, 'a'], [.75, 'o'], [1, 'u']], [4, 6, 8], [1, .6, .35], profile.tract * setting.scale);
-        const flutter = vca(.55, grit(setting.drive, mouth)), shape = voice.kind === 'crawler' ? 'stutter' : 'growl';
+        const flutter = vca(.55, grit(setting.drive, mouth)), shape = voice.style === 'crawler' ? 'stutter' : 'growl';
         voiced(0, span, .8, contour, flutter, shape, 12, .03);
         if (setting.sub) voiced(.02, span - .02, setting.sub, contour.map(([phase, value]) => [phase, value * .5]), flutter, shape, 9, .04);
-        if (voice.kind === 'shrieker') voiced(.03, span - .05, .3, contour.map(([phase, value]) => [phase, value * 2.134]), flutter, shape, 14, .03);
+        if (voice.style === 'shrieker') voiced(.03, span - .05, .3, contour.map(([phase, value]) => [phase, value * 2.134]), flutter, shape, 14, .03);
         air(0, span, setting.rasp, flutter, shape);
         const rates = [];
         for (let phase = 0; phase < 1; phase += random(.08, .16)) rates.push([phase, random(...setting.flutter)]);
@@ -554,7 +558,7 @@
       }
       // Staccato voiced bursts on descending pitch steps, with aspiration and breath in between.
       function laugh() {
-        const kind = voice.kind, setting = LAUGHS[kind], bursts = [], lead = .03;
+        const kind = voice.style, setting = LAUGHS[kind], bursts = [], lead = .03;
         let time = lead, pitch = profile.pitch * random(...setting.pitch);
         for (let index = 0, total = integer(setting.count); index < total; index++) {
           const length = random(...setting.burst), gap = random(...setting.gap);
@@ -605,7 +609,7 @@
       }
       // A harsh shriek/roar: detuned voices plus noise, distorted, formants sweeping up then down.
       function scream() {
-        const setting = SCREAMS[voice.kind], span = random(...setting.span), lead = setting.lead, pitch = profile.pitch;
+        const setting = SCREAMS[voice.style], span = random(...setting.span), lead = setting.lead, pitch = profile.pitch;
         const contour = setting.contour.map((value, index) => [[0, .15, .6, 1][index], pitch * value]);
         const vowels = setting.path, path = vowels.map((vowel, index) => [(lead + span * index / (vowels.length - 1)) / (lead + span), vowel]);
         if (lead) path.unshift([0, vowels[0]]);
@@ -632,7 +636,7 @@
       }
       // A sleeper waking: a ragged ingressive gasp, then a distorted roar that climbs out of the chest.
       function wake() {
-        const setting = WAKES[voice.kind], lead = random(...setting.gasp), span = random(...setting.span), total = lead + span;
+        const setting = WAKES[voice.style], lead = random(...setting.gasp), span = random(...setting.span), total = lead + span;
         const contour = setting.contour.map((value, index) => [[0, .12, .4, .7, 1][index], profile.pitch * value]);
         const mouth = tract(total, [[0, 'u'], [lead / total, 'o'], [(lead + span * .35) / total, 'a'], [(lead + span * .7) / total, 'e'], [1, 'o']],
           [5, 8, 10], [1, .7, .45]);
@@ -646,7 +650,7 @@
       }
       // A hunting howl that carries across the floor: it climbs, cracks upward at its peak and sags away.
       function howl() {
-        const setting = HOWLS[voice.kind], span = random(...setting.span);
+        const setting = HOWLS[voice.style], span = random(...setting.span);
         const contour = setting.contour.map((value, index) => [[0, .3, .42, .7, 1][index], profile.pitch * value, index === 2]);
         const mouth = tract(span, [[0, 'u'], [.3, 'o'], [.48, 'a'], [.75, 'o'], [1, 'u']], [6, 9, 11], [1, .6, .35]);
         const tremble = setting.ring ? vca(.55, mouth) : mouth;
@@ -658,7 +662,7 @@
       }
       // A snarl at arm's length: a bared-teeth hiss, then a short rattling voice driven hard and bitten off.
       function snarl() {
-        const setting = SNARLS[voice.kind], span = random(...setting.span), pitch = profile.pitch * setting.pitch;
+        const setting = SNARLS[voice.style], span = random(...setting.span), pitch = profile.pitch * setting.pitch;
         const contour = [[0, pitch * 1.1], [.12, pitch * 1.3], [.5, pitch * 1.15], [1, pitch * .9]];
         const mouth = tract(span, [[0, 'i'], [.15, 'a'], [.6, 'e'], [1, 'uh']], [4, 6, 8], [1, .65, .4], profile.tract * 1.1);
         const flutter = vca(.55, grit(setting.drive, mouth));
@@ -670,7 +674,7 @@
       }
       // Teeth chattering in the dark: uneven runs of clicks over a wet, trilling murmur.
       function chatter() {
-        const setting = CHATTERS[voice.kind], span = random(...setting.span), count = integer(setting.clicks), clicks = [];
+        const setting = CHATTERS[voice.style], span = random(...setting.span), count = integer(setting.clicks), clicks = [];
         let at = random(.02, .06);
         for (let index = 0; index < count && at < span - .03; index++) {
           clicks.push([at / span, 0], [(at + .002) / span, random(.6, 1)], [(at + .012) / span, 0]);
@@ -687,41 +691,41 @@
 
       if (voice.cue === 'breath') {
         noise(0, profile.breath, .78, [profile.air], 'breath', .65, .62);
-        const grains = voice.kind === 'stalker' || voice.kind === 'crawler' ? 5 : 3;
+        const grains = voice.style === 'stalker' || voice.style === 'crawler' ? 5 : 3;
         for (let index = 0; index < grains; index++) {
           const at = profile.breath * (.12 + index * .14) + random(0, .045);
           noise(at, random(.065, .16), random(.32, .56), [profile.air * random(.65, 1.15)], 'whisper', 1.4, .8);
         }
-        if (voice.kind === 'warden') {
+        if (voice.style === 'warden') {
           tone(.13, profile.breath * .72, .24, profile.pitch, profile.formants, 'throat', .85, 1.04);
           tone(.2, profile.breath * .6, .12, 37, [], 'breath', .92, 1.02);
-        } else if (voice.kind === 'crawler') claws(.24, 2, .2);
-        else if (voice.kind === 'shrieker') noise(.16, profile.breath * .7, .34, profile.formants, 'whisper', 2, .86);
+        } else if (voice.style === 'crawler') claws(.24, 2, .2);
+        else if (voice.style === 'shrieker') noise(.16, profile.breath * .7, .34, profile.formants, 'whisper', 2, .86);
       } else if (voice.cue === 'step') {
-        if (voice.kind === 'warden') {
+        if (voice.style === 'warden') {
           thump(0, .78);
           throat(.045, .5, .27);
           noise(.06, .24, .25, [800], 'scrape');
-        } else if (voice.kind === 'crawler') claws(0, 4, .65);
+        } else if (voice.style === 'crawler') claws(0, 4, .65);
         else {
-          noise(0, .2, .62, [voice.kind === 'stalker' ? 340 : 620], 'hit');
-          claws(.035, 1, voice.kind === 'stalker' ? .25 : .38);
+          noise(0, .2, .62, [voice.style === 'stalker' ? 340 : 620], 'hit');
+          claws(.035, 1, voice.style === 'stalker' ? .25 : .38);
         }
       } else if (voice.cue === 'notice') {
         noise(0, .28, .6, [profile.air], 'breath');
-        const duration = voice.kind === 'shrieker' ? 1.9 : voice.kind === 'warden' ? 1.3 : voice.kind === 'crawler' ? .65 : .95;
-        throat(.13, duration, .8, voice.kind === 'shrieker' ? 'wail' : 'throat');
-        if (voice.kind === 'warden') thump(.08, .34);
-        else if (voice.kind === 'crawler') claws(.08, 3, .42);
-        else if (voice.kind === 'stalker') noise(.63, .34, .5, [profile.air * 1.2], 'whisper', 1.2);
+        const duration = voice.style === 'shrieker' ? 1.9 : voice.style === 'warden' ? 1.3 : voice.style === 'crawler' ? .65 : .95;
+        throat(.13, duration, .8, voice.style === 'shrieker' ? 'wail' : 'throat');
+        if (voice.style === 'warden') thump(.08, .34);
+        else if (voice.style === 'crawler') claws(.08, 3, .42);
+        else if (voice.style === 'stalker') noise(.63, .34, .5, [profile.air * 1.2], 'whisper', 1.2);
       } else if (voice.cue === 'attack') {
         noise(0, .13, .7, [profile.air], 'whisper');
-        throat(.035, voice.kind === 'shrieker' ? 1.05 : .68, .95, 'throat', .63);
-        claws(.12, voice.kind === 'crawler' ? 4 : 2, .5);
-        if (voice.kind === 'warden') thump(.055, .55);
+        throat(.035, voice.style === 'shrieker' ? 1.05 : .68, .95, 'throat', .63);
+        claws(.12, voice.style === 'crawler' ? 4 : 2, .5);
+        if (voice.style === 'warden') thump(.055, .55);
       } else if (voice.cue === 'death') {
-        throat(0, voice.kind === 'warden' ? 1.5 : 1.2, .75, 'collapse', .4);
-        thump(voice.kind === 'warden' ? .56 : .4, .75);
+        throat(0, voice.style === 'warden' ? 1.5 : 1.2, .75, 'collapse', .4);
+        thump(voice.style === 'warden' ? .56 : .4, .75);
         claws(.48, 3, .4);
         noise(.72, .78, .4, [profile.air * .6], 'breath', .7, .42);
       } else if (voice.cue === 'whisper') whisper();
@@ -757,7 +761,7 @@
       }
       connectBus();
       const voice = {
-        id: nextId++, kind, cue, position: { x, y, z }, occluded: obstruction,
+        id: nextId++, kind, style: STYLE[kind] || kind, cue, position: { x, y, z }, occluded: obstruction,
         volume: clamp(volume, 0, 1), priority: definition.priority,
         gain: definition.gain * KINDS[kind].balance * clamp(volume, 0, 1) * (1 - .72 * obstruction),
         lowpass: cutoff(10000 * Math.pow(.075, obstruction)),
