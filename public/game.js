@@ -1147,19 +1147,33 @@ function aimAtPart(m,part){
     for(let i=0;i<pos.count;i+=step){v.fromBufferAttribute(pos,i).applyMatrix4(o.matrixWorld);pts.push(v.clone());}});
   if(!pts.length)return null;
   const c=pts.reduce((a,b)=>a.add(b),new THREE.Vector3()).multiplyScalar(1/pts.length);
-  // Central points first, nudged toward the middle of the part so the round lands inside it rather than grazing it.
+  // Central points first, nudged toward the middle of the part so the round lands inside it rather than grazing it, and
+  // preferably one whose ring of rays .012 rad out (an aimed automatic's spread) stays on the part too.
   pts.sort((a,b)=>a.distanceToSquared(c)-b.distanceToSquared(c));
+  const side=new THREE.Vector3(),up=new THREE.Vector3(),ray=new THREE.Vector3();
+  const steady=()=>{
+    side.set(-dir.z,0,dir.x).normalize();up.crossVectors(side,dir);
+    for(let k=0;k<8;k++){const a=k*Math.PI/4;ray.copy(dir).addScaledVector(side,.012*Math.cos(a)).addScaledVector(up,.012*Math.sin(a)).normalize();
+      if(!meshHit(m,eye,ray,60,_meshHit)||!zone(meshRegion(m,_meshHit.object,_meshHit.point)))return false;}
+    return true;
+  };
+  let first=null;
   for(const q of pts){
     const target=q.clone().lerp(c,.35);dir.copy(target).sub(eye).normalize();
     const ox=eye.x-m.pos.x,oz=eye.z-m.pos.z,a=dir.x*dir.x+dir.z*dir.z,b=2*(ox*dir.x+oz*dir.z),cc=ox*ox+oz*oz-m.stats.radius*m.stats.radius,disc=b*b-4*a*cc;
     if(a<1e-5||disc<0)continue;
     const at=(-b-Math.sqrt(disc))/(2*a),y=eye.y+dir.y*at;
     if(at<0||y<.06||y>m.stats.height)continue;
-    if(!meshHit(m,eye,dir,60,_meshHit)||!zone(meshRegion(m,_meshHit.object,_meshHit.point)))continue;
-    P.yaw=Math.atan2(-dir.x,-dir.z);P.pitch=Math.asin(Math.max(-1,Math.min(1,dir.y)));
-    return {x:_meshHit.point.x,y:_meshHit.point.y,z:_meshHit.point.z,region:meshRegion(m,_meshHit.object,_meshHit.point)};
+    if(!meshHit(m,eye,dir,60,_meshHit))continue;
+    const region=meshRegion(m,_meshHit.object,_meshHit.point);
+    if(!zone(region))continue;
+    const hit={x:_meshHit.point.x,y:_meshHit.point.y,z:_meshHit.point.z,region,dir:dir.clone()};
+    if(!first)first=hit;
+    if(steady()){first=hit;break;}
   }
-  return null;
+  if(!first)return null;
+  P.yaw=Math.atan2(-first.dir.x,-first.dir.z);P.pitch=Math.asin(Math.max(-1,Math.min(1,first.dir.y)));
+  delete first.dir;return first;
 }
 
 // A creature's blow that leaves the survivor standing: the view punched away from it and dropping as the legs buckle,
@@ -2079,8 +2093,8 @@ function fire(){
     gib=gib||(r.killed&&v.gib);killedAny=killedAny||r.killed;heavyHead=heavyHead||s.heavyHead;
     heavy=heavy||s.maxPellet>=2||s.damage>=3.5||(r.killed&&(v.gib||!!v.sever));
     shotLog.targets.push({index:monsters.indexOf(m),kind:m.kind,damage:s.damage,pellets:s.pellets,region:v.region,head:s.head,killed:r.killed,
-      gib:r.killed&&v.gib,jaw:r.killed&&v.jaw,sever:r.killed?v.sever:'',chunks:v.chunks,kneel:!r.killed&&v.kneel&&!m.dormant,deathForce:v.deathForce,
-      knock:Math.hypot(s.knockX,s.knockZ),strength:Math.min(2,s.strength)});
+      gib:r.killed&&v.gib,jaw:r.killed&&v.jaw,sever:r.killed?v.sever:'',chunks:v.chunks,kneel:!r.killed&&v.kneel&&!m.dormant&&!m.boss,deathForce:v.deathForce,
+      knock:m.boss?0:Math.hypot(s.knockX,s.knockZ),strength:Math.min(2,s.strength)});
   }
   if(struck.length)lastShot=shotLog;
   shotHit.heavy=heavy;
@@ -2328,7 +2342,7 @@ function aboveGroundHUD(){
 function bossSnapshot(){
   const b=boss;if(!b||!FLOOR().boss)return null;
   return {kind:b.kind,act:b.act,hp:b.hp,maxHp:b.stats.hp,phase:b.phase,x:b.pos.x,z:b.pos.z,dead:b.dead,visible:b.g.visible,holding:bossHolds(),summoned:b.summoned,sink:b.sink,
-    bell:bossBell?bossBell.rotation.z:null};
+    bell:bossBell?bossBell.rotation.z:null,hits:hitsSummary(b)};
 }
 function sBell(volume){
   if(!AC||!bossBell)return;const n=AC.currentTime,p=makePanner(8,.6);setPos(p,bossBell.position.x,bossBell.position.y,bossBell.position.z);

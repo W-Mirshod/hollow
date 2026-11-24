@@ -109,7 +109,8 @@ test('every creature and every gun: head, torso and leg hits land in their regio
       }
       if(w.pellets===1){
         dealt[`${w.id} ${part}`]=t.damage;
-        if(part==='torso')expect(r.shot.hits[0].exit,`${tag}: a round through the torso leaves an exit wound`).toBe(true);
+        // Rounds of .9 damage or more go through the torso and out of the back; a light one (an SMG round) stays in.
+        if(part==='torso')expect(r.shot.hits[0].exit,`${tag}: an exit wound for a ${t.damage.toFixed(2)} round`).toBe(t.damage>=.9);
         if(part==='torso'&&w.id==='rifle')knock[kind]=t.knock;
       }
     }
@@ -204,13 +205,92 @@ test('a blow that leaves the survivor standing jolts the view, drags the legs, b
   expect(slow).toBe(1);
 });
 
+test('the Gravekeeper flinches heavily but is never shoved or dropped to a knee, its spade hits hardest, and a killing head shot takes the head before its grave takes the body',async({page})=>{
+  await ready(page,{quality:'high',volume:.6});
+  // S2, its boss awake before the gate, the survivor 5.5 m from it with a clear line.
+  const at=await page.evaluate(()=>{
+    const T=HollowTest,G=HollowGame;T.floor(4,4242);T.silence();T.advance(.6);T.boss('wake',true);T.freezeAI(true);T.advance(.1);
+    const b=G.snapshot().boss;
+    for(const r of [5.5,4.5])for(let k=0;k<8;k++){const dx=Math.sin(k*Math.PI/4),dz=Math.cos(k*Math.PI/4),x=b.x+dx*r,z=b.z+dz*r,yaw=Math.atan2(dx,dz);
+      if(!T.navClear(x,z,b.x,b.z,.32)||!T.navClear(x-dx*3,z-dz*3,b.x,b.z,.32))continue;
+      T.pose({x,z,yaw});if(['head','torso','leg','arm'].every(part=>T.aim(20,part)))return {x,z,yaw,boss:b};}
+    return {boss:b};
+  });
+  expect(at.boss).toMatchObject({kind:'gravekeeper',act:'hunt',dead:false,sink:0});
+  expect(at.x,'a clear spot facing the Gravekeeper').toBeDefined();
+  const fire=(weapon,part,o={})=>page.evaluate(({at,weapon,part,o})=>{
+    const T=HollowTest,G=HollowGame,B=20;
+    T.arm(HollowSystems.WEAPONS.map(w=>w.id),weapon);T.action('aim',true);T.health(100);
+    const d=o.close||0;T.pose({x:at.x-Math.sin(at.yaw)*d,z:at.z-Math.cos(at.yaw)*d,yaw:at.yaw});T.advance(.35);
+    const aim=T.aim(B,part);T.action('fire',true);T.advance(.05);T.action('fire',false);
+    const now=G.snapshot();if(o.after)T.advance(o.after);
+    const s=G.snapshot();return {aim,shot:now.shot,boss:s.boss,gore:s.gore};
+  },{at,weapon,part,o});
+  let r;
+  for(const [weapon,part] of [['rifle','torso'],['rifle','torso'],['pistol','leg'],['rifle','arm']]){
+    r=await fire(weapon,part);
+    const t=r.shot.targets[0];
+    expect(r.aim,`${weapon} ${part}: a visible point to aim at`).not.toBeNull();
+    expect(t).toMatchObject({index:20,kind:'gravekeeper',killed:false,kneel:false,knock:0});
+    expect(r.boss.hits.anim.heat,'it flinches').toBeGreaterThan(0);
+  }
+  expect(r.boss.hits.wounds,'its wounds stay on it').toBeGreaterThanOrEqual(4);
+  expect(Math.hypot(r.boss.x-at.boss.x,r.boss.z-at.boss.z),'and it stands where it stood').toBeLessThan(1e-6);
+  // A point-blank blast into its legs: a stalker would go down on one knee; the Gravekeeper only flinches.
+  r=await fire('shotgun','leg',{close:3,after:.3});
+  expect(r.shot.targets[0]).toMatchObject({kind:'gravekeeper',kneel:false,knock:0});
+  expect(r.boss.hits.kneeling).toBe(false);expect(r.boss.hits.anim.kneeling).toBe(0);
+  expect(Math.hypot(r.boss.x-at.boss.x,r.boss.z-at.boss.z)).toBeLessThan(1e-6);
+  const wounded=r.boss.hits.wounds;
+  await page.evaluate(({at})=>{const T=HollowTest,b=HollowGame.snapshot().boss,eye=HollowGame.snapshot().position.y+1.6;
+    T.action('aim',false);T.pose({x:at.x,z:at.z,yaw:at.yaw,pitch:Math.atan2(1.6-eye,Math.hypot(b.x-at.x,b.z-at.z))});},{at});
+  await settle(page,10);await snap(page,'gravekeeper-wounds');
+  // Its blow: the heaviest there is, rung ears and dragging legs, but no displacement.
+  const blow=await page.evaluate(({at})=>{
+    const T=HollowTest,G=HollowGame;T.health(100);T.pose({x:at.x,z:at.z,yaw:at.yaw});
+    const seen=G.snapshot().audioLog.at(-1)?.n||0,before=G.snapshot().position;T.freezeAI(false);
+    let s=G.snapshot();for(let i=0;i<200&&s.health>=100;i++){T.advance(.05);s=G.snapshot();}
+    T.freezeAI(true);
+    return {health:s.health,hurt:s.hurt,state:s.state,cues:s.audioLog.filter(l=>l.n>seen&&l.src==='player').map(l=>l.cue)};
+  },{at});
+  console.log('gravekeeper blow',JSON.stringify({health:blow.health,last:blow.hurt.last,slow:blow.hurt.slow,cues:blow.cues}));
+  expect(blow.state).toBe('play');expect(blow.health).toBeLessThan(100);
+  expect(blow.hurt.last).toMatchObject({kind:'gravekeeper',style:'blunt'});
+  expect(blow.hurt.slow,'the legs drag').toBeLessThan(.7);
+  expect(blow.cues).toContain('muffle');expect(blow.cues).toContain('ring');
+  // Down to its last hit point, a magnum round through the head: the head comes apart and the neck pumps.
+  r=await page.evaluate(({at})=>{
+    const T=HollowTest,G=HollowGame,B=20;T.health(100);T.boss('pose',{x:at.boss.x,z:at.boss.z});T.boss('hit',G.snapshot().boss.hp-1);
+    T.arm(HollowSystems.WEAPONS.map(w=>w.id),'magnum');T.action('aim',true);T.pose({x:at.x,z:at.z,yaw:at.yaw});T.advance(.35);
+    const aim=T.aim(B,'head');T.action('fire',true);T.advance(.05);T.action('fire',false);
+    const now=G.snapshot();T.freezeAI(false);T.health(100);T.advance(.1);T.freezeAI(true);
+    const s=G.snapshot();return {aim,shot:now.shot,boss:s.boss,gore:s.gore,banner:s.hud.banner};
+  },{at});
+  expect(r.aim).not.toBeNull();
+  expect(r.shot.targets[0]).toMatchObject({kind:'gravekeeper',killed:true,gib:true,head:true});
+  expect(r.boss).toMatchObject({act:'dead',dead:true});expect(r.banner).toBe('THE GRAVEKEEPER FALLS');
+  expect(r.boss.hits.gibbed).toBe(true);expect(r.boss.hits.anim.gib).toBe(1);expect(r.boss.hits.wounds).toBeGreaterThanOrEqual(wounded);
+  expect(r.gore.fountains).toBeGreaterThan(0);expect(r.gore.stumps).toBeGreaterThan(0);expect(r.gore.chunks,'skull and flesh fly').toBeGreaterThan(0);
+  const down=await page.evaluate(()=>{const T=HollowTest;T.freezeAI(false);T.health(100);T.advance(2.4);T.freezeAI(true);T.action('aim',false);return HollowGame.snapshot();});
+  expect(down.boss.sink).toBe(0);expect(down.gore.pools,'it bleeds out where it fell').toBeGreaterThan(0);
+  await page.evaluate(({at,b})=>{const T=HollowTest,eye=HollowGame.snapshot().position.y+1.6,x=at.x-Math.sin(at.yaw)*2.5+Math.cos(at.yaw)*1.2,z=at.z-Math.cos(at.yaw)*2.5-Math.sin(at.yaw)*1.2;
+    T.pose({x,z,yaw:Math.atan2(-(b.x-x),-(b.z-z)),pitch:Math.atan2(.4-eye,Math.hypot(b.x-x,b.z-z))});},{at,b:down.boss});
+  await settle(page,10);await snap(page,'gravekeeper-down');
+  // Then the earth takes the body: it sinks out of sight, and nothing bleeds up through the ground.
+  const gone=await page.evaluate(()=>{const T=HollowTest,G=HollowGame;T.freezeAI(false);let low=0;
+    for(let i=0;i<24;i++){T.health(100);T.advance(.5);low=Math.min(low,G.snapshot().boss.sink);}
+    T.freezeAI(true);return {s:G.snapshot(),low};});
+  expect(gone.low).toBeLessThan(-3.5);expect(gone.s.boss).toMatchObject({act:'dead',visible:false});
+  expect(gone.s.gore.drops).toBe(0);expect(gone.s.gore.fountains).toBe(0);
+});
+
 test('low quality and effects off keep less gore; a full rifle magazine into a group stays within budget',async({page})=>{
   const spot=await ready(page,{quality:'high'});
   const measure=()=>page.evaluate(()=>new Promise(done=>{
     // Real frames: the renderer's counts and the frame time of what is on screen.
     const start=performance.now(),n0=HollowGame.snapshot().performance.frames;let k=0;
     const tick=()=>{if(++k<8){requestAnimationFrame(tick);return;}const s=HollowGame.snapshot();
-      done({drawCalls:s.performance.drawCalls,triangles:s.performance.triangles,frameMs:(performance.now()-start)/Math.max(1,s.performance.frames-n0),gore:s.gore});};
+      done({atm:s.atmosphere?s.atmosphere.drawCalls:0,drawCalls:s.performance.drawCalls,triangles:s.performance.triangles,frameMs:(performance.now()-start)/Math.max(1,s.performance.frames-n0),gore:s.gore});};
     requestAnimationFrame(tick);
   }));
   await page.evaluate(({spot})=>{
@@ -228,11 +308,12 @@ test('low quality and effects off keep less gore; a full rifle magazine into a g
     return {mag,left:G.snapshot().mag,dead:G.snapshot().enemies.filter((e,i)=>[0,1,3].includes(i)&&e.dead).length};
   });
   const after=await measure();
-  console.log('perf',JSON.stringify({fired,before:{drawCalls:before.drawCalls,triangles:before.triangles,frameMs:+before.frameMs.toFixed(1)},
+  console.log('perf',JSON.stringify({fired,atmosphere:[before.atm,after.atm],before:{drawCalls:before.drawCalls,triangles:before.triangles,frameMs:+before.frameMs.toFixed(1)},
     after:{drawCalls:after.drawCalls,triangles:after.triangles,frameMs:+after.frameMs.toFixed(1)},gore:after.gore}));
   expect(fired.left).toBe(0);
   expect(after.gore.drawCalls).toBeLessThanOrEqual(10);
-  expect(after.drawCalls-before.drawCalls).toBeLessThanOrEqual(12);
+  // The atmosphere's own layers (the guns' tracers and bullet holes, and the blood mist) keep their own budget.
+  expect(after.drawCalls-before.drawCalls-(after.atm-before.atm)).toBeLessThanOrEqual(12);
   expect(after.gore.wounds).toBeLessThanOrEqual(after.gore.caps.wounds);
   expect(after.gore.splats).toBeLessThanOrEqual(after.gore.caps.splats);
   // Low quality with effects off keeps a smaller pool of everything.
