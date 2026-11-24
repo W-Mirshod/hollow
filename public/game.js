@@ -2334,7 +2334,7 @@ function updateCaught(dt,force){
   if(NET.inGame){killEnd();coopLocalDone('dead');return;}
   state='dead';hideMonsters();setLight(spot,0);$('flash').style.opacity=0;gun.visible=false;
   const lasted=Math.round(elapsed*10)/10,m=Math.floor(lasted/60),s=Math.floor(lasted%60),own=runScore();
-  $('deadText').textContent=`${p.line} You lasted ${m}:${String(s).padStart(2,'0')} in the dark${floor?`, down to ${FLOOR().code} · ${FLOOR().name}`:''}. The corridors are quiet again.`;
+  $('deadText').textContent=`${p.line} You lasted ${m}:${String(s).padStart(2,'0')} in the dark${floor?`, ${FLOOR().outdoor?'out in':'down to'} ${FLOOR().code} · ${FLOOR().name}`:''}. ${FLOOR().outdoor?'The night is quiet again.':'The corridors are quiet again.'}`;
   $('retryDark').textContent=checkpoint&&checkpoint.floor?`Retry ${FLOOR().code} · ${FLOOR().name}`:'Re-enter the ward';
   showScreen('dead');recordRun({mode:'solo',escaped:false,time:elapsed,kills:own.kills,score:own.points},'deadRank');try{document.exitPointerLock();}catch(e){}
 }
