@@ -11,7 +11,7 @@
   'use strict';
   const QUALITY = Object.freeze({ high: 1, medium: .75, low: .45 });
   // Pool sizes at high quality with effects on; quality and effects scale the live caps below these.
-  const MAX = Object.freeze({ wounds: 96, perMonster: 10, stumps: 12, splats: 192, walls: 72, pools: 14, chunks: 72, drops: 360,
+  const MAX = Object.freeze({ wounds: 96, perMonster: 10, stumps: 12, splats: 320, walls: 128, pools: 14, chunks: 72, drops: 360,
     limbs: 4, fountains: 4 });
   const GRAVITY = 9.8, ENTRY = 0, EXIT = 1, STUMP = 2;
   const DK = 12;      // drop: x y z vx vy vz size splat age life walls kind
@@ -105,13 +105,13 @@
     });
   }
   function wallTexture(THREE) {
-    const sats = satellites(23, 34, .12, .72, .25), runs = [];
+    const sats = satellites(23, 40, .2, .86, .25), runs = [];
     for (let i = 0; i < 6; i++) {
       runs.push([(hash2(i, 7, 41) - .5) * .7, .25 + (hash2(i, 8, 41) - .5) * .25, -.25 - .65 * hash2(i, 9, 41), .012 + .022 * hash2(i, 10, 41)]);
     }
     return texture(THREE, 128, (x, y, px) => {
       const dx = x, dy = y - .25, r = Math.hypot(dx, dy * 1.15), a = Math.atan2(dy, dx);
-      const edge = .2 + .09 * fbm(Math.cos(a) * 1.8 + 1, Math.sin(a) * 1.8 + 1, 17);
+      const edge = .27 + .12 * fbm(Math.cos(a) * 1.8 + 1, Math.sin(a) * 1.8 + 1, 17);
       let m = Math.max(clamp((edge - r) / .03, 0, 1), dropMask(sats, x, y));
       // Runs down the wall from the splat, thinning, each ending in a bead.
       for (const [cx, top, end, w] of runs) {
@@ -145,18 +145,72 @@
   }
   const lerp3 = (out, a, b, t) => { out[0] = a[0] + (b[0] - a[0]) * t; out[1] = a[1] + (b[1] - a[1]) * t; out[2] = a[2] + (b[2] - a[2]) * t; };
   const HOLE = [.012, 0, 0], RAW = [.3, .012, .01], MEAT = [.52, .075, .055], BONE = [.74, .66, .55], MARROW = [.2, .008, .006];
-  function entryGeometry(THREE) {
-    return jagged(THREE, new THREE.IcosahedronGeometry(1, 1), .16, .42, 3, (x, y, z, h, c) => {
-      if (z > .62) lerp3(c, HOLE, RAW, clamp((.9 - z) / .28, 0, .35));
-      else lerp3(c, RAW, MEAT, clamp(.4 - z, 0, 1) * .5 + .15 * h);
-    });
+  // Wounds are darker than the chunks: wet, half-clotted, mostly in shadow inside the hole.
+  const BRUISE = [.04, .005, .008], SMEAR = [.06, .002, .002], W_RAW = [.09, .004, .003], W_MEAT = [.17, .018, .013];
+  // A wound facing +z, in units of its size: a crater (rings of [radius, height, colour stop], each ring torn by angle so
+  // the rim is ragged) sunk into a dark hole, and a run of blood down its -y side whose end dips into the skin, so on a
+  // flat face it fades out and on a rounded one it follows the body round. wound() turns -y to face down the body.
+  function crater(THREE, rings, seg, seed, tear, lift, color, run) {
+    const pos = [], col = [], idx = [], c = [0, 0, 0];
+    for (let j = 0; j < rings.length; j++) {
+      const [r, z] = rings[j];
+      for (let i = 0; i < seg; i++) {
+        const a = i / seg * Math.PI * 2, h = hash2(i, j, seed), torn = hash2(i, 0, seed + 1);
+        const rr = r * (1 + tear * (torn - .5) + .12 * (h - .5)), zz = z + lift * (j > 0 && j < rings.length - 1 ? (h - .35) * r : 0);
+        pos.push(rr * Math.cos(a), rr * Math.sin(a), zz);
+        color(j, h, torn, c); col.push(c[0], c[1], c[2]);
+      }
+    }
+    for (let j = 0; j < rings.length - 1; j++) for (let i = 0; i < seg; i++) {
+      const a = j * seg + i, b = j * seg + (i + 1) % seg, cc = (j + 1) * seg + i, d = (j + 1) * seg + (i + 1) % seg;
+      idx.push(a, cc, d, a, d, b);
+    }
+    // The run: three columns (the middle one wetter and raised) wandering down -y, then a bead where it stops.
+    const [start, len, width] = run, base = pos.length / 3, n = 9;
+    for (let k = 0; k <= n; k++) {
+      const t = k / n, y = -start - len * t, x = .09 * Math.sin(t * 4.5 + seed) * t, w = width * (1 - .55 * t);
+      const z = .035 - (t > .6 ? (t - .6) / .4 * .16 : 0);
+      for (let s = -1; s <= 1; s++) {
+        pos.push(x + s * w, y, z + (s ? 0 : .025));
+        lerp3(c, SMEAR, RAW, s ? .1 : .35 * (1 - t)); col.push(c[0], c[1], c[2]);
+      }
+      if (k) for (let s = 0; s < 2; s++) {
+        const p0 = base + (k - 1) * 3 + s, p1 = p0 + 1, q0 = p0 + 3, q1 = q0 + 1;
+        idx.push(p0, p1, q1, p0, q1, q0);
+      }
+    }
+    const tip = base + n * 3 + 1, bead = pos.length / 3, by = pos[tip * 3 + 1] - width * .3, bx = pos[tip * 3], br = width * .9;
+    pos.push(bx, by, .05); lerp3(c, SMEAR, RAW, .3); col.push(c[0], c[1], c[2]);
+    for (let i = 0; i < 6; i++) {
+      const a = i / 6 * Math.PI * 2;
+      pos.push(bx + br * Math.cos(a), by + br * 1.2 * Math.sin(a), -.03); col.push(SMEAR[0], SMEAR[1], SMEAR[2]);
+    }
+    for (let i = 0; i < 6; i++) idx.push(bead, bead + 1 + i, bead + 1 + (i + 1) % 6);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setIndex(idx); geo.computeVertexNormals();
+    return geo;
   }
+  // Entry: a small dark hole, a lip of raw flesh, a bruised ring, smeared blood, a thin run.
+  function entryGeometry(THREE) {
+    const rings = [[0, -.32], [.16, -.22], [.27, .02], [.38, .1], [.55, .05], [.8, .03], [1, -.01]];
+    return crater(THREE, rings, 14, 3, .3, .12, (j, h, torn, c) => {
+      if (j < 2) lerp3(c, HOLE, MARROW, .4 * j * h);
+      else if (j < 4) lerp3(c, W_RAW, W_MEAT, .25 * h + .1 * (j - 2));
+      else if (j < 5) lerp3(c, BRUISE, W_RAW, .35 * h);
+      else lerp3(c, SMEAR, THICK, .5 * h);
+    }, [.55, 2.1, .2]);
+  }
+  // Exit: a wide ragged blowout, flaps of meat torn outward with flecks of bone, a heavier run.
   function exitGeometry(THREE) {
-    return jagged(THREE, new THREE.IcosahedronGeometry(1, 1), .38, .62, 7, (x, y, z, h, c) => {
-      if (z > .55) lerp3(c, HOLE, MARROW, .5 * h);
-      else if (h > .84) lerp3(c, BONE, MEAT, .2);
-      else lerp3(c, MEAT, RAW, .6 * h);
-    });
+    const rings = [[0, -.22], [.2, -.12], [.32, .06], [.48, .24], [.62, .14], [.8, .06], [1.05, -.01]];
+    return crater(THREE, rings, 16, 7, .55, .5, (j, h, torn, c) => {
+      if (j < 2) lerp3(c, HOLE, MARROW, .6 * h);
+      else if (j < 5 && h > .82) lerp3(c, BONE, W_MEAT, .3 * torn);
+      else if (j < 5) lerp3(c, W_RAW, W_MEAT, .55 * h + .2 * torn);
+      else lerp3(c, SMEAR, W_RAW, .25 * h);
+    }, [.7, 1.8, .26]);
   }
   // A torn stump facing +z: bone in the middle, marrow, raw meat, a ragged rim of skin.
   function stumpGeometry(THREE) {
@@ -296,7 +350,12 @@
       const nx = finite(w.normal && w.normal.x, 0), ny = finite(w.normal && w.normal.y, 0), nz = finite(w.normal && w.normal.z, 1);
       V.set(nx, ny, nz); if (V.lengthSq() < 1e-8) V.set(0, 0, 1); V.normalize();
       const size = clamp(finite(w.size, .06), .015, .5), lift = kind === STUMP ? 0 : kind === EXIT ? size * .12 : size * .05;
-      Q.setFromUnitVectors(Z, V); Q2.setFromAxisAngle(Z, rnd(0, Math.PI * 2)); Q.multiply(Q2);
+      Q.setFromUnitVectors(Z, V);
+      // The run (-y) points down the body: world down laid into the wound's plane (any way on a face that looks up).
+      V3.set(V.x * V.y, V.y * V.y - 1, V.z * V.y);
+      let spin = rnd(0, Math.PI * 2);
+      if (kind !== STUMP && V3.lengthSq() > .04) { Q2.copy(Q).invert(); V3.applyQuaternion(Q2); spin = Math.atan2(V3.x, -V3.y) + rnd(-.3, .3); }
+      Q2.setFromAxisAngle(Z, spin); Q.multiply(Q2);
       V2.set(w.point.x + V.x * lift, w.point.y + V.y * lift, w.point.z + V.z * lift);
       S.set(size * rnd(.85, 1.15), size * rnd(.85, 1.15), size);
       M.compose(V2, Q, S);
@@ -355,7 +414,8 @@
       const i = wallHead % cap.walls; wallHead = (i + 1) % cap.walls; wallCount = Math.min(cap.walls, wallCount + 1);
       // The plane yawed to face along (nx, nz), rolled a little about its normal.
       const off = .006 + (decalSerial++ % 7) * .0008, roll = (rand() - .5) * .4, cr = Math.cos(roll), sr = Math.sin(roll);
-      const w = size, h = size * 1.35, m = wallMesh.instanceMatrix.array, mk = i * 16;
+      // Mirrored at random and stretched a little, so neighbouring stains are not the same stamp.
+      const w = size * (rand() < .5 ? -1.3 : 1.3) * (.85 + .3 * rand()), h = size * 1.75 * (.85 + .3 * rand()), m = wallMesh.instanceMatrix.array, mk = i * 16;
       // right = (nz, 0, -nx), up = (0, 1, 0), normal = (nx, 0, nz)
       m[mk] = nz * cr * w; m[mk + 1] = sr * w; m[mk + 2] = -nx * cr * w; m[mk + 3] = 0;
       m[mk + 4] = -nz * sr * h; m[mk + 5] = cr * h; m[mk + 6] = nx * sr * h; m[mk + 7] = 0;
@@ -426,7 +486,7 @@
         Q.setFromEuler(E.set(rnd(0, 6.3), rnd(0, 6.3), rnd(0, 6.3), 'XYZ'));
         chunks[k + 6] = Q.x; chunks[k + 7] = Q.y; chunks[k + 8] = Q.z; chunks[k + 9] = Q.w;
         chunks[k + 10] = rnd(-16, 16); chunks[k + 11] = rnd(-16, 16); chunks[k + 12] = rnd(-16, 16);
-        chunks[k + 13] = (isBone ? rnd(.014, .03) : rnd(.022, .058)) * sz; chunks[k + 14] = 0; chunks[k + 15] = 0;
+        chunks[k + 13] = (isBone ? rnd(.01, .024) : rnd(.016, .042)) * sz; chunks[k + 14] = 0; chunks[k + 15] = 0;
         if (isBone) { chunks[k + 16] = 1.05; chunks[k + 17] = 1.02; chunks[k + 18] = .95; }
         else { const d = rnd(.45, 1); chunks[k + 16] = .62 * d; chunks[k + 17] = .07 * d; chunks[k + 18] = .055 * d; }
         chunks[k + 19] = 0;
@@ -585,7 +645,7 @@
       wound(owner, { root: rootObj, object: neck, joint: neck, point: pivot, normal: up, kind: 'stump', size: clamp(radius * .62, .05, .2) });
       const d = p.dir || NOOP, force = clamp(finite(p.force, 1.5), 0, 3);
       const dx = finite(d.x, 0), dy = finite(d.y, 0), dz = finite(d.z, 0);
-      chunkBurst(centre.x, centre.y, centre.z, dx + up.x * .6, dy + up.y * .6, dz + up.z * .6, { count: finite(p.chunks, 10), speed: 2.4 + 1.6 * force, bone: .38, size: radius / .14 });
+      chunkBurst(centre.x, centre.y, centre.z, dx + up.x * .6, dy + up.y * .6, dz + up.z * .6, { count: finite(p.chunks, 10), speed: 2.4 + 1.6 * force, bone: .38, size: Math.min(1.15, radius / .14) });
       spray(centre.x, centre.y, centre.z, dx + up.x * .4, dy + up.y * .4 + .2, dz + up.z * .4, { amount: 2.4 + force, reach: 1.6 + .6 * force, cone: .6 });
       fountain(owner, neck, pivot, up, { duration: 2.8, power: 1.2 });
       return true;
@@ -717,7 +777,8 @@
           LS[v + 1] -= GRAVITY * dt;
           if (LS[v + 1] < fall) fall = LS[v + 1];
           LS[p] += LS[v] * dt; LS[p + 1] += LS[v + 1] * dt; LS[p + 2] += LS[v + 2] * dt;
-          if (blocks && LS[p + 1] > floorY + .05 && blocks(LS[p], LS[p + 1], LS[p + 2])) {
+          if (LS[p + 1] > ceiling - .05) { LS[p + 1] = ceiling - .05; if (LS[v + 1] > 0) LS[v + 1] *= -.2; }
+          if (blocks && LS[p + 1] > floorY + .05 && LS[p + 1] < ceiling - .1 && blocks(LS[p], LS[p + 1], LS[p + 2])) {
             const bx = blocks(LS[p], LS[p + 1], LS[q + 2]), bz = blocks(LS[q], LS[p + 1], LS[p + 2]);
             if (bx || !bz) LS[p] = LS[q];
             if (bz || !bx) LS[p + 2] = LS[q + 2];
@@ -918,7 +979,9 @@
           chunks[k + 19] += dt;
           chunks[k + 4] -= GRAVITY * dt;
           chunks[k] += chunks[k + 3] * dt; chunks[k + 1] += chunks[k + 4] * dt; chunks[k + 2] += chunks[k + 5] * dt;
-          if (blocks && chunks[k + 1] > floorY + s && blocks(chunks[k], chunks[k + 1], chunks[k + 2])) {
+          // The ceiling knocks it back down.
+          if (chunks[k + 1] > ceiling - s) { chunks[k + 1] = ceiling - s; if (chunks[k + 4] > 0) chunks[k + 4] *= -.3; }
+          if (blocks && chunks[k + 1] > floorY + s && chunks[k + 1] < ceiling - s * 1.5 && blocks(chunks[k], chunks[k + 1], chunks[k + 2])) {
             const bx = blocks(chunks[k], chunks[k + 1], pz), bz = blocks(px, chunks[k + 1], chunks[k + 2]);
             if (bx || !bz) { chunks[k] = px; chunks[k + 3] *= -.3; }
             if (bz || !bx) { chunks[k + 2] = pz; chunks[k + 5] *= -.3; }

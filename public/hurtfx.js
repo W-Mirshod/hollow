@@ -105,27 +105,27 @@
     const r = mulberry(seed), cx = S * .5, cy = S * .42, R = S * .17;
     ctx.clearRect(0, 0, S, S);
     ctx.save();
-    // One path for the whole stain, so overlaps never darken: a lumpy core, spines thrown out with beads at their tips,
-    // satellite drops and runs down from the bottom of the core.
+    // One path for the whole stain, so overlaps never darken: a lumpy core, a few short spines thrown out of it, a spray
+    // of satellite drops and runs down from the bottom of the core.
     ctx.beginPath();
     for (let i = 0; i < 16; i++) {
       const a = r() * TAU, d = R * .55 * Math.sqrt(r()), rr = R * (.28 + .45 * r()), x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
       ctx.moveTo(x + rr, y); ctx.arc(x, y, rr, 0, TAU);
     }
-    for (let i = 0, n = 9 + Math.floor(r() * 6); i < n; i++) {
-      const a = r() * TAU, len = R * (1.1 + 1.4 * r()), w = R * (.07 + .12 * r()), nx = -Math.sin(a), ny = Math.cos(a);
+    for (let i = 0, n = 4 + Math.floor(r() * 4); i < n; i++) {
+      const a = r() * TAU, len = R * (.85 + .75 * r()), w = R * (.05 + .07 * r()), nx = -Math.sin(a), ny = Math.cos(a);
       const bx = cx + Math.cos(a) * R * .5, by = cy + Math.sin(a) * R * .5, tx = cx + Math.cos(a) * len, ty = cy + Math.sin(a) * len;
       ctx.moveTo(bx + nx * w, by + ny * w); ctx.lineTo(tx, ty); ctx.lineTo(bx - nx * w, by - ny * w); ctx.closePath();
-      const br = w * (.55 + .7 * r());
+      const br = w * (.4 + .45 * r());
       ctx.moveTo(tx + br, ty); ctx.arc(tx, ty, br, 0, TAU);
     }
-    for (let i = 0; i < 46; i++) {
-      const a = r() * TAU, d = R * (1.15 + 1.7 * Math.pow(r(), .7)), rr = Math.max(.7, S * .013 * Math.pow(r(), 1.6) * (2.6 - d / R * .55));
+    for (let i = 0; i < 64; i++) {
+      const a = r() * TAU, d = R * (1.05 + 1.9 * Math.pow(r(), .8)), rr = Math.max(.7, S * .013 * Math.pow(r(), 1.6) * (2.6 - d / R * .55));
       const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
       ctx.moveTo(x + rr, y); ctx.arc(x, y, rr, 0, TAU);
     }
-    for (let i = 0, n = 2 + Math.floor(r() * 3); i < n; i++) {
-      const x = cx + (r() - .5) * R * 1.3, y0 = cy + R * (.2 + .3 * r()), len = S * (.1 + .3 * r()), w = S * (.007 + .011 * r());
+    for (let i = 0, n = 3 + Math.floor(r() * 3); i < n; i++) {
+      const x = cx + (r() - .5) * R * 1.4, y0 = cy + R * (.2 + .3 * r()), len = S * (.12 + .34 * r()), w = S * (.006 + .01 * r());
       ctx.moveTo(x - w, y0); ctx.lineTo(x - w * .6, y0 + len); ctx.lineTo(x + w * .6, y0 + len); ctx.lineTo(x + w, y0); ctx.closePath();
       ctx.moveTo(x + w * 1.25, y0 + len); ctx.arc(x, y0 + len, w * 1.25, 0, TAU);
     }
@@ -233,7 +233,8 @@
       layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:0;contain:layout paint style';
       // Under the HUD (markers, labels and arcs draw over the blood).
       if (typeof host.insertBefore === 'function' && host.firstChild) host.insertBefore(layer, host.firstChild); else host.appendChild(layer);
-      for (let i = 0; i < POOL.splats; i++) slot(splats, node('canvas', SPLAT, SPLAT, 'transform-origin:50% 42%'));
+      // A touch of blur: blood on the eyes and the lens, not printed on the glass.
+      for (let i = 0; i < POOL.splats; i++) slot(splats, node('canvas', SPLAT, SPLAT, 'transform-origin:50% 42%;filter:blur(.7px)'));
       for (let i = 0; i < POOL.claws; i++) slot(claws, node('canvas', CLAW[0], CLAW[1], 'transform-origin:50% 50%'));
       for (let i = 0; i < POOL.bites; i++) slot(bites, node('canvas', BITE[0], BITE[1], 'transform-origin:50% 50%'));
       slot(flashes, node('div', 0, 0, 'inset:0;width:100%;height:100%'));
