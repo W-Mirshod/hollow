@@ -309,9 +309,9 @@ async function main() {
         const center = async selector => { const rect = await page.locator(selector).boundingBox(); assert(rect, selector + ' must have bounds'); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; };
         async function checkBounds() {
           // Controls update on the next render frame after Resume/rotation.
-          await expect(page.locator('.touch-button:visible')).toHaveCount(12, { timeout: TIMEOUT });
+          await expect(page.locator('.touch-button:visible')).toHaveCount(13, { timeout: TIMEOUT });
           const layout = await page.locator('.touch-button:visible').evaluateAll(buttons => ({ width: innerWidth, height: innerHeight, buttons: buttons.map(button => { const r = button.getBoundingClientRect(); return { action: button.dataset.action, x: r.x, y: r.y, right: r.right, bottom: r.bottom }; }) }));
-          assert.equal(layout.buttons.length, 12, 'All twelve touch actions must be available');
+          assert.equal(layout.buttons.length, 13, 'All thirteen touch actions must be available');
           for (const rect of layout.buttons) assert(rect.x >= -1 && rect.y >= -1 && rect.right <= layout.width + 1 && rect.bottom <= layout.height + 1, rect.action + ' must fit the phone viewport');
         }
         phase = 'phone portrait layout';
