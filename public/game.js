@@ -336,7 +336,11 @@ const FLOOR_TEXT=[
     guide:'S2 / CRYPTS BOLT FROM INSIDE',
     intro:'S2 · BLACKWATER GRAVEYARD · Three crypt keys unchain the cemetery gate. The gate is chained to the old bell.'}
 ];
-const TEXT=()=>FLOOR_TEXT[floor]||FLOOR_TEXT[0];
+// In co-op there is no Gravekeeper: S2's gate unchains on its keys and release like the floors before it.
+const COOP_GATE_TEXT=Object.freeze({...FLOOR_TEXT[4],locked:'The cemetery gate is chained shut.',power:'THE GATE IS UNCHAINING',powerKick:'The bell is ringing',
+  powered:'The chain runs up to the bell, and the bell begins to toll. The gate is unchaining. Hold out until it opens.',
+  intro:'S2 · BLACKWATER GRAVEYARD · Three crypt keys unchain the cemetery gate, the last way out.'});
+const TEXT=()=>floor===4&&NET.inGame?COOP_GATE_TEXT:FLOOR_TEXT[floor]||FLOOR_TEXT[0];
 const more=n=>`${n} more ${n===1?TEXT().one:TEXT().many}`;
 const dynamicWorld=new THREE.Group();scene.add(dynamicWorld);
 dynamicWorld.matrixAutoUpdate=false;
@@ -894,7 +898,7 @@ function powerExit(){
   exitPowered=true;exitRelease=FLOOR().release;alarmT=0;sMetal(0,90,.22);
   showMsg(TEXT().powered,5);
   // The cemetery gate is chained to the bell: it calls the Gravekeeper, not the floor.
-  if(FLOOR().boss){bossAwaken();return;}
+  if(FLOOR().boss&&!NET.inGame){bossAwaken();return;}
   // The lift and the floodgate below are loud enough to wake most of a floor.
   if(!NET.inGame||NET.role==='host')alertMonsters(100,(W-2)*S+S/2,(W-2)*S+S/2,floor?45:18);
 }
@@ -3017,7 +3021,8 @@ const liveRemote=r=>inRound(r)&&r.al&&!r.out;
 const hostRemote=()=>partners().find(r=>r.role==='host')||null;
 const nameList=list=>list.map(r=>r.nm).join(', ');
 // Awake creatures in a co-op round: 12 for two survivors, two more for each extra one (B1's sleepers fill the slots left).
-const coopHunters=players=>12+2*Math.max(0,Math.min(4,players)-2);
+// Co-op adds hunters to each floor's own: four for a pair (twelve on B1), two more for each player after.
+const coopHunters=players=>Math.min(MAX_MON,FLOOR().active+4+2*Math.max(0,Math.min(4,players)-2));
 const HUNTER_WORDS={12:'Twelve',14:'Fourteen',16:'Sixteen'};
 // The partner a spectator watches: the chosen one while they live, else the first living partner.
 function spectRemote(){let r=NET.spect?REMOTES.get(NET.spect):null;if(!r||!liveRemote(r)){r=partners().find(liveRemote)||null;NET.spect=r?r.peer:null;}if(r)NET.watched=r;return r;}
@@ -3135,7 +3140,10 @@ function readRemote(peer,pr){
     const remoteSeed=finiteNumber(pr.seed,0,0,2147483647);
     // Wait for the host to admit this guest before starting, so late joiners
     // receive their own spawn slot instead of overlapping the first guest.
-    if(pr.ph==='play'&&r.gn>NET.gen&&remoteSeed&&NET.myPeer&&NET.pts.includes(NET.myPeer)){startCoopRound(remoteSeed,r.gn);}
+    // fl: the host's floor. A guest still in the run (on the floor before, or waiting on its card) carries their kit down.
+    const remoteFloor=Math.floor(finiteNumber(pr.fl,0,0,RULES.FLOORS.length-1));
+    if(pr.ph==='play'&&r.gn>NET.gen&&remoteSeed&&NET.myPeer&&NET.pts.includes(NET.myPeer)){
+      startCoopRound(remoteSeed,r.gn,remoteFloor,remoteFloor&&NET.inGame&&state!=='coopEnd'&&remoteFloor===floor+1?coopCarry():null);}
     if(r.gn===NET.gen&&NET.inGame){
       if(Array.isArray(pr.doors))pr.doors.forEach((v,i)=>{const d=roomDoors[i];if(!d||!Array.isArray(v))return;d.open=!!v[0];d.locked=!!v[1];d.health=Math.max(0,Math.min(100,Number(v[2])||0));});
       if(Array.isArray(pr.fuses))for(const l of roomLoot)if(l.type==='fuse'&&pr.fuses.includes(l.id)){l.taken=true;l.g.visible=false;}
@@ -3175,41 +3183,69 @@ function renderLobby(){
 function hostStart(){
   if(NET.role!=='host'||!anyPartner())return;
   const seed=1+Math.floor(Math.random()*2e9);
-  startCoopRound(seed,NET.gen+1);
+  startCoopRound(seed,NET.gen+1,0,null);
 }
-function startCoopRound(seed,gen){
+// A co-op run goes down through every floor like a solo one: once everyone on a floor is out or down and at least one
+// survivor got out, the whole group goes on to the next floor together. Each survivor carries their own kit and the
+// run's score; one who fell comes round on the next floor with at least half health.
+function coopCarry(){
+  if(!NET.carry){const kit=currentKit();if(!NET.myOut)kit.health=Math.max(kit.health,50);NET.carry={kit,score:runScore()};}
+  return NET.carry;
+}
+function coopAdvance(){
+  NET.over=true;const carry=coopCarry(),next=RULES.FLOORS[floor+1],from=FLOOR().exit;
+  const way=!next.outdoor?`Down through the ${from}.`:FLOOR().outdoor?`Through the ${from}, into the churchyard.`:`Up through the ${from}, into the open air.`;
+  const note=`${way} ${NET.myOut?'Everything you carry comes with you.':'You come round with what you carried.'}`;
+  if(NET.role==='host'){const seed=1+Math.floor(Math.random()*2e9),gen=NET.gen+1,to=floor+1;transition(next.code,next.name,note,()=>startCoopRound(seed,gen,to,carry));return;}
+  // A guest waits on the card for the host's next floor (readRemote starts it when the host's new round arrives).
+  state='descend';releaseInput();stopAudio();
+  $('descendCode').textContent=next.code;$('descendName').textContent=next.name;$('descendNote').textContent=note;
+  $('descendWay').textContent=next.outdoor?'Above ground':'Going down';showScreen('descend');
+}
+function startCoopRound(seed,gen,fl=0,carry=null){
   initAudio();
   NET.gen=gen;NET.seed=seed;NET.inGame=true;NET.over=false;NET.myAl=true;NET.myOut=false;NET.recorded=false;NET.shots=0;NET.ff={};NET.tk=[];NET.lk=[];NET.lb=[0,0,0,0];NET.dm=new Array(MAX_MON).fill(0);
   runToken++;$('ceRank').textContent='';
   rigLights(true);
   NET.actions=[];NET.actionSeq=0;NET.actionAck=0;NET.ackSeen=0;NET.claimed.clear();NET.spect=null;NET.watched=null;
   for(const r of REMOTES.values()){r.actions=[];r.actionAck=0;r.grants=[];r.gk=0;r.dmApplied=new Array(MAX_MON).fill(0);r.lastSh=r.gn===gen?r.sh:0;r.lastLb=r.gn===gen?r.lb[0]:0;r.ffApplied=r.gn===gen?r.ff:0;r.seen=false;}
-  // Co-op rounds are played on B1.
-  floor=0;scoreBase={points:0,kills:0};checkpoint=null;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
-  buildMazeSeeded(seed);resetSurvivor();
+  // A new co-op run starts on B1 with the starting kit; each floor after it is entered with what was carried out.
+  floor=Math.max(0,Math.min(RULES.FLOORS.length-1,fl|0));if(!floor)carry=null;
+  scoreBase=carry?{...carry.score}:{points:0,kills:0};NET.carry=null;checkpoint=null;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
+  buildMazeSeeded(seed);resetSurvivor(carry?carry.kit:null);
   P.vel.set(0,0,0);P.velY=0;P.onGround=true;P.stamina=1;P.exhausted=false;camFX.reset();hitsReset();
-  battery=1;elapsed=0;danger=0;ambientT=14;$('flash').style.opacity=0;
+  if(!carry){battery=1;elapsed=0;}danger=0;ambientT=14;$('flash').style.opacity=0;
   visited=new Uint8Array(W*W);
   // Survivors start around the pedestal: the host, then each guest in the order the host admitted them.
   const slot=NET.role==='host'?0:1+Math.max(0,NET.pts.indexOf(NET.myPeer)),at=[[-.85,-.8],[-.85,.8],[-1.65,-.4],[-1.65,.4]][Math.min(3,slot)];
   setHell();P.pos.set(PED.x+at[0],0,PED.z+at[1]);P.yaw=Math.PI/2;P.pitch=0;grace=10;
   const hunters=coopHunters(1+partners().length);
   if(NET.role==='host')spawnMonsters(hunters,FLOOR().sleepers);else{hideMonsters();monCount=hunters;}
+  // The Gravekeeper fight is solo only: in co-op S2's gate opens on its crypt keys and release alone.
+  if(boss){boss.act='gone';boss.g.visible=false;boss.dead=true;boss.spawned=false;}
+  if(scoreBase.points>0)hud.score(scoreBase.points);
   if(droneGain)fadeTo(droneGain,0.07,1);
   state='play';showScreen(null);lock();
   sendNet(true);
-  showMsg(NET.role==='guest'&&!IS_TOUCH&&document.pointerLockElement!==canvas?'The game started. Click the screen to take control.':`Recover the fuses together. ${HUNTER_WORDS[hunters]||hunters} threats are hunting, and more lie sleeping.`,5);
+  const goal=floor?`${FLOOR().code} · ${FLOOR().name}. Find the three ${TEXT().many} together.`:'Recover the fuses together.';
+  showMsg(NET.role==='guest'&&!IS_TOUCH&&document.pointerLockElement!==canvas?`${floor?FLOOR().code+' · '+FLOOR().name+'. ':''}Click the screen to take control.`:`${goal} ${HUNTER_WORDS[hunters]||hunters} threats are hunting, and more lie sleeping.`,5);
+}
+// Each survivor records their own result once a run, when it ends: everyone fell, the last floor was escaped, or the
+// host left. escaped means out through the last floor's gate.
+function coopRecord(){
+  if(NET.recorded)return;NET.recorded=true;
+  const own=runScore(),mates=partners().filter(r=>r.gn===NET.gen);
+  recordRun({mode:'coop',escaped:!!NET.myOut&&floor>=RULES.FLOORS.length-1,time:elapsed,kills:own.kills,score:own.points,partner:(nameList(mates)||'Partner').slice(0,18)},'ceRank');
 }
 function coopLocalDone(how){
   NET.myAl=how!=='dead';NET.myOut=how==='out';
-  // Each survivor records their own result once a round, as soon as they get out or fall.
-  if(!NET.recorded){NET.recorded=true;const own=streak.snapshot(),mates=partners().filter(r=>r.gn===NET.gen);recordRun({mode:'coop',escaped:how==='out',time:elapsed,kills:own.kills,score:own.points,partner:(nameList(mates)||'Partner').slice(0,18)},'ceRank');}
   mouseDown=false;setLight(spot,0);setLight(bounce,0);setLight(fpTorchLight,0);setLight(muzzleLight,0);
   torch.visible=false;gun.visible=false;gunOut=false;$('flash').style.opacity=0;
   sendNet(true);
   const mate=spectRemote();
   if(mate){state='spect';const more=partners().filter(liveRemote).length>1?' Press Space to switch.':'';
-    showMsg((how==='out'?`You’re out. Watching ${mate.nm} through their eyes.`:`You’re dead. Watching ${mate.nm} through their eyes.`)+more,5);}
+    const next=RULES.FLOORS[floor+1],on=next?` Once everyone is out or down, ${how==='out'?'you all go':'anyone who got out takes you'} on to ${next.code}.`:'';
+    showMsg((how==='out'?`You’re out. Watching ${mate.nm} through their eyes.`:`You’re dead. Watching ${mate.nm} through their eyes.`)+on+more,6);}
   else coopFinish();
 }
 function hurtByPartner(d,r){
@@ -3221,8 +3257,10 @@ function hurtByPartner(d,r){
   playerAudio?.hurt(d);showMsg(`${r.nm} shot you!`,2);
 }
 function coopFinish(){
-  if(NET.over)return;NET.over=true;
+  if(NET.over)return;
   const meOut=!!NET.myOut,mates=partners().filter(r=>r.gn===NET.gen),outs=mates.filter(r=>r.out),lost=mates.filter(r=>!r.out);
+  if((meOut||outs.length)&&floor<RULES.FLOORS.length-1){coopAdvance();return;}
+  NET.over=true;
   let title,text;
   if(meOut&&mates.length&&!lost.length){title='Outside';text=`${mates.length>1?'You all':'You both'} made it out in ${fmtTime(elapsed)}. Behind you, something keeps walking.`;}
   else if(meOut){title='Outside';text=!mates.length?'You made it out alone.':outs.length?`You made it out with ${nameList(outs)}. ${nameList(lost)} didn’t.`:`You made it out. ${nameList(lost)} didn’t.`;}
@@ -3231,7 +3269,7 @@ function coopFinish(){
   coopShowEnd(title,text,false);
 }
 function coopShowEnd(title,text,hostGone){
-  state='coopEnd';NET.over=true;stopAudio();
+  state='coopEnd';NET.over=true;stopAudio();coopRecord();
   if(droneGain)fadeTo(droneGain,0,2);
   $('ceTitle').textContent=title;$('ceTitle').className='title'+(title.startsWith('It found')||title.startsWith('Left')?' red':'');
   $('ceText').textContent=text;
@@ -3249,7 +3287,7 @@ function sendNet(force){
     al:NET.myAl===false?0:1,out:NET.myOut?1:0,sh:NET.shots,ff,tk:NET.tk.slice(0,32),lk:NET.lk.slice(0,16),lb:NET.lb};
   if(NET.inGame&&!NET.over)pk.vm=packVisited();
   if(NET.role==='guest'){pk.dm=NET.dm.slice(0,MAX_MON).map(r2);pk.actions=NET.actions.slice(0,12);pk.gk=NET.ackSeen;}
-  if(NET.role==='host'){pk.seed=NET.seed;pk.mc=monCount;pk.el=r2(elapsed);pk.pts=NET.pts;
+  if(NET.role==='host'){pk.seed=NET.seed;pk.fl=floor;pk.mc=monCount;pk.el=r2(elapsed);pk.pts=NET.pts;
     pk.mon=monsters.slice(0,monCount).map(m=>[r2(m.pos.x),r2(m.pos.z),r2(m.yaw),(m.state==='chase'?1:0)|(m.dead?2:0)|(m.stagger>0?4:0)|(m.state==='stalk'?8:0)|(m.dormant?16:0),r2(m.hp)]);
     pk.doors=roomDoors.map(d=>[d.open?1:0,d.locked?1:0,Math.round(d.health)]);pk.fuses=roomLoot.filter(l=>l.type==='fuse'&&l.taken).map(l=>l.id);pk.power=exitPowered?1:0;pk.release=r2(exitRelease);pk.exitOpen=exitOpen?1:0;
     pk.loot=roomLoot.filter(l=>l.taken&&l.type!=='weapon').map(l=>l.id);

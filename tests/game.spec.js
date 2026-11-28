@@ -193,13 +193,18 @@ test('two real browser peers synchronize map, monsters, fuses, doors, jumping an
         await expect.poll(async()=>(await state(guest)).exitOpen).toBe(true);
         await guest.bringToFront();await guest.keyboard.down('w');
         try{await expect.poll(async()=>(await state(guest)).state,{timeout:60000}).toBe('spect');}finally{await guest.keyboard.up('w');}
+        const carried={host:(await state(host)).owned,guest:(await state(guest)).owned};
         await host.bringToFront();await pose(host,{x:100.5,z:100.5,yaw:-Math.PI/2});await host.keyboard.down('w');
-        try{
-          await expect.poll(async()=>(await state(host)).state,{timeout:60000}).toBe('coopEnd');
-          await expect.poll(async()=>(await state(guest)).state).toBe('coopEnd');
-        }finally{await host.keyboard.up('w');}
-        for(const peer of [host,guest]){await expect(peer.locator('#ceTitle')).toHaveText('Outside');await expect(peer.locator('#ceText')).toContainText('You both made it out');
-          await expect(peer.locator('#ceRank')).toHaveText(/^Score [\d,]+\. New personal best, posted to the board\.$/);}
+        // Out of B1 together, the run goes on: both survivors come down to the same new B2 with what they carried.
+        try{await expect.poll(async()=>(await state(host)).floorCode,{timeout:60000}).toBe('B2');}finally{await host.keyboard.up('w');}
+        await expect.poll(async()=>(await state(guest)).floorCode,{timeout:60000}).toBe('B2');
+        for(const peer of [host,guest])await expect.poll(async()=>(await state(peer)).state,{timeout:30000}).toBe('play');
+        const [hb2,gb2]=[await state(host),await state(guest)];
+        expect(gb2.seed).toBe(hb2.seed);expect(hb2.rooms).toHaveLength(12);expect(gb2.rooms).toEqual(hb2.rooms);
+        expect(hb2.owned).toEqual(carried.host);expect(gb2.owned).toEqual(carried.guest);
+        expect(hb2).toMatchObject({fuses:0,exitPowered:false,exitOpen:false});
+        // The run is not over, so nothing is posted yet.
+        for(const peer of [host,guest])await expect(peer.locator('#ceRank')).toHaveText('');
   }finally{await hostContext.close();await guestContext.close();}
 });
 
