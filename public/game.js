@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 try {
-if(!window.THREE||!window.TSL||!window.HollowRenderer||!window.HollowSystems||!window.HollowLocomotion||!window.HollowCameraFX||!window.HollowMonsterAnim||!window.HollowVisuals||!window.HollowNavigation||!window.HollowHorror||!window.HollowAudio||!window.HollowChaos||!window.HollowHUDFX)throw new Error('A local game asset could not be loaded.');
+if(!window.THREE||!window.TSL||!window.HollowRenderer||!window.HollowSystems||!window.HollowNet||!window.HollowLocomotion||!window.HollowCameraFX||!window.HollowMonsterAnim||!window.HollowVisuals||!window.HollowNavigation||!window.HollowHorror||!window.HollowAudio||!window.HollowChaos||!window.HollowHUDFX)throw new Error('A local game asset could not be loaded.');
 const $=id=>document.getElementById(id);
 const clamp01=v=>v<0?0:v>1?1:v;
 const lerp=(a,b,k)=>a+(b-a)*k;
@@ -881,7 +881,11 @@ function interact(){
   if(state!=='play')return;interaction=findInteraction();if(!interaction)return;
   if(interaction.type==='door'){
     const d=interaction.item;
-    if(NET.inGame&&NET.role==='guest'){queueAction({type:'door',id:d.id,action:d.open?'close':RULES.insideRoom(d.room,P.pos.x,P.pos.z)&&!d.locked?'lock':'open'});return;}
+    if(NET.inGame&&NET.role==='guest'){
+      const inside=RULES.insideRoom(d.room,P.pos.x,P.pos.z),action=d.open?'close':inside&&!d.locked?'lock':'open';
+      // The door answers at once, by the host's own rules; the host's word replaces this guess once it has dealt with the request.
+      if(queueAction({type:'door',id:d.id,action})&&d.health>0&&!(action==='open'&&d.locked&&!inside)){d.open=action==='open';d.locked=action==='lock';d.guess=NET.actionSeq;sMetal(0,d.locked?290:420,.16);}
+      return;}
     doorAction(d);
   }else if(interaction.type==='loot'){
     const l=interaction.item;
@@ -1029,6 +1033,7 @@ function updateRooms(dt){
   for(const d of roomDoors){d.angle=lerp(d.angle,d.open?-Math.PI/2:0,1-Math.exp(-dt*10));d.hinge.rotation.y=d.angle;}
   if(exitPowered&&!exitOpen&&!bossHolds()){
     if(!NET.inGame||NET.role==='host'){exitRelease=Math.max(0,exitRelease-dt);if(exitRelease===0){exitOpen=true;showMsg(TEXT().opened,4);}}
+    else exitRelease=Math.max(0,exitRelease-dt);   // a guest counts down between the host's updates; the host opens the gate
     alarmT-=dt;if(alarmT<=0){alarmT=3.2;sWardSound('alarm',(W-2)*S+S/2,(W-2)*S+S/2);if(!NET.inGame||NET.role==='host')alertMonsters(100,(W-2)*S+S/2,(W-2)*S+S/2);}
   }
   const gate=dynamicWorld.userData.gate;if(gate)gate.position.y=lerp(gate.position.y,exitOpen?H*1.5:exitPowered?H/2+.16:H/2,Math.min(1,dt*2));
@@ -2928,6 +2933,7 @@ function loop(){
   const sdt=dopaFrame(rawDt,dt);
   if(rawDt>0&&!document.hidden)frameAverage=lerp(frameAverage,Math.min(rawDt*1000,1000),.065);
   autoQuality(rawDt);
+  if(NET.inGame)netClocks();
   if(state==='play'){
     elapsed+=rawDt;stepSurvival(sdt);
     if(exitOpen&&NET.inGame&&P.pos.x>W*S+.6){coopLocalDone('out');}
@@ -2956,7 +2962,7 @@ function loop(){
   // camera
   const spectating=state==='spect'||(state==='pause'&&prevState==='spect'),cam=camFX.pose;
   if(spectating){
-    const R=watched();camera.position.set(R.pos.x,(R.raw.y||0)+(R.raw.crouch?1:EYE),R.pos.z);camera.rotation.set(R.pitch,R.yaw,0);
+    const R=watched();camera.position.set(R.pos.x,(R.py||0)+(R.raw.crouch?1:EYE),R.pos.z);camera.rotation.set(R.pitch,R.yaw,0);
   }else{
     camera.rotation.set(P.pitch+cam.rot.pitch,P.yaw+cam.rot.yaw,cam.rot.roll);
     camera.position.set(P.pos.x,P.pos.y+P.eye,P.pos.z);
@@ -3009,11 +3015,13 @@ function loop(){
 }
 
 /* ---------- co-op (two to four players over the live room) ---------- */
-const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false,recorded:false,gen:0,seed:0,shots:0,tk:[],lk:[],lb:[0,0,0,0],dm:[],ff:{},myPeer:null,sendT:0,joinT:0,over:false,unsubs:[],actions:[],actionSeq:0,actionAck:0,ackSeen:0,claimed:new Set(),joining:false,joinToken:0,spect:null,watched:null,pts:[],ptsKey:''};
+const NET={room:null,roomState:'loading',g:null,code:null,role:null,inGame:false,recorded:false,gen:0,seed:0,shots:0,tk:[],lk:[],lb:[0,0,0,0],dm:[],ff:{},myPeer:null,sendT:0,slowT:0,slowKey:'',monSig:new Array(MAX_MON).fill(''),monSame:new Array(MAX_MON).fill(0),smp:{x:0,z:0,y:0,yaw:0,pitch:0},joinT:0,over:false,unsubs:[],actions:[],actionSeq:0,actionAck:0,ackSeen:0,claimed:new Set(),joining:false,joinToken:0,spect:null,watched:null,pts:[],ptsKey:''};
 // Everyone else in the room, keyed by peer id: the host sees every guest, a guest sees the host and the other guests.
 const REMOTES=new Map(),MAX_GUESTS=3;
 function newRemote(peer){return {present:false,peer,role:'',nm:'Partner',lastNm:'',gn:-1,al:1,out:0,sh:0,lastSh:0,ff:0,ffApplied:0,tk:[],lk:[],lb:[0,0,0,0],lastLb:0,dm:[],dmApplied:new Array(MAX_MON).fill(0),ph:'',seed:0,mc:0,mon:null,el:0,
-  raw:{x:0,z:0,y:0,yaw:0,pitch:0,torch:false,run:false,crouch:false,hidden:false,reload:false,aim:false,health:100,weapon:0},pos:new THREE.Vector3(),vx:0,vz:0,yaw:0,pitch:0,stepD:0,seen:false,actions:[],actionAck:0,grants:[],gk:0,rig:null};}
+  raw:{x:0,z:0,y:0,yaw:0,pitch:0,torch:false,run:false,crouch:false,hidden:false,reload:false,aim:false,health:100,weapon:0},pos:new THREE.Vector3(),vx:0,vz:0,yaw:0,pitch:0,stepD:0,seen:false,actions:[],actionAck:0,grants:[],gk:0,rig:null,
+  // ts: the sender's clock on the newest pose taken (s); clock, track: when and where to draw them; rt: the sender time drawn this frame
+  ts:-1,monTs:-1,rt:null,py:0,lastPr:null,clock:HollowNet.createClock(),track:HollowNet.createTrack(),monTracks:null};}
 const partners=()=>[...REMOTES.values()].filter(r=>r.present);
 const anyPartner=()=>partners().length>0;
 const inRound=r=>r.present&&r.gn===NET.gen;
@@ -3026,7 +3034,7 @@ const coopHunters=players=>Math.min(MAX_MON,FLOOR().active+4+2*Math.max(0,Math.m
 const HUNTER_WORDS={12:'Twelve',14:'Fourteen',16:'Sixteen'};
 // The partner a spectator watches: the chosen one while they live, else the first living partner.
 function spectRemote(){let r=NET.spect?REMOTES.get(NET.spect):null;if(!r||!liveRemote(r)){r=partners().find(liveRemote)||null;NET.spect=r?r.peer:null;}if(r)NET.watched=r;return r;}
-const NOBODY={nm:'Partner',pos:new THREE.Vector3(),raw:{},yaw:0,pitch:0,al:0};
+const NOBODY={nm:'Partner',pos:new THREE.Vector3(),raw:{},yaw:0,pitch:0,py:0,al:0};
 function watched(){return spectRemote()||NET.watched||NOBODY;}
 function cycleSpect(){const live=partners().filter(liveRemote);if(live.length<2)return;const i=live.findIndex(r=>r.peer===NET.spect);const r=live[(i+1)%live.length];NET.spect=r.peer;NET.watched=r;showMsg(`Watching ${r.nm}.`,2);}
 function seeded(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -3085,8 +3093,9 @@ async function joinRoom(code,role){
   catch(e){if(joinToken===NET.joinToken){NET.g=null;coopErr(e&&e.code==='limit_reached'?'That game is full.':e&&e.code==='not_permitted'?'The game server refused the connection.':'Couldn’t connect. Try again in a moment.');}return false;}
   finally{if(joinToken===NET.joinToken){NET.joining=false;$('coopCreate').disabled=false;$('coopJoinForm').querySelector('button').disabled=false;}}
   NET.code=code;NET.role=role;NET.gen=0;NET.inGame=false;NET.joinT=performance.now();dropRemotes();
-  NET.g.presence({v:3,nm:(playerName||'Guest').slice(0,18),role,ph:'lobby',gn:0}).catch(()=>{});
+  NET.g.presence({v:4,nm:(playerName||'Guest').slice(0,18),role,ph:'lobby',gn:0}).catch(()=>{});
   NET.unsubs.push(NET.g.onPeers(onPeers,()=>{coopErr('The connection to the game was lost.');if(NET.inGame&&!NET.over)coopShowEnd('Connection lost','Your connection was interrupted. Return to the menu to reconnect.',true);}));
+  NET.unsubs.push(NET.g.on('s',onFast));
   coopErr('');$('coopChoose').hidden=true;$('coopLobby').hidden=false;$('coopCode').textContent=code;
   renderLobby();
   if(role==='guest')setTimeout(()=>{if(joinToken===NET.joinToken&&NET.g&&NET.role==='guest'&&!hostRemote())coopErr('No game found with that code yet. Check the code, or wait for the host to open it.');},7000);
@@ -3126,16 +3135,20 @@ function readRemote(peer,pr){
   r.nm=String(pr.nm||'Partner').slice(0,18);if(r.nm!==r.lastNm){r.lastNm=r.nm;setAvatarName(r.rig,r.nm);}
   r.gn=Math.floor(finiteNumber(pr.gn,0,0,1e9));r.al=pr.al===0?0:1;r.out=pr.out?1:0;r.ph=typeof pr.ph==='string'?pr.ph:'';
   const q=r.raw;
-  if(Array.isArray(pr.p)){q.x=finiteNumber(pr.p[0],q.x,-110,W*S+60);q.z=finiteNumber(pr.p[1],q.z,-70,W*S+70);q.yaw=finiteNumber(pr.p[2],q.yaw);q.pitch=finiteNumber(pr.p[3],q.pitch,-1.35,1.35);q.torch=!!pr.p[4];q.run=!!pr.p[5];q.y=finiteNumber(pr.p[6],0,0,H);q.crouch=!!pr.p[7];q.hidden=!!pr.p[8];q.health=finiteNumber(pr.p[9],100,0,100);q.weapon=Math.floor(finiteNumber(pr.p[10],0,0,weaponDefs.length-1));q.reload=!!pr.p[11];q.aim=!!pr.p[12];
-    if(!r.seen){r.pos.set(q.x,0,q.z);r.yaw=q.yaw;r.pitch=q.pitch;r.seen=true;}}
+  // ts: the sender's clock when this state was written (ms). Pose frames (onFast) run ahead of it: the pose here is
+  // read only if it is the newer one. A partner on an older build sends no ts, and its arrival time stands in.
+  const fresh=pr!==r.lastPr;r.lastPr=pr;
+  const pts=Number.isFinite(pr.ts)?pr.ts/1000:fresh?performance.now()/1000:-1;
+  if(Array.isArray(pr.p)&&pts>r.ts){q.x=finiteNumber(pr.p[0],q.x,-110,W*S+60);q.z=finiteNumber(pr.p[1],q.z,-70,W*S+70);q.yaw=finiteNumber(pr.p[2],q.yaw);q.pitch=finiteNumber(pr.p[3],q.pitch,-1.35,1.35);q.torch=!!pr.p[4];q.run=!!pr.p[5];q.y=finiteNumber(pr.p[6],0,0,H);q.crouch=!!pr.p[7];q.hidden=!!pr.p[8];q.health=finiteNumber(pr.p[9],100,0,100);q.weapon=Math.floor(finiteNumber(pr.p[10],0,0,weaponDefs.length-1));q.reload=!!pr.p[11];q.aim=!!pr.p[12];
+    r.sh=finiteNumber(pr.sh,0,0);notePose(r,pts);}
   // ff: the damage this partner's shots have done to each of the others, keyed by peer
-  r.sh=finiteNumber(pr.sh,0,0);r.ff=pr.ff&&typeof pr.ff==='object'&&NET.myPeer?finiteNumber(pr.ff[NET.myPeer],0,0):0;r.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];
+  r.ff=pr.ff&&typeof pr.ff==='object'&&NET.myPeer?finiteNumber(pr.ff[NET.myPeer],0,0):0;r.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];
   r.lk=Array.isArray(pr.lk)?pr.lk.filter(i=>Number.isInteger(i)&&i>=0&&i<laserPickups.length):[];
   if(NET.inGame&&r.gn===NET.gen&&r.ph==='play')mergeVisited(pr.vm);
   if(Array.isArray(pr.lb)&&pr.lb.length>=3)r.lb=[Math.floor(finiteNumber(pr.lb[0],0,0,1e6)),finiteNumber(pr.lb[1],0,-110,W*S+60),finiteNumber(pr.lb[2],0,-70,W*S+70),finiteNumber(pr.lb[3],0,0,H)];
   if(NET.role==='host'&&r.role==='guest'){r.dm=Array.isArray(pr.dm)?pr.dm.slice(0,MAX_MON).map(v=>finiteNumber(v,0,0)):[];r.actions=Array.isArray(pr.actions)?pr.actions.slice(0,32):[];
     r.gk=Math.floor(finiteNumber(pr.gk,0,0));if(r.grants.length)r.grants=r.grants.filter(g=>g.n>r.gk);}
-  if(NET.role==='guest'&&r.role==='host'){r.mon=Array.isArray(pr.mon)?pr.mon.slice(0,MAX_MON).map(v=>Array.isArray(v)&&v.length>=4&&v.slice(0,4).every(Number.isFinite)?[finiteNumber(v[0],0,-110,W*S+60),finiteNumber(v[1],0,-70,W*S+70),finiteNumber(v[2],0),Math.floor(v[3])&31,finiteNumber(v[4],0,-100,100)]:null):null;r.mc=Math.floor(finiteNumber(pr.mc,0,0,MAX_MON));r.el=finiteNumber(pr.el,0,0,7200);
+  if(NET.role==='guest'&&r.role==='host'){if(!Array.isArray(pr.mon))r.mon=null;else if(pts>=r.monTs)readMon(r,pr.mon,pts);r.mc=Math.floor(finiteNumber(pr.mc,0,0,MAX_MON));r.el=finiteNumber(pr.el,0,0,7200);
     // host started (or restarted) a round we're not in yet
     const remoteSeed=finiteNumber(pr.seed,0,0,2147483647);
     // Wait for the host to admit this guest before starting, so late joiners
@@ -3145,14 +3158,16 @@ function readRemote(peer,pr){
     if(pr.ph==='play'&&r.gn>NET.gen&&remoteSeed&&NET.myPeer&&NET.pts.includes(NET.myPeer)){
       startCoopRound(remoteSeed,r.gn,remoteFloor,remoteFloor&&NET.inGame&&state!=='coopEnd'&&remoteFloor===floor+1?coopCarry():null);}
     if(r.gn===NET.gen&&NET.inGame){
-      if(Array.isArray(pr.doors))pr.doors.forEach((v,i)=>{const d=roomDoors[i];if(!d||!Array.isArray(v))return;d.open=!!v[0];d.locked=!!v[1];d.health=Math.max(0,Math.min(100,Number(v[2])||0));});
+      const ack=pr.acks&&typeof pr.acks==='object'&&NET.myPeer?Number(pr.acks[NET.myPeer])||0:0;
+      if(Array.isArray(pr.doors))pr.doors.forEach((v,i)=>{const d=roomDoors[i];if(!d||!Array.isArray(v))return;d.health=Math.max(0,Math.min(100,Number(v[2])||0));
+        if(d.guess){if(d.guess>ack)return;d.guess=0;}d.open=!!v[0];d.locked=!!v[1];});
       if(Array.isArray(pr.fuses))for(const l of roomLoot)if(l.type==='fuse'&&pr.fuses.includes(l.id)){l.taken=true;l.g.visible=false;}
       if(Array.isArray(pr.loot))for(const l of roomLoot)if(pr.loot.includes(l.id)){l.taken=true;l.g.visible=false;}
       const grants=pr.grants&&typeof pr.grants==='object'&&NET.myPeer?pr.grants[NET.myPeer]:null;
       if(Array.isArray(grants))for(const grant of grants){if(grant&&typeof grant.id==='string'&&!NET.claimed.has(grant.id)&&['ammo','medical','supplies','laser'].includes(grant.type)){NET.claimed.add(grant.id);rewardLoot(grant.type);sPickup();}}
       fuses=roomLoot.filter(l=>l.type==='fuse'&&l.taken).length;exitPowered=!!pr.power;
-            exitRelease=finiteNumber(pr.release,exitPowered?FLOOR().release:0,0,FLOOR().release);exitOpen=exitPowered&&pr.exitOpen===1;
-      const ack=pr.acks&&typeof pr.acks==='object'&&NET.myPeer?Number(pr.acks[NET.myPeer])||0:0;NET.ackSeen=ack;NET.actions=NET.actions.filter(a=>a.n>ack);for(const item of [...ammoBoxes,...roomLoot,...laserPickups])if(item.pending&&item.pending<=ack)item.pending=false;
+            if(fresh)exitRelease=finiteNumber(pr.release,exitPowered?FLOOR().release:0,0,FLOOR().release);exitOpen=exitPowered&&pr.exitOpen===1;
+      NET.ackSeen=ack;NET.actions=NET.actions.filter(a=>a.n>ack);for(const item of [...ammoBoxes,...roomLoot,...laserPickups])if(item.pending&&item.pending<=ack)item.pending=false;
     }
     if(pr.ph==='lobby'&&NET.inGame&&state==='coopEnd'){$('ceWait').textContent=`Waiting for ${r.nm} to start another round.`;}
   }
@@ -3208,7 +3223,8 @@ function startCoopRound(seed,gen,fl=0,carry=null){
   runToken++;$('ceRank').textContent='';
   rigLights(true);
   NET.actions=[];NET.actionSeq=0;NET.actionAck=0;NET.ackSeen=0;NET.claimed.clear();NET.spect=null;NET.watched=null;
-  for(const r of REMOTES.values()){r.actions=[];r.actionAck=0;r.grants=[];r.gk=0;r.dmApplied=new Array(MAX_MON).fill(0);r.lastSh=r.gn===gen?r.sh:0;r.lastLb=r.gn===gen?r.lb[0]:0;r.ffApplied=r.gn===gen?r.ff:0;r.seen=false;}
+  for(const r of REMOTES.values()){r.actions=[];r.actionAck=0;r.grants=[];r.gk=0;r.dmApplied=new Array(MAX_MON).fill(0);r.lastSh=r.gn===gen?r.sh:0;r.lastLb=r.gn===gen?r.lb[0]:0;r.ffApplied=r.gn===gen?r.ff:0;r.seen=false;r.track.reset();if(r.monTracks)for(const tr of r.monTracks)tr.reset();}
+  NET.monSig.fill('');NET.monSame.fill(0);NET.slowKey='';
   // A new co-op run starts on B1 with the starting kit; each floor after it is entered with what was carried out.
   floor=Math.max(0,Math.min(RULES.FLOORS.length-1,fl|0));if(!floor)carry=null;
   scoreBase=carry?{...carry.score}:{points:0,kills:0};NET.carry=null;checkpoint=null;sleepHint=false;wakeBannerT=wakeStingT=howlAt=-99;
@@ -3279,21 +3295,73 @@ function coopShowEnd(title,text,hostGone){
   showScreen('coopEnd');try{document.exitPointerLock();}catch(e){}
   if(NET.role==='host'&&NET.g)NET.g.presence({ph:'lobby'}).catch(()=>{});
 }
+// A newer pose for partner r, stamped ts on their clock.
+function notePose(r,ts){
+  const q=r.raw;r.ts=ts;
+  if(r.clock.observe(ts,performance.now()/1000))r.track.push(ts,q.x,q.z,q.yaw,q.y,q.pitch);
+  if(!r.seen){r.pos.set(q.x,0,q.z);r.yaw=q.yaw;r.pitch=q.pitch;r.py=q.y;r.seen=true;}
+}
+// The host's creatures as of ts: [x, z, yaw, flags, hp] each. In a pose frame 0 stands for "as it was" (a body lying
+// still, a creature standing): its last pose is kept, and noted again at ts so nothing is drawn sliding to it.
+function readMon(r,list,ts){
+  if(!r.mon)r.mon=new Array(MAX_MON).fill(null);
+  if(!r.monTracks)r.monTracks=Array.from({length:MAX_MON},()=>HollowNet.createTrack({capacity:16}));
+  r.monTs=ts;
+  for(let i=0;i<MAX_MON;i++){
+    const v=i<list.length?list[i]:null;
+    if(Array.isArray(v)&&v.length>=4&&Number.isFinite(v[0])&&Number.isFinite(v[1])&&Number.isFinite(v[2])&&Number.isFinite(v[3]))
+      r.mon[i]=[finiteNumber(v[0],0,-110,W*S+60),finiteNumber(v[1],0,-70,W*S+70),finiteNumber(v[2],0),Math.floor(v[3])&31,finiteNumber(v[4],0,-100,100)];
+    else if(v!==0)r.mon[i]=null;
+    const d=r.mon[i];if(d)r.monTracks[i].push(ts,d[0],d[1],d[2],0,0);
+  }
+}
+// Pose frames: thirty a second from each survivor in a round, and with the host's, the creatures.
+// [ts ms, round, x, z, yaw, pitch, y, bits (torch 1, run 2, crouch 4, hidden 8, reload 16, aim 32), health, weapon, shots, creatures?]
+function onFast(d,peer){
+  const r=REMOTES.get(peer);if(!r||!r.present||!Array.isArray(d)||d.length<11)return;
+  const ts=Number(d[0])/1000;if(!Number.isFinite(ts)||ts<=r.ts||d[1]!==r.gn)return;
+  const q=r.raw,b=d[7]|0;
+  q.x=finiteNumber(d[2],q.x,-110,W*S+60);q.z=finiteNumber(d[3],q.z,-70,W*S+70);q.yaw=finiteNumber(d[4],q.yaw);q.pitch=finiteNumber(d[5],q.pitch,-1.35,1.35);q.y=finiteNumber(d[6],0,0,H);
+  q.torch=!!(b&1);q.run=!!(b&2);q.crouch=!!(b&4);q.hidden=!!(b&8);q.reload=!!(b&16);q.aim=!!(b&32);
+  q.health=finiteNumber(d[8],100,0,100);q.weapon=Math.floor(finiteNumber(d[9],0,0,weaponDefs.length-1));r.sh=finiteNumber(d[10],0,0);
+  notePose(r,ts);
+  if(NET.role==='guest'&&r.role==='host'&&Array.isArray(d[11])&&ts>r.monTs)readMon(r,d[11],ts);
+}
+// Each partner's playout time for this frame (HollowNet clock): the moment on their clock that is drawn now.
+function netClocks(){const now=performance.now()/1000;for(const R of REMOTES.values())R.rt=R.clock.time(now);}
+const monFrame=m=>[r2(m.pos.x),r2(m.pos.z),r2(m.yaw),(m.state==='chase'?1:0)|(m.dead?2:0)|(m.stagger>0?4:0)|(m.state==='stalk'?8:0)|(m.dormant?16:0),r2(m.hp)];
+// Two streams. Pose frames (this survivor and, from the host, the creatures) go thirty times a second as passing
+// events (onFast reads them). Everything else is state: sent when it changes and five times a second regardless, and
+// kept by the server for anyone who joins late. Both carry ts, this machine's clock, so a receiver can order them and
+// draw motion at the pace it happened rather than the pace it arrived.
 function sendNet(force){
   if(!NET.g)return;
-  const now=performance.now();if(!force&&now-NET.sendT<67)return;NET.sendT=now;
+  const now=performance.now();if(!force&&now-NET.sendT<30)return;NET.sendT=now;
+  const live=NET.inGame&&!NET.over,ts=Math.round(now);
+  const p=[r2(P.pos.x),r2(P.pos.z),r2(P.yaw),r2(P.pitch),torchOn?1:0,P.running?1:0,r2(P.pos.y),P.crouching?1:0,P.hidden?1:0,Math.round(P.health),weaponIndex,reloadT>0?1:0,aiming&&!reloadT?1:0];
+  const mon=NET.role==='host'?monsters.slice(0,monCount).map(monFrame):null;
+  if(live){
+    const f=[ts,NET.gen,p[0],p[1],p[2],p[3],p[6],p[4]|p[5]<<1|p[7]<<2|p[8]<<3|p[11]<<4|p[12]<<5,p[9],p[10],NET.shots];
+    // A creature whose frame has not changed for eight frames running is sent as 0 until it does.
+    if(mon)f.push(mon.map((v,i)=>{const sig=v.join();if(sig!==NET.monSig[i]){NET.monSig[i]=sig;NET.monSame[i]=0;return v;}if(NET.monSame[i]>=8)return 0;NET.monSame[i]++;return v;}));
+    NET.g.emit('s',f);
+  }
   const ff={};for(const id in NET.ff)ff[id]=r2(NET.ff[id]);
-  const pk={gn:NET.gen,ph:NET.inGame&&!NET.over?'play':'lobby',p:[r2(P.pos.x),r2(P.pos.z),r2(P.yaw),r2(P.pitch),torchOn?1:0,P.running?1:0,r2(P.pos.y),P.crouching?1:0,P.hidden?1:0,Math.round(P.health),weaponIndex,reloadT>0?1:0,aiming&&!reloadT?1:0],
-    al:NET.myAl===false?0:1,out:NET.myOut?1:0,sh:NET.shots,ff,tk:NET.tk.slice(0,32),lk:NET.lk.slice(0,16),lb:NET.lb};
-  if(NET.inGame&&!NET.over)pk.vm=packVisited();
+  const pk={gn:NET.gen,ph:live?'play':'lobby',al:NET.myAl===false?0:1,out:NET.myOut?1:0,ff,tk:NET.tk.slice(0,32),lk:NET.lk.slice(0,16),lb:NET.lb};
+  if(live)pk.vm=packVisited();
   if(NET.role==='guest'){pk.dm=NET.dm.slice(0,MAX_MON).map(r2);pk.actions=NET.actions.slice(0,12);pk.gk=NET.ackSeen;}
-  if(NET.role==='host'){pk.seed=NET.seed;pk.fl=floor;pk.mc=monCount;pk.el=r2(elapsed);pk.pts=NET.pts;
-    pk.mon=monsters.slice(0,monCount).map(m=>[r2(m.pos.x),r2(m.pos.z),r2(m.yaw),(m.state==='chase'?1:0)|(m.dead?2:0)|(m.stagger>0?4:0)|(m.state==='stalk'?8:0)|(m.dormant?16:0),r2(m.hp)]);
-    pk.doors=roomDoors.map(d=>[d.open?1:0,d.locked?1:0,Math.round(d.health)]);pk.fuses=roomLoot.filter(l=>l.type==='fuse'&&l.taken).map(l=>l.id);pk.power=exitPowered?1:0;pk.release=r2(exitRelease);pk.exitOpen=exitOpen?1:0;
+  if(NET.role==='host'){pk.seed=NET.seed;pk.fl=floor;pk.mc=monCount;pk.pts=NET.pts;
+    pk.doors=roomDoors.map(d=>[d.open?1:0,d.locked?1:0,Math.round(d.health)]);pk.fuses=roomLoot.filter(l=>l.type==='fuse'&&l.taken).map(l=>l.id);pk.power=exitPowered?1:0;pk.exitOpen=exitOpen?1:0;
     pk.loot=roomLoot.filter(l=>l.taken&&l.type!=='weapon').map(l=>l.id);
     // per guest: the last action handled and the pickups granted that the guest has not yet confirmed
     pk.acks={};pk.grants={};for(const r of partners())if(r.role==='guest'){pk.acks[r.peer]=r.actionAck;if(r.grants.length)pk.grants[r.peer]=r.grants.map(g=>({id:g.id,type:g.type}));}
   }
+  // Everything above is the state that changes in steps; what follows changes all the time and rides along.
+  const key=JSON.stringify(pk);
+  if(!force&&key===NET.slowKey&&now-NET.slowT<200)return;
+  NET.slowKey=key;NET.slowT=now;
+  pk.ts=ts;pk.p=p;pk.sh=NET.shots;
+  if(mon){pk.el=r2(elapsed);pk.release=r2(exitRelease);pk.mon=mon;}
   NET.g.presence(pk).catch(()=>{});
 }
 function guestMonsters(dt){
@@ -3318,9 +3386,11 @@ function guestMonsters(dt){
     if(chase&&m.state!=='chase')chargeCue(m,true);
     m.spotCD=Math.max(0,(m.spotCD||0)-dt);
     m.state=chase?'chase':stalk?'stalk':'wander';if(fl&4)m.stagger=Math.max(m.stagger,0.1);m.stagger=Math.max(0,m.stagger-dt);
-    const ox=m.pos.x,oz=m.pos.z,k=Math.min(1,dt*10);
-    m.pos.x+=(x-m.pos.x)*k;m.pos.z+=(z-m.pos.z)*k;m.yaw=angLerp(m.yaw,yaw,k);
-    const moved=Math.hypot(m.pos.x-ox,m.pos.z-oz);
+    // Drawn between the host's snapshots at this frame's playout time, with a light ease over the seams.
+    const ox=m.pos.x,oz=m.pos.z,sm=NET.smp,got=R.rt!==null&&R.monTracks&&R.monTracks[i].sample(R.rt,sm,.1);
+    const tx=got?sm.x:x,tz=got?sm.z:z,far=Math.hypot(tx-ox,tz-oz)>4,k=far?1:HollowNet.ease(28,dt);
+    m.pos.x+=(tx-ox)*k;m.pos.z+=(tz-oz)*k;m.yaw=angLerp(m.yaw,got?sm.yaw:yaw,k);
+    const moved=far?0:Math.hypot(m.pos.x-ox,m.pos.z-oz);
     m.g.position.copy(m.pos);m.g.rotation.set(0,m.yaw,0);
     m.g.userData.speed=dt>0?moved/dt:0;m.g.userData.chasing=chase;
     updateMonsterAudio(m,dt,moved);
@@ -3357,13 +3427,14 @@ function netTick(dt){
   // each partner's avatar + sounds
   for(const R of REMOTES.values()){const o=R.rig;if(!o)continue;
     if(!(R.present&&R.gn===NET.gen&&R.seen)){o.avatar.visible=false;continue;}
-    const k=Math.min(1,dt*22),ox=R.pos.x,oz=R.pos.z;
-    R.pos.x+=(R.raw.x-R.pos.x)*k;R.pos.z+=(R.raw.z-R.pos.z)*k;R.yaw=angLerp(R.yaw,R.raw.yaw,k);R.pitch+=(R.raw.pitch-R.pitch)*k;
-    const moved=Math.hypot(R.pos.x-ox,R.pos.z-oz);
+    const ox=R.pos.x,oz=R.pos.z,sm=NET.smp,got=R.rt!==null&&R.track.sample(R.rt,sm,.1);
+    const tx=got?sm.x:R.raw.x,tz=got?sm.z:R.raw.z,far=Math.hypot(tx-ox,tz-oz)>4,k=far?1:HollowNet.ease(30,dt);
+    R.pos.x+=(tx-ox)*k;R.pos.z+=(tz-oz)*k;R.py+=((got?sm.y:R.raw.y||0)-R.py)*k;R.yaw=angLerp(R.yaw,got?sm.yaw:R.raw.yaw,k);R.pitch+=((got?sm.pitch:R.raw.pitch)-R.pitch)*k;
+    const moved=far?0:Math.hypot(R.pos.x-ox,R.pos.z-oz);
     // A spectator looks out through the watched partner's eyes, so that body is hidden; the others stay in view.
     const show=R.al&&!R.out&&R!==seen;
-    o.avatar.visible=!!show;o.avatar.position.set(R.pos.x,R.raw.y||0,R.pos.z);o.avatar.rotation.y=R.yaw;
-    if(dt>0){const kv=Math.min(1,dt*8);R.vx+=((R.pos.x-ox)/dt-R.vx)*kv;R.vz+=((R.pos.z-oz)/dt-R.vz)*kv;}
+    o.avatar.visible=!!show;o.avatar.position.set(R.pos.x,R.py,R.pos.z);o.avatar.rotation.y=R.yaw;
+    if(dt>0&&!far){const kv=Math.min(1,dt*8);R.vx+=((R.pos.x-ox)/dt-R.vx)*kv;R.vz+=((R.pos.z-oz)/dt-R.vz)*kv;}
     if(show){setAvatarWeapon(o,R.raw.weapon||0);
       o.avatar.userData.animate({vx:R.vx,vz:R.vz,yaw:R.yaw,pitch:R.pitch,crouch:R.raw.crouch,run:R.raw.run,aim:R.raw.aim,reload:R.raw.reload},dt);
       o.label.position.y=2.12-o.avatar.userData.state.crouch*.32;}
@@ -4014,7 +4085,8 @@ function snapshot(){return {
   shot:lastShot,gore:gore.snapshot(),
   hurt:{last:hurtLast,slow:hurtSlowT>0?1-(1-hurtSlowF)*Math.min(1,hurtSlowT/hurtSlowDur*1.5):1,slowTime:hurtSlowT,pulse:hurtPulse,muffle:hurtLP?hurtLP.frequency.value:null,fx:hurtFX.snapshot()},
   network:(()=>{const list=partners(),R=list.find(r=>r.role==='guest')||list[0]||NOBODY;return{role:NET.role,inGame:NET.inGame,generation:NET.gen,partner:list.length>0,code:NET.code,partnerY:R.raw.y||0,partnerCrouching:!!R.raw.crouch,
-    partners:list.map(r=>({name:r.nm,role:r.role,present:r.present,alive:!!r.al&&!r.out,inRound:r.gn===NET.gen,avatar:!!r.rig&&r.rig.avatar.visible})),avatars:RIGS.filter(o=>o.owner&&o.avatar.visible).length,spectating:NET.spect&&REMOTES.get(NET.spect)?.nm||null};})(),
+    partners:list.map(r=>({name:r.nm,role:r.role,present:r.present,alive:!!r.al&&!r.out,inRound:r.gn===NET.gen,avatar:!!r.rig&&r.rig.avatar.visible,x:r.pos.x,z:r.pos.z,y:r.py,yaw:r.yaw,rawX:r.raw.x,rawZ:r.raw.z,
+      link:{delay:r.clock.delay,interval:r.clock.interval,late:r.clock.late,held:r.track.size,starved:r.clock.starved}})),avatars:RIGS.filter(o=>o.owner&&o.avatar.visible).length,spectating:NET.spect&&REMOTES.get(NET.spect)?.nm||null};})(),
   input:{mouseDown,touchX:touchMove.x,touchY:touchMove.y}
 };}
 window.HollowGame=Object.freeze({snapshot});

@@ -549,6 +549,48 @@ test('invalid rooms and nonmember, array or oversized presence are not stored or
   assert.deepEqual(snapshot.peers, [{ peer: joined.peer, pr: { hp: 95 } }]);
 });
 
+test('passing events reach the others in the room in order, are never kept, and need membership and a valid name', async t => {
+  const f = await fixture(t);
+  const alice = await client(t, f.wsURL), bob = await client(t, f.wsURL), carol = await client(t, f.wsURL), eve = await client(t, f.wsURL);
+  const joined = await alice.join('hollow-pose');
+  await bob.join('hollow-pose'); await carol.join('hollow-pose'); await eve.join('elsewhere');
+  alice.send({ t: 'presence', room: 'hollow-pose', pr: { hp: 90 } });
+  for (let n = 1; n <= 5; n++) alice.send({ t: 'emit', room: 'hollow-pose', e: 's', d: [n, 1.5, [0, [2, 3]]] });
+  for (const listener of [bob, carol]) {
+    for (let n = 1; n <= 5; n++) assert.deepEqual(await listener.take(message => message.t === 'event'), { t: 'event', room: 'hollow-pose', peer: joined.peer, e: 's', d: [n, 1.5, [0, [2, 3]]] });
+  }
+  // Refused: not a member, a bad event name, no data, more than 4096 bytes.
+  eve.send({ t: 'emit', room: 'hollow-pose', e: 's', d: [99] });
+  alice.send({ t: 'emit', room: 'hollow-pose', e: 'Not Valid', d: [99] });
+  alice.send({ t: 'emit', room: 'hollow-pose', e: 's' });
+  alice.send({ t: 'emit', room: 'hollow-pose', e: 's', d: 'x'.repeat(4200) });
+  alice.send({ t: 'emit', room: 'hollow-pose', e: 's', d: 'last' });
+  assert.equal((await bob.take(message => message.t === 'event')).d, 'last');
+  // The sender hears nothing back, and a late joiner is given the kept presence only.
+  const dave = await client(t, f.wsURL), snapshot = await dave.join('hollow-pose');
+  assert.deepEqual(snapshot.peers.find(peer => peer.peer === joined.peer).pr, { hp: 90 });
+  await alice.join('hollow-pose');
+  await assert.rejects(alice.take(message => message.t === 'event'), /Timed out/);
+});
+
+test('a room keeps up thirty pose frames a second from four players, with state changes besides', async t => {
+  const f = await fixture(t);
+  const players = [];
+  for (let i = 0; i < 4; i++) { const c = await client(t, f.wsURL); await c.join('hollow-busy'); players.push(c); }
+  // Three seconds of play sent at once: 90 pose frames and 30 state changes from each player.
+  for (let n = 0; n < 90; n++) for (const [i, c] of players.entries()) {
+    c.send({ t: 'emit', room: 'hollow-busy', e: 's', d: [n, i] });
+    if (n % 3 === 0) c.send({ t: 'presence', room: 'hollow-busy', pr: { n } });
+  }
+  for (const c of players) c.send({ t: 'emit', room: 'hollow-busy', e: 'end', d: 1 });
+  for (const c of players) {
+    for (let k = 0; k < 3; k++) await c.take(message => message.t === 'event' && message.e === 'end');
+    const got = [];
+    for (;;) { try { got.push(await Promise.race([c.take(message => message.t === 'event' && message.e === 's'), new Promise((_, reject) => setTimeout(reject, 20))])); } catch { break; } }
+    assert.equal(got.length, 270, 'every frame from the three others arrived');
+  }
+});
+
 test('malformed messages, payload-limit errors and protocol errors cannot crash the process', async t => {
   const f = await fixture(t);
   const malformed = await client(t, f.wsURL);

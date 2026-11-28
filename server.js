@@ -11,6 +11,7 @@ const { randomBytes, createHash } = require('node:crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const ROOM_RE = /^[a-z0-9][a-z0-9_.-]{0,47}$/;
+const EVENT_RE = /^[a-z][a-z0-9_-]{0,15}$/;
 const UID_RE = /^[A-Za-z0-9_-]{8,40}$/;
 const THREE_BUILD = new Set(['three.webgpu.js', 'three.tsl.js', 'three.core.js']);
 const THREE_ADDON_RE = /^\/vendor\/three\/addons\/((?:[A-Za-z0-9_-]+\/){0,8}[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.js)$/;
@@ -481,14 +482,27 @@ function createGameServer(options = {}) {
   server.headersTimeout = 10000;
   server.keepAliveTimeout = 5000;
 
-  // Wire format is unchanged: join -> joined/full, presence -> peer, leave -> left.
+  // Wire format: join -> joined/full, presence -> peer (kept for late joiners), emit -> event (not kept), leave -> left.
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8 * 1024, perMessageDeflate: false });
 
-  function out(ws, message) {
+  function outText(ws, text) {
     if (ws.readyState !== WebSocket.OPEN) return;
     if (ws.bufferedAmount > 256 * 1024) { ws.terminate(); return; }
-    try { ws.send(JSON.stringify(message), error => { if (error) ws.terminate(); }); }
+    try { ws.send(text, error => { if (error) ws.terminate(); }); }
     catch { ws.terminate(); }
+  }
+  function out(ws, message) { outText(ws, JSON.stringify(message)); }
+  // One serialization for the whole room. A `droppable` message (a pose frame, replaced by the next one a moment
+  // later) is skipped for a member whose connection is backed up: queued behind the backlog it would only arrive
+  // stale, and make the backlog longer.
+  function relay(room, from, message, droppable) {
+    let text = null;
+    for (const [id, member] of room) {
+      if (id === from) continue;
+      if (droppable && member.ws.bufferedAmount > 24 * 1024) continue;
+      if (text === null) text = JSON.stringify(message);
+      outText(member.ws, text);
+    }
   }
 
   function leave(ws, roomName) {
@@ -503,14 +517,15 @@ function createGameServer(options = {}) {
     ws.peerId = 'p' + randomBytes(9).toString('hex');
     ws.rooms = new Set();
     ws.alive = true;
-    ws.budget = 60;
+    ws.budget = 120;
     ws.budgetAt = Date.now();
     ws.on('pong', () => { ws.alive = true; });
     // Protocol and payload-limit errors belong to this client, not the process.
     ws.on('error', () => {});
     ws.on('message', (raw, isBinary) => {
       const now = Date.now();
-      ws.budget = Math.min(120, ws.budget + (now - ws.budgetAt) * 0.06);
+      // 100 messages a second, 200 in a burst: a player sends 30 pose frames a second and state changes besides.
+      ws.budget = Math.min(200, ws.budget + (now - ws.budgetAt) * 0.1);
       ws.budgetAt = now;
       if (ws.budget < 1) return;
       ws.budget -= 1;
@@ -538,7 +553,12 @@ function createGameServer(options = {}) {
         try { if (Buffer.byteLength(JSON.stringify(message.pr)) > 4096) return; }
         catch { return; }
         room.get(ws.peerId).pr = message.pr;
-        for (const [id, member] of room) if (id !== ws.peerId) out(member.ws, { t: 'peer', room: message.room, peer: ws.peerId, pr: message.pr });
+        relay(room, ws.peerId, { t: 'peer', room: message.room, peer: ws.peerId, pr: message.pr }, false);
+      } else if (message.t === 'emit') {
+        // A passing event (the 30-a-second pose frames): relayed to the others in the room, never kept.
+        const room = rooms.get(message.room);
+        if (!room || !room.has(ws.peerId) || typeof message.e !== 'string' || !EVENT_RE.test(message.e) || message.d === undefined || raw.length > 4096) return;
+        relay(room, ws.peerId, { t: 'event', room: message.room, peer: ws.peerId, e: message.e, d: message.d }, true);
       } else if (message.t === 'leave') leave(ws, message.room);
     });
     ws.on('close', () => { for (const roomName of [...ws.rooms]) leave(ws, roomName); });

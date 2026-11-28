@@ -197,7 +197,7 @@
       endTransport(connection, busy);
       throw busy;
     }
-    try { connection.ws.send(JSON.stringify(message)); }
+    try { connection.ws.send(typeof message === 'string' ? message : JSON.stringify(message)); }
     catch (_) { var failure = error('upstream_error', 'Connection lost'); endTransport(connection, failure); throw failure; }
   }
   function receive(connection, raw) {
@@ -230,6 +230,10 @@
     } else if (message.t === 'left' && typeof message.peer === 'string') {
       record.others.delete(message.peer);
       record.fire();
+    } else if (message.t === 'event' && typeof message.peer === 'string' && typeof message.e === 'string') {
+      // Passing events are handed over as they arrive, not batched with the peer list: their timing is the point.
+      var handlers = record.events[message.e];
+      if (handlers && message.peer !== record.me) handlers.forEach(function (handler) { try { handler(message.d, message.peer); } catch (_) {} });
     } else if (message.t === 'full') closeRoom(record, error('limit_reached', message.code === 'room_limit' ? 'Too many open rooms' : message.code === 'server_busy' ? 'The server is busy' : 'Room full'));
     else if (message.t === 'error') closeRoom(record, error(message.code || 'upstream_error', 'The server rejected the room request'));
   }
@@ -273,7 +277,7 @@
   function makeRoom(name, connection) {
     var record = {
       name: name, transport: connection, state: 'joining', me: null, mine: Object.create(null), others: new Map(),
-      subscribers: new Set(), connections: new Set(), cache: null, notifyTimer: null,
+      subscribers: new Set(), connections: new Set(), events: Object.create(null), cache: null, notifyTimer: null,
       joinTimer: null, resolve: null, reject: null, lastError: null, promise: null
     };
     record.snapshot = function () {
@@ -304,7 +308,7 @@
         catch (_) { throw error('invalid_presence', 'Presence must be serializable'); }
         if (byteLength(serialized) > 4096) throw error('invalid_presence', 'Presence exceeds 4096 bytes');
         next = JSON.parse(serialized);
-        send(connection, { t: 'presence', room: name, pr: next });
+        send(connection, '{"t":"presence","room":' + JSON.stringify(name) + ',"pr":' + serialized + '}');
         record.mine = next;
         record.cache = null;
       },
@@ -323,7 +327,19 @@
         var initial = setTimeout(function () { if (record.connections.has(listener)) notifyConnections(record); }, 0);
         return function () { clearTimeout(initial); record.connections.delete(listener); };
       },
-      emit: async function () {}, on: function () { return function () {}; },
+      // A passing event to everyone else in the room: not kept by the server, not replayed to late joiners.
+      // Returns whether it was sent. One that would queue behind a backed-up connection is dropped instead: these
+      // are pose frames, and the next one replaces it.
+      emit: function (event, data) {
+        if (record.state !== 'joined' || !isConnected(connection) || typeof event !== 'string' || data === undefined) return false;
+        if (connection.ws.bufferedAmount > 16 * 1024) return false;
+        try { send(connection, { t: 'emit', room: name, e: event, d: data }); return true; } catch (_) { return false; }
+      },
+      on: function (event, handler) {
+        var handlers = record.events[event] || (record.events[event] = new Set());
+        handlers.add(handler);
+        return function () { handlers.delete(handler); };
+      },
       leave: async function () {
         if (record.state !== 'closed' && isConnected(connection)) try { send(connection, { t: 'leave', room: name }); } catch (_) {}
         record.state = 'closed';
@@ -338,6 +354,7 @@
         notifyConnections(record);
         record.subscribers.clear();
         record.connections.clear();
+        record.events = Object.create(null);
       }
     });
     return record;

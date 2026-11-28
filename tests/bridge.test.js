@@ -306,6 +306,45 @@ test('presence patches preserve prior fields, delete nulls, isolate mutable inpu
   assert.equal(api.peers()[0].presence.unicode, undefined);
 });
 
+test('passing events are sent as they are, heard as they arrive, and dropped rather than queued on a backed-up socket', async () => {
+  const h = harness();
+  const { api, socket } = await join(h, 'hollow-test', [{ peer: 'remote', pr: { hp: 100 } }]);
+  const heard = [];
+  const stop = api.on('s', (data, peer) => heard.push([data, peer]));
+  api.on('s', () => { throw new Error('a listener that fails must not stop the others'); });
+  assert.equal(api.emit('s', [1, 2, [3]]), true);
+  assert.deepEqual(socket.sent[socket.sent.length - 1], { t: 'emit', room: 'hollow-test', e: 's', d: [1, 2, [3]] });
+  // Heard at once, with no timer between: the arrival time is what the listener measures.
+  socket.message({ t: 'event', room: 'hollow-test', peer: 'remote', e: 's', d: [7] });
+  assert.deepEqual(JSON.parse(JSON.stringify(heard)), [[[7], 'remote']]);   // the data is parsed inside the page's own realm
+  socket.message({ t: 'event', room: 'hollow-test', peer: 'local-peer', e: 's', d: ['own echo'] });
+  socket.message({ t: 'event', room: 'hollow-test', peer: 'remote', e: 'other', d: [8] });
+  socket.message({ t: 'event', room: 'another-room', peer: 'remote', e: 's', d: [9] });
+  assert.equal(heard.length, 1);
+  // Backed up: the frame is dropped, the connection is kept.
+  const count = socket.sent.length;
+  socket.bufferedAmount = 20 * 1024;
+  assert.equal(api.emit('s', [2]), false);
+  assert.equal(socket.sent.length, count);
+  assert.equal(api.connected(), true);
+  socket.bufferedAmount = 0;
+  assert.equal(api.emit('s', undefined), false);
+  assert.equal(api.emit('s', [3]), true);
+  stop();
+  socket.message({ t: 'event', room: 'hollow-test', peer: 'remote', e: 's', d: [10] });
+  assert.equal(heard.length, 1);
+  await api.leave();
+  assert.equal(api.emit('s', [4]), false);
+});
+
+test('a presence is serialized once: the text checked for size is the text sent', async () => {
+  const h = harness();
+  const { api, socket } = await join(h);
+  await api.presence({ note: 'quote " and \\ and é', list: [1, null, { a: undefined }] });
+  assert.deepEqual(socket.sent[socket.sent.length - 1], { t: 'presence', room: 'hollow-test', pr: { note: 'quote " and \\ and é', list: [1, null, {}] } });
+  assert.deepEqual(JSON.parse(JSON.stringify(api.peers()[0].presence)), { note: 'quote " and \\ and é', list: [1, null, {}] });
+});
+
 test('room-full replies and malformed messages are contained, and unsubscribe removes error callbacks', async () => {
   const h = harness();
   const { api, socket, room } = await join(h);
