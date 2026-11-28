@@ -2526,7 +2526,21 @@ function laserLight(level){
 const mapEl=$('map'),mapCtx=mapEl.getContext('2d');
 function markVisited(){
   const cx=Math.floor(P.pos.x/S),cz=Math.floor(P.pos.z/S);
-  if(cx>=0&&cz>=0&&cx<W&&cz<W)visited[cz*W+cx]=1;
+  if(cx>=0&&cz>=0&&cx<W&&cz<W&&!visited[cz*W+cx]){visited[cz*W+cx]=1;visitedDirty=true;}
+}
+// Co-op: the places each survivor has explored travel as a base64 bitmap in their presence, and every map shows them all.
+let visitedDirty=true,visitedFor=null,visitedCode='';
+function packVisited(){
+  if(visitedFor===visited&&!visitedDirty)return visitedCode;
+  const bytes=new Uint8Array(Math.ceil(W*W/8));for(let i=0;i<W*W;i++)if(visited[i])bytes[i>>3]|=1<<(i&7);
+  visitedCode=btoa(String.fromCharCode(...bytes));visitedFor=visited;visitedDirty=false;return visitedCode;
+}
+function mergeVisited(code){
+  if(typeof code!=='string'||code.length>4*Math.ceil(W*W/24)+4)return;
+  let bin;try{bin=atob(code);}catch(e){return;}
+  let added=false;
+  for(let i=0,n=Math.min(W*W,bin.length*8);i<n;i++)if(!visited[i]&&bin.charCodeAt(i>>3)>>(i&7)&1){visited[i]=1;added=true;}
+  if(added){visitedDirty=true;mapT=0;}
 }
 // The plan is drawn in 150 units; the canvas behind it matches its shown size at the screen's pixel density (the minimap
 // and the M floor plan), measured by a ResizeObserver so drawing never forces a layout.
@@ -3112,6 +3126,7 @@ function readRemote(peer,pr){
   // ff: the damage this partner's shots have done to each of the others, keyed by peer
   r.sh=finiteNumber(pr.sh,0,0);r.ff=pr.ff&&typeof pr.ff==='object'&&NET.myPeer?finiteNumber(pr.ff[NET.myPeer],0,0):0;r.tk=Array.isArray(pr.tk)?pr.tk.filter(i=>Number.isInteger(i)&&i>=0&&i<ammoBoxes.length):[];
   r.lk=Array.isArray(pr.lk)?pr.lk.filter(i=>Number.isInteger(i)&&i>=0&&i<laserPickups.length):[];
+  if(NET.inGame&&r.gn===NET.gen&&r.ph==='play')mergeVisited(pr.vm);
   if(Array.isArray(pr.lb)&&pr.lb.length>=3)r.lb=[Math.floor(finiteNumber(pr.lb[0],0,0,1e6)),finiteNumber(pr.lb[1],0,-110,W*S+60),finiteNumber(pr.lb[2],0,-70,W*S+70),finiteNumber(pr.lb[3],0,0,H)];
   if(NET.role==='host'&&r.role==='guest'){r.dm=Array.isArray(pr.dm)?pr.dm.slice(0,MAX_MON).map(v=>finiteNumber(v,0,0)):[];r.actions=Array.isArray(pr.actions)?pr.actions.slice(0,32):[];
     r.gk=Math.floor(finiteNumber(pr.gk,0,0));if(r.grants.length)r.grants=r.grants.filter(g=>g.n>r.gk);}
@@ -3232,6 +3247,7 @@ function sendNet(force){
   const ff={};for(const id in NET.ff)ff[id]=r2(NET.ff[id]);
   const pk={gn:NET.gen,ph:NET.inGame&&!NET.over?'play':'lobby',p:[r2(P.pos.x),r2(P.pos.z),r2(P.yaw),r2(P.pitch),torchOn?1:0,P.running?1:0,r2(P.pos.y),P.crouching?1:0,P.hidden?1:0,Math.round(P.health),weaponIndex,reloadT>0?1:0,aiming&&!reloadT?1:0],
     al:NET.myAl===false?0:1,out:NET.myOut?1:0,sh:NET.shots,ff,tk:NET.tk.slice(0,32),lk:NET.lk.slice(0,16),lb:NET.lb};
+  if(NET.inGame&&!NET.over)pk.vm=packVisited();
   if(NET.role==='guest'){pk.dm=NET.dm.slice(0,MAX_MON).map(r2);pk.actions=NET.actions.slice(0,12);pk.gk=NET.ackSeen;}
   if(NET.role==='host'){pk.seed=NET.seed;pk.mc=monCount;pk.el=r2(elapsed);pk.pts=NET.pts;
     pk.mon=monsters.slice(0,monCount).map(m=>[r2(m.pos.x),r2(m.pos.z),r2(m.yaw),(m.state==='chase'?1:0)|(m.dead?2:0)|(m.stagger>0?4:0)|(m.state==='stalk'?8:0)|(m.dormant?16:0),r2(m.hp)]);
@@ -3948,6 +3964,7 @@ function snapshot(){return {
   rooms:specialRooms.map(r=>({id:r.id,name:r.name,x:r.x,z:r.z,w:r.w,d:r.d,shelter:!!r.shelter,fuse:!!r.fuse})),
   doors:roomDoors.map(d=>({id:d.id,x:d.box.x,z:d.box.z,open:d.open,locked:d.locked,health:d.health})),
   mapGuns:mapGuns.map(g=>({...g})),
+  visited:visited.reduce((a,v,i)=>{if(v)a.push(i);return a;},[]),
   loot:roomLoot.map(l=>({id:l.id,type:l.type,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending,...(l.type==='weapon'?{weapon:weaponDefs[l.weapon].id,visible:l.g.visible}:{})})),
   ammoPickups:ammoBoxes.map((b,i)=>({id:i,x:b.x,z:b.z,taken:b.taken,pending:!!b.pending})),
   laserPickups:laserPickups.map(l=>({id:l.id,x:l.x,z:l.z,taken:l.taken,pending:!!l.pending,visible:l.g.visible})),

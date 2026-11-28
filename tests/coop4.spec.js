@@ -48,5 +48,12 @@ test('three real browser peers share one co-op round: seed, fourteen creatures, 
     await pose(guest2,{x:d.x,z:d.z-2,yaw:Math.PI});await guest2.evaluate(()=>HollowTest.action('interact',true));
     await expect.poll(async()=>(await state(host)).doors[0].open).toBe(!was);
     await expect.poll(async()=>(await state(guest1)).doors[0].open).toBe(!was);
+    // A place the first guest explores shows on the host's and the second guest's map.
+    const far=(await state(guest1)).rooms.find(r=>!r.shelter)||(await state(guest1)).rooms[0];
+    const cx=far.x+Math.floor(far.w/2),cz=far.z+Math.floor(far.d/2),cell=cz*35+cx;
+    for(const page of [host,guest2])expect((await state(page)).visited).not.toContain(cell);
+    await pose(guest1,{x:(cx+.5)*3,z:(cz+.5)*3});
+    await expect.poll(async()=>(await state(guest1)).visited).toContain(cell);
+    for(const page of [host,guest2])await expect.poll(async()=>(await state(page)).visited,{timeout:15000}).toContain(cell);
   }finally{await Promise.all(contexts.map(context=>context.close()));}
 });
